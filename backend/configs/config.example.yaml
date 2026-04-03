@@ -1,0 +1,50 @@
+app_name: asr
+
+server:
+  host: 0.0.0.0
+  port: 10010
+  asr_api_port: 10011
+  admin_api_port: 10012
+  nlp_api_port: 10013
+
+database:
+  host: mysql
+  port: 3306
+  user: root
+  password: change-me
+  dbname: asr
+
+jwt:
+  secret: replace-with-random-secret
+  expires_in: 86400
+
+bootstrap:
+  admin_username: admin
+  admin_password: change-me-now
+  admin_display_name: System Administrator
+
+services:
+  # Batch upload / task sync endpoint. Supports qwen-asr-serve task APIs and OpenAI-compatible /v1/audio/transcriptions.
+  asr: http://qwen-asr-batch:8000
+  # OpenAI-compatible ASR may reject files over this size via audio_filesize_mb.
+  asr_max_audio_size_mb: 25
+  # Realtime streaming endpoint. Point this to qwen-asr-demo-streaming.
+  asr_stream: http://qwen-asr:8000
+  # Long realtime sessions are rotated periodically to avoid a single upstream session growing without bound.
+  asr_stream_session_rollover_sec: 900
+  asr_batch_sync_interval_sec: 20
+  asr_batch_sync_batch_size: 20
+  asr_batch_sync_warn_threshold: 3
+  dashboard_retry_history_limit: 5
+  diarization_url: http://pyannote:8001
+  summary_model: qwen3-4b
+
+upload:
+  dir: uploads
+  public_base_url: http://localhost:10010
+  max_audio_size_mb: 1024
+
+gateway:
+  asr_api: http://asr-api:10011
+  admin_api: http://admin-api:10012
+  nlp_api: http://nlp-api:10013

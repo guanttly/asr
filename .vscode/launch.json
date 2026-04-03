@@ -1,0 +1,68 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Go: gateway",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/backend/cmd/gateway",
+      "cwd": "${workspaceFolder}/backend",
+      "postDebugTask": "debug:cleanup gateway",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Go: gateway-with-support",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/backend/cmd/gateway",
+      "cwd": "${workspaceFolder}/backend",
+      "preLaunchTask": "backend: support-apis",
+      "postDebugTask": "debug:cleanup gateway",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Go: admin-api",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/backend/cmd/admin-api",
+      "cwd": "${workspaceFolder}/backend",
+      "postDebugTask": "debug:cleanup admin-api",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Go: asr-api",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/backend/cmd/asr-api",
+      "cwd": "${workspaceFolder}/backend",
+      "postDebugTask": "debug:cleanup asr-api",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Go: nlp-api",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/backend/cmd/nlp-api",
+      "cwd": "${workspaceFolder}/backend",
+      "postDebugTask": "debug:cleanup nlp-api",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Go: backend-all",
+      "configurations": [
+        "Go: admin-api",
+        "Go: asr-api",
+        "Go: nlp-api",
+        "Go: gateway"
+      ],
+      "stopAll": true
+    }
+  ]
+}

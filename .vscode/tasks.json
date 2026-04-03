@@ -1,0 +1,221 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "frontend: dev",
+      "type": "shell",
+      "command": "pnpm",
+      "args": [
+        "dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/frontend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!x)x$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "Local:|ready in"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "backend: gateway",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/gateway"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!x)x$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "listening"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "backend"
+      }
+    },
+    {
+      "label": "backend: admin-api",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/admin-api"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!x)x$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "admin-api listening"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "backend"
+      }
+    },
+    {
+      "label": "backend: asr-api",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/asr-api"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!x)x$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "asr-api listening"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "backend"
+      }
+    },
+    {
+      "label": "backend: nlp-api",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "run",
+        "./cmd/nlp-api"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "custom",
+        "pattern": {
+          "regexp": "^(?!x)x$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "nlp-api listening"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "backend"
+      }
+    },
+    {
+      "label": "debug:cleanup gateway",
+      "type": "shell",
+      "command": "pkill -f '${workspaceFolder}/backend/cmd/gateway/__debug_bin' || true",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      }
+    },
+    {
+      "label": "debug:cleanup admin-api",
+      "type": "shell",
+      "command": "pkill -f '${workspaceFolder}/backend/cmd/admin-api/__debug_bin' || true",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      }
+    },
+    {
+      "label": "debug:cleanup asr-api",
+      "type": "shell",
+      "command": "pkill -f '${workspaceFolder}/backend/cmd/asr-api/__debug_bin' || true",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      }
+    },
+    {
+      "label": "debug:cleanup nlp-api",
+      "type": "shell",
+      "command": "pkill -f '${workspaceFolder}/backend/cmd/nlp-api/__debug_bin' || true",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "close": true
+      }
+    },
+    {
+      "label": "backend: support-apis",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "backend: admin-api",
+        "backend: asr-api",
+        "backend: nlp-api"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "backend: dev-all",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "backend: gateway",
+        "backend: support-apis"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "workspace: dev-all",
+      "dependsOrder": "parallel",
+      "dependsOn": [
+        "frontend: dev",
+        "backend: dev-all"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

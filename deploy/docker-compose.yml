@@ -1,0 +1,94 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: asr-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: asr
+    ports:
+      - '3306:3306'
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+      args:
+        APP_NAME: gateway
+    container_name: asr-gateway
+    depends_on:
+      - asr-api
+      - admin-api
+      - nlp-api
+    environment:
+      ASR_DATABASE_HOST: mysql
+      ASR_GATEWAY_ASR_API: http://asr-api:10011
+      ASR_GATEWAY_ADMIN_API: http://admin-api:10012
+      ASR_GATEWAY_NLP_API: http://nlp-api:10013
+    ports:
+      - '10010:10010'
+
+  asr-api:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+      args:
+        APP_NAME: asr-api
+    container_name: asr-api
+    depends_on:
+      - mysql
+    environment:
+      ASR_DATABASE_HOST: mysql
+      # Batch upload / task sync endpoint. Point this to qwen-asr-serve when enabled.
+      ASR_SERVICES_ASR: http://qwen-asr:8000
+      # Realtime streaming endpoint.
+      ASR_SERVICES_ASR_STREAM: http://qwen-asr:8000
+    ports:
+      - '10011:10011'
+
+  admin-api:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+      args:
+        APP_NAME: admin-api
+    container_name: asr-admin-api
+    depends_on:
+      - mysql
+    environment:
+      ASR_DATABASE_HOST: mysql
+    ports:
+      - '10012:10012'
+
+  nlp-api:
+    build:
+      context: ..
+      dockerfile: deploy/backend/Dockerfile
+      args:
+        APP_NAME: nlp-api
+    container_name: asr-nlp-api
+    depends_on:
+      - mysql
+    environment:
+      ASR_DATABASE_HOST: mysql
+      ASR_SERVICES_DIARIZATION_URL: http://pyannote:8001
+    ports:
+      - '10013:10013'
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/frontend/Dockerfile
+    container_name: asr-frontend
+    depends_on:
+      - gateway
+    ports:
+      - '5173:80'
+
+volumes:
+  mysql_data:

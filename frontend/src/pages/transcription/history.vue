@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { NButton, NTag, useMessage } from 'naive-ui'
+import { NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { createTranscriptionTask, getTranscriptionTaskDetail, getTranscriptionTasks, syncTranscriptionTask, uploadTranscriptionFile } from '@/api/asr'
-import { getTermDicts } from '@/api/terminology'
+import { createTranscriptionTask, deleteTranscriptionTask, getTranscriptionTaskDetail, getTranscriptionTaskExecutions, getTranscriptionTasks, resumeTranscriptionTaskPostProcess, syncTranscriptionTask, uploadTranscriptionFile } from '@/api/asr'
+import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
+import TextDiffPreview from '@/components/TextDiffPreview.vue'
+import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useBusinessSocket } from '@/composables/useBusinessSocket'
-
-interface DictOption {
-  label: string
-  value: number
-}
+import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
+import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
 
 interface TaskItem {
   id: number
@@ -33,13 +33,61 @@ interface TaskItem {
   next_sync_at?: string
   result_text?: string
   duration: number
+  workflow_id?: number
   created_at?: string
   createdAt?: string
+  updated_at?: string
+  updatedAt?: string
 }
 
+interface ExecutionNodeResult {
+  id: number
+  node_type: string
+  label: string
+  position: number
+  input_text?: string
+  output_text?: string
+  status: string
+  detail?: Record<string, unknown> | string | null
+  duration_ms?: number
+}
+
+interface ExecutionItem {
+  id: number
+  workflow_id: number
+  trigger_type: string
+  final_text?: string
+  status: string
+  error_message?: string
+  created_at?: string
+  node_results?: ExecutionNodeResult[]
+}
+
+interface ExecutionSummary {
+  status: string
+  created_at?: string
+  error_message?: string
+}
+
+const EXECUTION_SUMMARY_NOT_STARTED = 'not_started'
+
 const message = useMessage()
+const confirmDelete = useDeleteConfirmDialog()
 const route = useRoute()
 const router = useRouter()
+const batchWorkflowCatalog = useWorkflowCatalog('batch_transcription', 100)
+const {
+  configuredWorkflowId,
+  configuredWorkflow: selectedWorkflowOption,
+  configuredWorkflowLabel,
+  configuredWorkflowMissing,
+  configuredWorkflowNotice: configuredWorkflowMessage,
+} = useWorkflowBindingStatus('batch', batchWorkflowCatalog, {
+  emptyLabel: '未配置默认工作流',
+  unsetMessage: '当前未配置批量转写默认工作流，提交任务后只会执行 ASR，不会自动触发后处理。',
+  missingMessage: workflowId => `应用配置中的批量工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,
+  readyMessage: () => '当前上传文件和 URL 提交都会自动带上应用配置中的默认工作流。',
+})
 const { subscribe: subscribeBusinessTopic } = useBusinessSocket()
 const loading = ref(false)
 const creating = ref(false)
@@ -47,21 +95,25 @@ const uploading = ref(false)
 const detailLoading = ref(false)
 const syncingAll = ref(false)
 const syncingIds = ref<number[]>([])
+const deletingTaskId = ref<number | null>(null)
+const resumingTaskId = ref<number | null>(null)
 const tasks = ref<TaskItem[]>([])
-const dictOptions = ref<DictOption[]>([])
 const keyword = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const detailVisible = ref(false)
 const detailTask = ref<TaskItem | null>(null)
+const detailExecutions = ref<ExecutionItem[]>([])
+const executionSummaryByTask = ref<Record<number, ExecutionSummary>>({})
 const contentViewerVisible = ref(false)
 const contentViewerTitle = ref('')
 const contentViewerText = ref('')
+const nowTimestamp = ref(Date.now())
 const submitForm = reactive({
   audioUrl: '',
-  dictId: null as number | null,
 })
 let stopBusinessSubscription: (() => void) | null = null
+let clockTimer: number | null = null
 
 function formatDateTime(value?: string) {
   if (!value)
@@ -111,6 +163,14 @@ function formatDuration(value?: number) {
   return `${seconds}秒`
 }
 
+function parseDateValue(value?: string) {
+  if (!value)
+    return 0
+
+  const timestamp = new Date(value).getTime()
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
 function formatTaskType(value?: string) {
   const map: Record<string, string> = {
     realtime: '实时',
@@ -127,6 +187,12 @@ function formatTaskStatus(value?: string) {
     failed: '失败',
   }
   return map[value || ''] || value || '-'
+}
+
+function workflowLabel(workflowId?: number) {
+  if (!workflowId)
+    return '-'
+  return batchWorkflowCatalog.labelForWorkflow(workflowId)
 }
 
 function formatPostProcessStatus(value?: string) {
@@ -153,6 +219,115 @@ function formatProgressStage(value?: string) {
     failed: '失败',
   }
   return map[value || ''] || value || '-'
+}
+
+function formatExecutionStatus(value?: string) {
+  const map: Record<string, string> = {
+    not_started: '未执行',
+    pending: '待执行',
+    running: '执行中',
+    completed: '已完成',
+    failed: '失败',
+    success: '成功',
+    skipped: '跳过',
+  }
+  return map[value || ''] || value || '-'
+}
+
+function executionSummaryState(task: TaskItem | null | undefined) {
+  if (!task?.workflow_id) {
+    return {
+      label: '未绑定',
+      type: 'default',
+      tooltip: '当前任务未绑定工作流，因此不会产生工作流执行记录。',
+      emptyMessage: '当前任务未绑定工作流，因此不会产生执行记录。',
+    }
+  }
+
+  const summary = executionSummaryByTask.value[task.id]
+  if (summary && summary.status !== EXECUTION_SUMMARY_NOT_STARTED) {
+    const parts = [`状态：${formatExecutionStatus(summary.status)}`]
+    if (summary.created_at)
+      parts.push(`时间：${formatDateTime(summary.created_at)}`)
+    if (summary.error_message?.trim())
+      parts.push(`错误：${summary.error_message.trim()}`)
+    else if (summary.status === 'completed' || summary.status === 'success')
+      parts.push('最近一次工作流执行已完成。')
+    else if (summary.status === 'running' || summary.status === 'pending')
+      parts.push('最近一次工作流仍在执行中或等待执行。')
+
+    return {
+      label: formatExecutionStatus(summary.status),
+      type: summary.status === 'completed' || summary.status === 'success'
+        ? 'success'
+        : summary.status === 'running' || summary.status === 'pending'
+          ? 'info'
+          : summary.status === 'failed'
+            ? 'error'
+            : 'default',
+      tooltip: parts.join('\n'),
+      emptyMessage: '当前任务已返回工作流执行记录。',
+    }
+  }
+
+  if (task.status === 'pending' || task.status === 'processing') {
+    return {
+      label: '等待 ASR',
+      type: 'default',
+      tooltip: '当前任务已绑定工作流，但需要先等待 ASR 转写完成，之后才会触发工作流后处理。',
+      emptyMessage: '当前任务已绑定工作流，待 ASR 转写完成后会自动触发工作流执行。',
+    }
+  }
+
+  if (task.post_process_status === 'processing') {
+    return {
+      label: '后处理中',
+      type: 'info',
+      tooltip: 'ASR 已完成，工作流后处理正在执行中，执行记录可能稍后返回。',
+      emptyMessage: '当前任务已进入工作流后处理阶段，执行记录可能稍后显示。',
+    }
+  }
+
+  if (task.post_process_status === 'pending') {
+    return {
+      label: '待后处理',
+      type: 'default',
+      tooltip: 'ASR 已完成，但工作流后处理尚未开始。',
+      emptyMessage: '当前任务已完成 ASR，但工作流后处理尚未开始。',
+    }
+  }
+
+  if (task.post_process_status === 'failed') {
+    return {
+      label: '后处理失败',
+      type: 'error',
+      tooltip: task.post_process_error?.trim()
+        ? `任务后处理失败：${task.post_process_error.trim()}`
+        : '任务后处理失败，当前没有返回对应的工作流执行记录。',
+      emptyMessage: task.post_process_error?.trim()
+        ? `当前任务后处理失败：${task.post_process_error.trim()}`
+        : '当前任务后处理失败，但没有返回对应的工作流执行记录。',
+    }
+  }
+
+  return {
+    label: '未查到记录',
+    type: 'warning',
+    tooltip: '当前任务已绑定工作流，但没有查询到执行记录。这通常表示历史数据仍是旧链路，或执行记录尚未写回。',
+    emptyMessage: '当前任务已绑定工作流，但暂未查到执行记录。这通常是历史数据、legacy 工作流，或执行记录尚未写回。',
+  }
+}
+
+function executionSummaryLabel(task: TaskItem | null | undefined) {
+  return executionSummaryState(task).label
+}
+
+function executionSummaryType(task: TaskItem | null | undefined) {
+  return executionSummaryState(task).type
+}
+
+function executionSummaryTooltip(task: TaskItem | null | undefined) {
+  return executionSummaryState(task).tooltip
 }
 
 function taskProgressPercent(task: TaskItem | null | undefined) {
@@ -230,6 +405,42 @@ function isTaskActive(task: TaskItem | null | undefined) {
   return task.status === 'completed' && task.post_process_status !== 'completed' && task.post_process_status !== 'failed'
 }
 
+function isTaskDeletable(task: TaskItem | null | undefined) {
+  if (!task)
+    return false
+  if (task.status === 'failed')
+    return true
+  if (task.status !== 'completed')
+    return false
+  return !isTaskActive(task)
+}
+
+function taskElapsedText(task: TaskItem | null | undefined) {
+  if (!task)
+    return '-'
+
+  const start = parseDateValue(task.createdAt || task.created_at)
+  if (!start)
+    return '-'
+
+  const end = isTaskActive(task)
+    ? nowTimestamp.value
+    : parseDateValue(task.updatedAt || task.updated_at)
+      || parseDateValue(task.post_processed_at)
+      || parseDateValue(task.last_sync_at)
+      || nowTimestamp.value
+  const totalSeconds = Math.max(0, Math.floor((end - start) / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0)
+    return `${hours}时${minutes}分${seconds}秒`
+  if (minutes > 0)
+    return `${minutes}分${seconds}秒`
+  return `${seconds}秒`
+}
+
 function renderProgressCell(row: TaskItem) {
   const percent = taskProgressPercent(row)
   return h('div', { class: 'min-w-0' }, [
@@ -264,6 +475,25 @@ const columns = [
       }
       const item = map[row.status] || { type: 'default', text: formatTaskStatus(row.status) }
       return h(NTag, { type: item.type as any, size: 'small', round: true, bordered: false }, { default: () => item.text })
+    },
+  },
+  {
+    title: '工作流',
+    key: 'workflow_id',
+    width: 160,
+    render: (row: TaskItem) => workflowLabel(row.workflow_id),
+  },
+  {
+    title: '执行摘要',
+    key: 'execution_status',
+    width: 120,
+    render: (row: TaskItem) => {
+      if (!row.workflow_id)
+        return '-'
+      return h(NTooltip, { placement: 'top' }, {
+        trigger: () => h(NTag, { type: executionSummaryType(row) as any, size: 'small', round: true, bordered: false }, { default: () => executionSummaryLabel(row) }),
+        default: () => h('div', { class: 'max-w-72 whitespace-pre-wrap text-xs leading-6' }, executionSummaryTooltip(row)),
+      })
     },
   },
   {
@@ -314,7 +544,8 @@ const columns = [
     width: 220,
     render: (row: TaskItem) => renderProgressCell(row),
   },
-  { title: '时长', key: 'duration', width: 120, render: (row: TaskItem) => formatDuration(row.duration) },
+  { title: '音频时长', key: 'duration', width: 120, render: (row: TaskItem) => formatDuration(row.duration) },
+  { title: '处理耗时', key: 'elapsed', width: 120, render: (row: TaskItem) => taskElapsedText(row) },
   {
     title: '创建时间',
     key: 'createdAt',
@@ -353,11 +584,42 @@ const columns = [
         disabled: row.type !== 'batch' || !isTaskActive(row),
         onClick: () => handleSyncSingle(row.id),
       }, { default: () => '同步' }),
+      isTaskDeletable(row)
+        ? h(NButton, {
+            text: true,
+            size: 'small',
+            type: 'error',
+            loading: deletingTaskId.value === row.id,
+            onClick: () => handleDeleteTask(row),
+          }, { default: () => '删除' })
+        : null,
     ]),
   },
 ]
 
 const canDownloadAudio = computed(() => Boolean(detailTask.value?.audio_url))
+const detailWorkflowPendingUpgrade = computed(() => {
+  const workflowId = detailTask.value?.workflow_id
+  if (!workflowId)
+    return false
+  return !batchWorkflowCatalog.hasWorkflow(workflowId)
+})
+const detailWorkflowPendingUpgradeMessage = computed(() => {
+  if (!detailWorkflowPendingUpgrade.value || !detailTask.value?.workflow_id)
+    return ''
+  return `当前任务绑定的工作流 #${detailTask.value.workflow_id} 不在可用批量工作流列表中，通常表示它仍是待升级的 legacy 工作流。请前往工作流管理页补齐 source 节点后再继续复用。`
+})
+const detailExecutionState = computed(() => executionSummaryState(detailTask.value))
+const canResumePostProcessFromFailure = computed(() => {
+  const task = detailTask.value
+  if (!task)
+    return false
+  return task.type === 'batch'
+    && task.status === 'completed'
+    && Boolean(task.workflow_id)
+    && task.post_process_status === 'failed'
+    && !detailWorkflowPendingUpgrade.value
+})
 
 const filteredTasks = computed(() => {
   const value = keyword.value.trim().toLowerCase()
@@ -381,16 +643,12 @@ watch(() => route.query.taskId, (taskId) => {
     keyword.value = taskId.trim()
 }, { immediate: true })
 
-async function loadDictOptions() {
+async function loadWorkflowOptions() {
   try {
-    const result = await getTermDicts({ offset: 0, limit: 100 })
-    dictOptions.value = result.data.items.map((item: { id: number, name: string, domain: string }) => ({
-      label: `${item.name} / ${item.domain}`,
-      value: item.id,
-    }))
+    await batchWorkflowCatalog.loadWorkflows()
   }
   catch {
-    message.warning('词库列表加载失败，批量任务仍可不带词库提交')
+    message.warning('工作流列表加载失败，可稍后到应用配置页重试')
   }
 }
 
@@ -399,6 +657,7 @@ async function loadTasks(options?: { silent?: boolean }) {
   try {
     const result = await getTranscriptionTasks({ offset: 0, limit: 100 })
     tasks.value = result.data.items
+    await loadExecutionSummaries(result.data.items)
   }
   catch {
     if (!options?.silent)
@@ -406,6 +665,65 @@ async function loadTasks(options?: { silent?: boolean }) {
   }
   finally {
     loading.value = false
+  }
+}
+
+async function loadExecutionSummaries(items: TaskItem[]) {
+  const workflowTasks = items.filter(item => item.workflow_id)
+  if (workflowTasks.length === 0) {
+    executionSummaryByTask.value = {}
+    return
+  }
+
+  const next: Record<number, ExecutionSummary> = {}
+  const results = await Promise.allSettled(
+    workflowTasks.map(async (item) => {
+      const result = await getTranscriptionTaskExecutions(item.id)
+      const latest = (result.data || [])[0] as ExecutionItem | undefined
+      return {
+        taskId: item.id,
+        summary: latest
+          ? {
+              status: latest.status,
+              created_at: latest.created_at,
+              error_message: latest.error_message,
+            }
+          : {
+              status: EXECUTION_SUMMARY_NOT_STARTED,
+            },
+      }
+    }),
+  )
+
+  for (const result of results) {
+    if (result.status !== 'fulfilled')
+      continue
+    next[result.value.taskId] = result.value.summary
+  }
+  executionSummaryByTask.value = next
+}
+
+async function refreshExecutionSummary(task: TaskItem | null | undefined) {
+  if (!task?.workflow_id)
+    return
+  try {
+    const result = await getTranscriptionTaskExecutions(task.id)
+    const latest = (result.data || [])[0] as ExecutionItem | undefined
+    executionSummaryByTask.value = {
+      ...executionSummaryByTask.value,
+      [task.id]: latest
+        ? {
+            status: latest.status,
+            created_at: latest.created_at,
+            error_message: latest.error_message,
+          }
+        : {
+            status: EXECUTION_SUMMARY_NOT_STARTED,
+          },
+    }
+  }
+  catch {
+    // Ignore summary refresh failures to avoid noisy list refreshes.
   }
 }
 
@@ -420,11 +738,10 @@ async function handleCreateTask() {
     await createTranscriptionTask({
       audio_url: submitForm.audioUrl.trim(),
       type: 'batch',
-      dict_id: submitForm.dictId ?? undefined,
+      workflow_id: configuredWorkflowId.value ?? undefined,
     })
     message.success('批量转写任务已提交到 ASR 引擎')
     submitForm.audioUrl = ''
-    submitForm.dictId = null
     await loadTasks()
   }
   catch (error) {
@@ -463,17 +780,49 @@ async function handleShowDetail(taskId: number) {
   detailLoading.value = true
   detailVisible.value = true
   try {
-    const result = await getTranscriptionTaskDetail(taskId)
+    const [result, executionsResult] = await Promise.all([
+      getTranscriptionTaskDetail(taskId),
+      getTranscriptionTaskExecutions(taskId),
+    ])
     detailTask.value = result.data
+    detailExecutions.value = executionsResult.data || []
     patchTaskRow(result.data)
   }
   catch (error) {
     detailTask.value = null
+    detailExecutions.value = []
     detailVisible.value = false
     message.error(extractErrorMessage(error, '任务详情加载失败'))
   }
   finally {
     detailLoading.value = false
+  }
+}
+
+async function handleResumePostProcess() {
+  if (!detailTask.value || !canResumePostProcessFromFailure.value || resumingTaskId.value != null)
+    return
+
+  const taskId = detailTask.value.id
+  resumingTaskId.value = taskId
+  try {
+    const result = await resumeTranscriptionTaskPostProcess(taskId)
+    detailTask.value = result.data
+    patchTaskRow(result.data)
+    const executionsResult = await getTranscriptionTaskExecutions(taskId)
+    detailExecutions.value = executionsResult.data || []
+    await refreshExecutionSummary(result.data)
+
+    if (result.data.post_process_status === 'processing' || result.data.post_process_status === 'completed')
+      message.success('已从失败节点继续执行后处理')
+    else
+      message.warning(result.data.post_process_error || '继续执行失败，请查看后处理错误信息')
+  }
+  catch (error) {
+    message.error(extractErrorMessage(error, '继续执行后处理失败'))
+  }
+  finally {
+    resumingTaskId.value = null
   }
 }
 
@@ -485,8 +834,8 @@ async function handleUploadTask() {
 
   const formData = new FormData()
   formData.append('file', selectedFile.value)
-  if (submitForm.dictId != null)
-    formData.append('dict_id', String(submitForm.dictId))
+  if (configuredWorkflowId.value != null)
+    formData.append('workflow_id', String(configuredWorkflowId.value))
 
   uploading.value = true
   try {
@@ -506,6 +855,42 @@ async function handleUploadTask() {
 
 async function handleSyncSingle(taskId: number) {
   await syncTaskIds([taskId], { silent: false, successMessage: '任务状态已同步' })
+}
+
+async function handleDeleteTask(row: TaskItem) {
+  if (!isTaskDeletable(row) || deletingTaskId.value != null)
+    return
+
+  const confirmed = await confirmDelete({
+    entityType: '任务记录',
+    entityName: `#${row.id}`,
+    description: row.audio_url
+      ? '删除后，这条任务会从列表中移除；如果音频是通过当前系统上传的，本地上传文件也会一并清理。'
+      : '删除后，这条任务会从列表中移除，已有会议记录和执行结果不会自动回滚。',
+  })
+  if (!confirmed)
+    return
+
+  deletingTaskId.value = row.id
+  try {
+    await deleteTranscriptionTask(row.id)
+    tasks.value = tasks.value.filter(item => item.id !== row.id)
+    const nextSummaries = { ...executionSummaryByTask.value }
+    delete nextSummaries[row.id]
+    executionSummaryByTask.value = nextSummaries
+    if (detailTask.value?.id === row.id) {
+      detailVisible.value = false
+      detailTask.value = null
+      detailExecutions.value = []
+    }
+    message.success('任务记录已删除')
+  }
+  catch (error) {
+    message.error(extractErrorMessage(error, '任务删除失败'))
+  }
+  finally {
+    deletingTaskId.value = null
+  }
 }
 
 async function handleSyncProcessing() {
@@ -559,17 +944,23 @@ async function syncTaskIds(taskIds: number[], options?: {
 }
 
 onMounted(async () => {
-  await Promise.all([loadTasks(), loadDictOptions()])
+  await Promise.all([loadTasks(), loadWorkflowOptions()])
+  clockTimer = window.setInterval(() => {
+    nowTimestamp.value = Date.now()
+  }, 1000)
 
   stopBusinessSubscription = subscribeBusinessTopic(['asr.task.updated'], (event) => {
     const payload = event.payload as { task?: TaskItem } | undefined
     applyTaskUpdate(payload?.task)
+    void refreshExecutionSummary(payload?.task)
   })
 })
 
 onBeforeUnmount(() => {
   stopBusinessSubscription?.()
   stopBusinessSubscription = null
+  if (clockTimer != null)
+    window.clearInterval(clockTimer)
 })
 </script>
 
@@ -577,7 +968,15 @@ onBeforeUnmount(() => {
   <div class="flex h-full min-w-0 min-h-0 flex-col gap-5 overflow-hidden">
     <NCard class="card-main shrink-0">
       <template #header>
-        <span class="text-sm font-600">发起批量转写</span>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <span class="text-sm font-600">发起批量转写</span>
+          <div class="flex items-center gap-2 text-xs text-slate">
+            <span>当前默认工作流：{{ configuredWorkflowLabel }}</span>
+            <NButton text size="small" @click="router.push('/workflows/application-settings')">
+              应用配置
+            </NButton>
+          </div>
+        </div>
       </template>
       <NTabs type="line" animated>
         <NTabPane name="upload" tab="上传本地音频">
@@ -586,12 +985,16 @@ onBeforeUnmount(() => {
             <NButton quaternary @click="handleChooseFile">
               选择文件
             </NButton>
+            <NButton quaternary @click="router.push('/workflows/application-settings')">
+              应用配置
+            </NButton>
             <NButton type="primary" color="#0f766e" :loading="uploading" @click="handleUploadTask">
               上传并转写
             </NButton>
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate">
             <span>{{ selectedFile ? `文件大小 ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : '未选择文件' }}</span>
+            <span>{{ configuredWorkflowMessage }}</span>
             <NButton v-if="selectedFile" text size="small" @click="clearSelectedFile">
               清除
             </NButton>
@@ -600,19 +1003,29 @@ onBeforeUnmount(() => {
         <NTabPane name="url" tab="提交音频 URL">
           <div class="flex flex-wrap items-center gap-3 pt-3">
             <NInput v-model:value="submitForm.audioUrl" placeholder="https://example.com/audio/demo.wav" class="w-full sm:!w-96" />
-            <NSelect
-              v-model:value="submitForm.dictId"
-              clearable
-              :options="dictOptions"
-              placeholder="可选，提升专有名词识别"
-              class="w-full sm:!w-56"
-            />
+            <NButton quaternary @click="router.push('/workflows/application-settings')">
+              应用配置
+            </NButton>
             <NButton type="primary" color="#0f766e" :loading="creating" @click="handleCreateTask">
               提交 URL 任务
             </NButton>
           </div>
+          <div class="mt-2 text-xs text-slate">
+            {{ configuredWorkflowMessage }}
+          </div>
         </NTabPane>
       </NTabs>
+
+      <div class="mt-4">
+        <div v-if="configuredWorkflowMissing" class="mb-3 rounded-2 border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-700">
+          {{ configuredWorkflowMessage }}
+        </div>
+        <WorkflowSelectionPreview
+          :workflow="selectedWorkflowOption"
+          empty-title="未配置批量默认工作流"
+          empty-description="前往应用配置页设置后，这里会展示批量任务统一复用的后处理链路。"
+        />
+      </div>
 
       <input
         ref="fileInput"
@@ -655,7 +1068,7 @@ onBeforeUnmount(() => {
         正在加载任务详情...
       </div>
       <div v-else-if="detailTask" class="grid gap-4">
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
           <div class="rounded-2.5 bg-mist/60 p-3.5">
             <div class="text-xs text-slate/70">
               任务状态
@@ -682,6 +1095,14 @@ onBeforeUnmount(() => {
           </div>
           <div class="rounded-2.5 bg-mist/60 p-3.5">
             <div class="text-xs text-slate/70">
+              处理耗时
+            </div>
+            <div class="mt-1.5 text-base font-700 text-ink">
+              {{ taskElapsedText(detailTask) }}
+            </div>
+          </div>
+          <div class="rounded-2.5 bg-mist/60 p-3.5">
+            <div class="text-xs text-slate/70">
               当前进度
             </div>
             <div class="mt-1.5 text-base font-700 text-ink">
@@ -694,6 +1115,18 @@ onBeforeUnmount(() => {
               {{ taskProgressMessage(detailTask) }}
             </div>
           </div>
+          <div class="rounded-2.5 bg-mist/60 p-3.5">
+            <div class="text-xs text-slate/70">
+              工作流
+            </div>
+            <div class="mt-1.5 text-base font-700 text-ink">
+              {{ workflowLabel(detailTask.workflow_id) }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="detailWorkflowPendingUpgradeMessage" class="rounded-2 border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-700">
+          {{ detailWorkflowPendingUpgradeMessage }}
         </div>
 
         <div class="rounded-2.5 bg-mist/60 p-3.5">
@@ -702,6 +1135,58 @@ onBeforeUnmount(() => {
           </div>
           <div class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-2 bg-white/80 p-3.5 text-sm leading-7 text-ink">
             {{ sanitizeTranscriptionText(detailTask.result_text) || '当前还没有可展示的结果文本。' }}
+          </div>
+        </div>
+
+        <div class="rounded-2.5 bg-mist/60 p-3.5">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-xs font-600 text-ink">
+              工作流执行记录
+            </div>
+            <div class="text-xs text-slate">
+              {{ detailExecutions.length > 0 ? `${detailExecutions.length} 次执行` : detailExecutionState.label }}
+            </div>
+          </div>
+          <div v-if="detailExecutions.length === 0" class="mt-3 rounded-2 bg-white/80 p-3 text-sm text-slate">
+            {{ detailExecutionState.emptyMessage }}
+          </div>
+          <div v-else class="mt-3 grid gap-3">
+            <div v-for="execution in detailExecutions" :key="execution.id" class="rounded-2 bg-white/80 p-3.5">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div class="text-sm font-700 text-ink">
+                    执行 #{{ execution.id }} / {{ formatExecutionStatus(execution.status) }}
+                  </div>
+                  <div class="mt-1 text-xs text-slate">
+                    触发类型：{{ execution.trigger_type }} · 创建时间：{{ formatDateTime(execution.created_at) }}
+                  </div>
+                </div>
+                <div class="text-xs text-slate">
+                  最终文本长度：{{ execution.final_text?.length || 0 }}
+                </div>
+              </div>
+              <div v-if="execution.error_message" class="mt-3 rounded-2 bg-red-50 px-3 py-2 text-xs text-red-600">
+                {{ execution.error_message }}
+              </div>
+              <div class="mt-3 grid gap-3">
+                <div v-for="node in execution.node_results || []" :key="node.id" class="rounded-2 border border-gray-200 bg-[#fbfdff] p-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="text-sm font-600 text-ink">
+                      {{ node.position }}. {{ node.label || node.node_type }}
+                    </div>
+                    <div class="text-xs text-slate">
+                      {{ formatExecutionStatus(node.status) }} · {{ node.duration_ms || 0 }} ms
+                    </div>
+                  </div>
+                  <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                    <TextDiffPreview :before-text="sanitizeTranscriptionText(node.input_text)" :after-text="sanitizeTranscriptionText(node.output_text)" />
+                  </div>
+                  <div class="mt-3">
+                    <NodeDetailPanel :detail="node.detail" empty-label="当前节点没有 detail 信息。" />
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -746,6 +1231,13 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="flex justify-end gap-3">
+          <NButton
+            v-if="canResumePostProcessFromFailure"
+            :loading="resumingTaskId === detailTask.id"
+            @click="handleResumePostProcess"
+          >
+            从失败节点继续
+          </NButton>
           <NButton :disabled="!canDownloadAudio" @click="detailTask && handleDownloadAudio(detailTask)">
             下载原音频
           </NButton>

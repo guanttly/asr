@@ -8,10 +8,14 @@ import (
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	appuser "github.com/lgt/asr/internal/application/user"
+	appwf "github.com/lgt/asr/internal/application/workflow"
+	domain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/infrastructure/asrengine"
+	"github.com/lgt/asr/internal/infrastructure/diarization"
 	"github.com/lgt/asr/internal/infrastructure/nlpengine"
 	"github.com/lgt/asr/internal/infrastructure/persistence"
 	"github.com/lgt/asr/internal/infrastructure/postprocess"
+	wfengine "github.com/lgt/asr/internal/infrastructure/workflow"
 	api "github.com/lgt/asr/internal/interfaces/api"
 	"github.com/lgt/asr/internal/interfaces/middleware"
 	pkgconfig "github.com/lgt/asr/pkg/config"
@@ -78,7 +82,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	userService := appuser.NewService(persistence.NewUserRepo(db))
+	userRepo := persistence.NewUserRepo(db)
+	workflowRepo := persistence.NewWorkflowRepo(db)
+	userService := appuser.NewService(userRepo, workflowRepo)
 	if err := userService.EnsureAdmin(
 		context.Background(),
 		cfg.Bootstrap.AdminUsername,
@@ -93,6 +99,7 @@ func main() {
 		persistence.NewDictRepo(db),
 		persistence.NewEntryRepo(db),
 		persistence.NewRuleRepo(db),
+		persistence.NewSeedStateRepo(db),
 	)
 	if err := termService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
@@ -110,6 +117,31 @@ func main() {
 	postProcessor := postprocess.NewBatchMeetingProcessor(meetingRepo, transcriptRepo, summaryRepo, corrector, summarizer)
 	asrService := appasr.NewService(persistence.NewTaskRepo(db), &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, nil)
 
+	// Initialize workflow engine and handlers
+	engine := wfengine.NewEngine(logger)
+	engine.RegisterHandler(domain.NodeTermCorrection, wfengine.NewTermCorrectionHandler(corrector))
+	engine.RegisterHandler(domain.NodeFillerFilter, wfengine.NewFillerFilterHandler())
+	engine.RegisterHandler(domain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
+	engine.RegisterHandler(domain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
+	engine.RegisterHandler(domain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
+	var diarizeClient *diarization.Client
+	if cfg.Services.DiarizationURL != "" {
+		diarizeClient = diarization.NewClient(cfg.Services.DiarizationURL)
+	}
+	engine.RegisterHandler(domain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient))
+
+	workflowService := appwf.NewService(
+		workflowRepo,
+		persistence.NewWorkflowNodeRepo(db),
+		persistence.NewWorkflowExecutionRepo(db),
+		persistence.NewWorkflowNodeResultRepo(db),
+		engine,
+	)
+	if err := workflowService.EnsureSeedTemplates(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("workflow seed templates ensured")
+
 	router := api.NewRouter(logger)
 	userHandler := api.NewUserHandler(userService, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
 	userHandler.RegisterPublic(router.Group("/api/admin/auth"))
@@ -118,6 +150,7 @@ func main() {
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
 	api.NewDashboardHandler(asrService, cfg.Services.ASRBatchSyncWarnThreshold, 6).Register(protected)
+	api.NewWorkflowHandler(workflowService).Register(protected)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.AdminAPIPort)
 	logger.Info("admin-api listening", zap.String("addr", addr))

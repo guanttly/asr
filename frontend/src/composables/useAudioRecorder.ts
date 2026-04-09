@@ -49,6 +49,15 @@ function concatFloat32(a: Float32Array, b: Float32Array): Float32Array {
   return out
 }
 
+function float32ToInt16(float32: Float32Array): ArrayBuffer {
+  const int16 = new Int16Array(float32.length)
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]))
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
+  }
+  return int16.buffer
+}
+
 export function useAudioRecorder() {
   const mediaStream = shallowRef<MediaStream | null>(null)
   const audioCtx = shallowRef<AudioContext | null>(null)
@@ -108,10 +117,12 @@ export function useAudioRecorder() {
         const resampled = resampleLinear(new Float32Array(input), audioCtx.value!.sampleRate, TARGET_SR)
         buffer = concatFloat32(buffer, resampled)
 
-        while (buffer.length >= chunkSamples && onChunkCallback) {
-          const chunk = buffer.slice(0, chunkSamples)
-          buffer = buffer.slice(chunkSamples)
-          onChunkCallback(chunk.buffer)
+        if (onChunkCallback) {
+          while (buffer.length >= chunkSamples) {
+            const chunk = buffer.slice(0, chunkSamples)
+            buffer = buffer.slice(chunkSamples)
+            onChunkCallback(float32ToInt16(chunk))
+          }
         }
       }
 
@@ -130,15 +141,20 @@ export function useAudioRecorder() {
   const stop = () => {
     // Flush remaining buffer.
     if (buffer.length > 0 && onChunkCallback) {
-      onChunkCallback(buffer.slice().buffer)
+      onChunkCallback(float32ToInt16(buffer.slice()))
       buffer = new Float32Array(0)
     }
 
     cleanup()
   }
 
-  const pause = () => { isPaused.value = true }
-  const resume = () => { isPaused.value = false }
+  const pause = () => {
+    isPaused.value = true
+  }
+
+  const resume = () => {
+    isPaused.value = false
+  }
 
   return { isRecording, isPaused, start, stop, pause, resume }
 }

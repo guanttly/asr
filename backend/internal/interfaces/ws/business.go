@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,10 @@ const (
 	businessEventTypeError        = "error"
 	businessEventTypePong         = "pong"
 )
+
+var businessUpgrader = websocket.Upgrader{
+	CheckOrigin: func(_ *http.Request) bool { return true },
+}
 
 type BusinessEvent struct {
 	Type      string    `json:"type"`
@@ -57,7 +62,7 @@ func NewBusinessHub(logger *zap.Logger) *BusinessHub {
 }
 
 func (h *BusinessHub) Handle(c *gin.Context) {
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := businessUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}

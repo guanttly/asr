@@ -3,19 +3,22 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	domain "github.com/lgt/asr/internal/domain/user"
+	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Service orchestrates user use cases.
 type Service struct {
-	userRepo domain.UserRepository
+	userRepo     domain.UserRepository
+	workflowRepo wfdomain.WorkflowRepository
 }
 
 // NewService creates a new user application service.
-func NewService(userRepo domain.UserRepository) *Service {
-	return &Service{userRepo: userRepo}
+func NewService(userRepo domain.UserRepository, workflowRepo wfdomain.WorkflowRepository) *Service {
+	return &Service{userRepo: userRepo, workflowRepo: workflowRepo}
 }
 
 // CreateUser registers a new user.
@@ -89,6 +92,50 @@ func (s *Service) ListUsers(ctx context.Context, offset, limit int) ([]*UserResp
 	return items, total, nil
 }
 
+// GetWorkflowBindings returns current user's app workflow bindings.
+func (s *Service) GetWorkflowBindings(ctx context.Context, userID uint64) (*WorkflowBindingsResponse, error) {
+	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
+		return nil, err
+	}
+
+	bindings, err := s.userRepo.GetWorkflowBindings(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	return toWorkflowBindingsResponse(bindings), nil
+}
+
+// UpdateWorkflowBindings validates and saves current user's app workflow bindings.
+func (s *Service) UpdateWorkflowBindings(ctx context.Context, userID uint64, req *UpdateWorkflowBindingsRequest) (*WorkflowBindingsResponse, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.validateWorkflowBinding(ctx, user, "realtime", req.Realtime, wfdomain.WorkflowTypeRealtime); err != nil {
+		return nil, err
+	}
+	if err := s.validateWorkflowBinding(ctx, user, "batch", req.Batch, wfdomain.WorkflowTypeBatch); err != nil {
+		return nil, err
+	}
+	if err := s.validateWorkflowBinding(ctx, user, "meeting", req.Meeting, wfdomain.WorkflowTypeMeeting); err != nil {
+		return nil, err
+	}
+
+	bindings := &domain.WorkflowBindings{
+		UserID:             userID,
+		RealtimeWorkflowID: req.Realtime,
+		BatchWorkflowID:    req.Batch,
+		MeetingWorkflowID:  req.Meeting,
+	}
+	if err := s.userRepo.SaveWorkflowBindings(ctx, bindings); err != nil {
+		return nil, err
+	}
+
+	return toWorkflowBindingsResponse(bindings), nil
+}
+
 // EnsureAdmin ensures the bootstrap admin account exists.
 func (s *Service) EnsureAdmin(ctx context.Context, username, password, displayName string) error {
 	user, err := s.userRepo.GetByUsername(ctx, username)
@@ -120,5 +167,63 @@ func toResponse(user *domain.User) *UserResponse {
 		Username:    user.Username,
 		DisplayName: user.DisplayName,
 		Role:        string(user.Role),
+	}
+}
+
+func toWorkflowBindingsResponse(bindings *domain.WorkflowBindings) *WorkflowBindingsResponse {
+	if bindings == nil {
+		return &WorkflowBindingsResponse{}
+	}
+
+	return &WorkflowBindingsResponse{
+		Realtime: bindings.RealtimeWorkflowID,
+		Batch:    bindings.BatchWorkflowID,
+		Meeting:  bindings.MeetingWorkflowID,
+	}
+}
+
+func (s *Service) validateWorkflowBinding(ctx context.Context, user *domain.User, bindingKey string, workflowID *uint64, expectedType wfdomain.WorkflowType) error {
+	if workflowID == nil {
+		return nil
+	}
+	if *workflowID == 0 {
+		return fmt.Errorf("%s workflow id must be positive", bindingKey)
+	}
+	if s.workflowRepo == nil {
+		return errors.New("workflow repository is not configured")
+	}
+
+	workflow, err := s.workflowRepo.GetByID(ctx, *workflowID)
+	if err != nil {
+		return fmt.Errorf("%s workflow #%d not found", bindingKey, *workflowID)
+	}
+	if workflow.IsLegacy {
+		return fmt.Errorf("%s workflow #%d is legacy and cannot be bound", bindingKey, *workflowID)
+	}
+	if workflow.WorkflowType != expectedType {
+		return fmt.Errorf("%s workflow #%d must be %s", bindingKey, *workflowID, expectedType)
+	}
+	if !canAccessWorkflow(user, workflow) {
+		return fmt.Errorf("%s workflow #%d is not accessible", bindingKey, *workflowID)
+	}
+
+	return nil
+}
+
+func canAccessWorkflow(user *domain.User, workflow *wfdomain.Workflow) bool {
+	if user == nil || workflow == nil {
+		return false
+	}
+	if user.Role == domain.RoleAdmin {
+		return true
+	}
+
+	switch workflow.OwnerType {
+	case wfdomain.OwnerUser:
+		return workflow.OwnerID == user.ID
+	case wfdomain.OwnerSystem:
+		return workflow.IsPublished
+	default:
+		return false
 	}
 }

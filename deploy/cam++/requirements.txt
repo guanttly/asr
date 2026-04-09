@@ -1,0 +1,38 @@
+# ========================================
+# 说话人分离服务 - Python 依赖
+# ========================================
+# 注意：torch / torchaudio 已在 Dockerfile 中
+# 从 PyTorch 官方 CPU 源单独安装，此处不重复声明
+
+# Web 框架
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.19
+
+# 阿里 ModelScope（模型加载）
+modelscope>=1.20.0
+addict>=2.4.0
+attrs>=23.0.0
+datasets>=2.18.0
+einops>=0.7.0
+Pillow>=10.0.0
+PyYAML>=6.0.0
+simplejson>=3.19.0
+sortedcontainers>=2.4.0
+transformers>=4.38.0
+oss2>=2.18.0
+hdbscan>=0.8.33
+
+# FunASR（CAM++ 模型运行时依赖）
+funasr>=1.2.7
+
+# 音频处理
+soundfile>=0.12.0
+numpy>=1.24.0
+librosa>=0.10.0
+
+# 机器学习（说话人聚类依赖）
+scikit-learn>=1.3.0
+
+# 工具
+pydantic>=2.0.0

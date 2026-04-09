@@ -1,3 +1,5 @@
+import type { WorkflowBindings } from '@/types/workflow'
+
 import request from './request'
 
 export function login(payload: { username: string, password: string }) {
@@ -14,4 +16,12 @@ export function createUser(payload: { username: string, password: string, displa
 
 export function getCurrentUser() {
   return request.get('/api/admin/me')
+}
+
+export function getCurrentUserWorkflowBindings() {
+  return request.get('/api/admin/me/workflow-bindings')
+}
+
+export function updateCurrentUserWorkflowBindings(payload: WorkflowBindings) {
+  return request.put('/api/admin/me/workflow-bindings', payload)
 }

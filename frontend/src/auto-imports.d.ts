@@ -153,6 +153,7 @@ declare global {
   const useClipboardItems: typeof import('@vueuse/core')['useClipboardItems']
   const useCloned: typeof import('@vueuse/core')['useCloned']
   const useColorMode: typeof import('@vueuse/core')['useColorMode']
+  const useConfirmActionDialog: typeof import('./composables/useConfirmActionDialog')['useConfirmActionDialog']
   const useConfirmDialog: typeof import('@vueuse/core')['useConfirmDialog']
   const useCountdown: typeof import('@vueuse/core')['useCountdown']
   const useCounter: typeof import('@vueuse/core')['useCounter']
@@ -166,6 +167,7 @@ declare global {
   const useDebounce: typeof import('@vueuse/core')['useDebounce']
   const useDebounceFn: typeof import('@vueuse/core')['useDebounceFn']
   const useDebouncedRefHistory: typeof import('@vueuse/core')['useDebouncedRefHistory']
+  const useDeleteConfirmDialog: typeof import('./composables/useDeleteConfirmDialog')['useDeleteConfirmDialog']
   const useDeviceMotion: typeof import('@vueuse/core')['useDeviceMotion']
   const useDeviceOrientation: typeof import('@vueuse/core')['useDeviceOrientation']
   const useDevicePixelRatio: typeof import('@vueuse/core')['useDevicePixelRatio']
@@ -289,12 +291,13 @@ declare global {
   const useVirtualList: typeof import('@vueuse/core')['useVirtualList']
   const useWakeLock: typeof import('@vueuse/core')['useWakeLock']
   const useWebNotification: typeof import('@vueuse/core')['useWebNotification']
-  const useWebSocket: typeof import('./composables/useWebSocket')['useWebSocket']
   const useWebWorker: typeof import('@vueuse/core')['useWebWorker']
   const useWebWorkerFn: typeof import('@vueuse/core')['useWebWorkerFn']
   const useWindowFocus: typeof import('@vueuse/core')['useWindowFocus']
   const useWindowScroll: typeof import('@vueuse/core')['useWindowScroll']
   const useWindowSize: typeof import('@vueuse/core')['useWindowSize']
+  const useWorkflowBindingStatus: typeof import('./composables/useWorkflowBindingStatus')['useWorkflowBindingStatus']
+  const useWorkflowCatalog: typeof import('./composables/useWorkflowCatalog')['useWorkflowCatalog']
   const watch: typeof import('vue')['watch']
   const watchArray: typeof import('@vueuse/core')['watchArray']
   const watchAtMost: typeof import('@vueuse/core')['watchAtMost']
@@ -320,4 +323,7 @@ declare global {
   // @ts-ignore
   export type { BusinessSocketEvent, BusinessSocketStatus } from './composables/useBusinessSocket'
   import('./composables/useBusinessSocket')
+  // @ts-ignore
+  export type { WorkflowBindingMessages } from './composables/useWorkflowBindingStatus'
+  import('./composables/useWorkflowBindingStatus')
 }

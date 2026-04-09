@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import type { AxiosError } from 'axios'
 
-import { reactive, ref } from 'vue'
 import { useMessage } from 'naive-ui'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { login } from '@/api/user'
+import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
 const message = useMessage()
+const appStore = useAppStore()
 const userStore = useUserStore()
 
 const form = reactive({
@@ -25,6 +27,7 @@ async function handleLogin() {
     const result = await login(form)
     userStore.setToken(result.data.token)
     await userStore.bootstrap()
+    await appStore.bootstrapWorkflowBindings()
     message.success('登录成功')
     router.push('/dashboard')
   }
@@ -54,24 +57,40 @@ async function handleLogin() {
 
         <div class="mt-8 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div class="subtle-panel">
-            <div class="text-xs text-slate/70">实时转写</div>
-            <div class="mt-1.5 text-xl font-700 text-ink">P95 ≤ 1.5s</div>
+            <div class="text-xs text-slate/70">
+              实时转写
+            </div>
+            <div class="mt-1.5 text-xl font-700 text-ink">
+              P95 ≤ 1.5s
+            </div>
           </div>
           <div class="subtle-panel">
-            <div class="text-xs text-slate/70">术语纠错</div>
-            <div class="mt-1.5 text-xl font-700 text-ink">三层管道</div>
+            <div class="text-xs text-slate/70">
+              术语纠错
+            </div>
+            <div class="mt-1.5 text-xl font-700 text-ink">
+              三层管道
+            </div>
           </div>
           <div class="subtle-panel">
-            <div class="text-xs text-slate/70">会议摘要</div>
-            <div class="mt-1.5 text-xl font-700 text-ink">结构化输出</div>
+            <div class="text-xs text-slate/70">
+              会议摘要
+            </div>
+            <div class="mt-1.5 text-xl font-700 text-ink">
+              结构化输出
+            </div>
           </div>
         </div>
       </section>
 
       <section class="card-main p-5 sm:p-6">
         <div class="mb-6">
-          <div class="font-display text-2xl font-700 text-ink">登录</div>
-          <div class="mt-1 text-sm text-slate/70">管理后台、转写工作台和会议模块共用统一认证。</div>
+          <div class="font-display text-2xl font-700 text-ink">
+            登录
+          </div>
+          <div class="mt-1 text-sm text-slate/70">
+            管理后台、转写工作台和会议模块共用统一认证。
+          </div>
         </div>
 
         <NForm :model="form" label-placement="top">

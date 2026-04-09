@@ -1,5 +1,7 @@
 import { computed, ref, shallowRef } from 'vue'
 
+import { resolveWebSocketURL } from '@/utils/websocket'
+
 export interface BusinessSocketEvent<T = unknown> {
   type: string
   topic?: string
@@ -70,7 +72,7 @@ function scheduleReconnect() {
 }
 
 function buildWebSocketURL(path: string, token: string) {
-  const wsURL = new URL(`${import.meta.env.VITE_WS_BASE_URL}${path}`)
+  const wsURL = resolveWebSocketURL(path)
   if (token)
     wsURL.searchParams.set('token', token)
   return wsURL

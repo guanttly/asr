@@ -18,18 +18,23 @@ type Service struct {
 	dictRepo  domain.DictRepository
 	entryRepo domain.EntryRepository
 	ruleRepo  domain.RuleRepository
+	seedRepo  domain.SeedStateRepository
 }
+
+const terminologySeedStateKey = "terminology_seed_initialized_v1"
 
 // NewService creates a new terminology application service.
 func NewService(
 	dictRepo domain.DictRepository,
 	entryRepo domain.EntryRepository,
 	ruleRepo domain.RuleRepository,
+	seedRepo domain.SeedStateRepository,
 ) *Service {
 	return &Service{
 		dictRepo:  dictRepo,
 		entryRepo: entryRepo,
 		ruleRepo:  ruleRepo,
+		seedRepo:  seedRepo,
 	}
 }
 
@@ -43,6 +48,45 @@ func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*Dict
 		return nil, err
 	}
 	return &DictResponse{ID: dict.ID, Name: dict.Name, Domain: dict.Domain}, nil
+}
+
+// UpdateDict updates a terminology dictionary.
+func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequest) (*DictResponse, error) {
+	dict, err := s.dictRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	dict.Name = req.Name
+	dict.Domain = req.Domain
+	if err := s.dictRepo.Update(ctx, dict); err != nil {
+		return nil, err
+	}
+	return &DictResponse{ID: dict.ID, Name: dict.Name, Domain: dict.Domain}, nil
+}
+
+// DeleteDict deletes a terminology dictionary and its related entries and rules.
+func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
+	entries, err := s.entryRepo.ListByDict(ctx, id)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
+			return err
+		}
+	}
+
+	rules, err := s.ruleRepo.ListByDict(ctx, id)
+	if err != nil {
+		return err
+	}
+	for i := range rules {
+		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
+			return err
+		}
+	}
+
+	return s.dictRepo.Delete(ctx, id)
 }
 
 // ListDicts returns a paginated list of dictionaries.
@@ -82,6 +126,7 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 		DictID:        req.DictID,
 		CorrectTerm:   req.CorrectTerm,
 		WrongVariants: req.WrongVariants,
+		Pinyin:        req.Pinyin,
 	}
 	if err := s.entryRepo.BatchCreate(ctx, []domain.TermEntry{entry}); err != nil {
 		return nil, err
@@ -106,7 +151,34 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	return &EntryResponse{
 		CorrectTerm:   req.CorrectTerm,
 		WrongVariants: req.WrongVariants,
+		Pinyin:        req.Pinyin,
 	}, nil
+}
+
+// UpdateEntry updates a term entry under a dictionary.
+func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*EntryResponse, error) {
+	entry, err := s.entryRepo.GetByID(ctx, req.ID)
+	if err != nil {
+		return nil, err
+	}
+	entry.DictID = req.DictID
+	entry.CorrectTerm = req.CorrectTerm
+	entry.WrongVariants = req.WrongVariants
+	entry.Pinyin = req.Pinyin
+	if err := s.entryRepo.Update(ctx, entry); err != nil {
+		return nil, err
+	}
+	return &EntryResponse{
+		ID:            entry.ID,
+		CorrectTerm:   entry.CorrectTerm,
+		WrongVariants: entry.WrongVariants,
+		Pinyin:        entry.Pinyin,
+	}, nil
+}
+
+// DeleteEntry deletes a term entry.
+func (s *Service) DeleteEntry(ctx context.Context, id uint64) error {
+	return s.entryRepo.Delete(ctx, id)
 }
 
 // GetDictRules returns all correction rules of a dictionary.
@@ -152,8 +224,52 @@ func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*Rule
 	}, nil
 }
 
+// UpdateRule updates a correction rule.
+func (s *Service) UpdateRule(ctx context.Context, req *UpdateRuleRequest) (*RuleResponse, error) {
+	rule, err := s.ruleRepo.GetByID(ctx, req.ID)
+	if err != nil {
+		return nil, err
+	}
+	rule.DictID = req.DictID
+	rule.Layer = domain.CorrectionLayer(req.Layer)
+	rule.Pattern = req.Pattern
+	rule.Replacement = req.Replacement
+	rule.Enabled = req.Enabled
+	if err := s.ruleRepo.Update(ctx, rule); err != nil {
+		return nil, err
+	}
+	return &RuleResponse{
+		ID:          rule.ID,
+		Layer:       int(rule.Layer),
+		Pattern:     rule.Pattern,
+		Replacement: rule.Replacement,
+		Enabled:     rule.Enabled,
+	}, nil
+}
+
+// DeleteRule deletes a correction rule.
+func (s *Service) DeleteRule(ctx context.Context, id uint64) error {
+	return s.ruleRepo.Delete(ctx, id)
+}
+
 // EnsureSeedData creates a minimal default set of dictionaries, entries and rules.
 func (s *Service) EnsureSeedData(ctx context.Context) error {
+	seeded, err := s.seedRepo.IsSeeded(ctx, terminologySeedStateKey)
+	if err != nil {
+		return err
+	}
+	if seeded {
+		return nil
+	}
+
+	existing, total, err := s.dictRepo.List(ctx, 0, 1)
+	if err != nil {
+		return err
+	}
+	if total > 0 || len(existing) > 0 {
+		return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
+	}
+
 	seeds := []seedDictionary{
 		{
 			Name:   "医疗查房",
@@ -183,21 +299,7 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		},
 	}
 
-	existing, _, err := s.dictRepo.List(ctx, 0, 1000)
-	if err != nil {
-		return err
-	}
-
-	existingByName := make(map[string]struct{}, len(existing))
-	for _, item := range existing {
-		existingByName[item.Name] = struct{}{}
-	}
-
 	for _, seed := range seeds {
-		if _, ok := existingByName[seed.Name]; ok {
-			continue
-		}
-
 		dict := &domain.TermDict{Name: seed.Name, Domain: seed.Domain}
 		if err := s.dictRepo.Create(ctx, dict); err != nil {
 			return err
@@ -223,7 +325,7 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
 }
 
 // BatchImport imports multiple term entries at once.

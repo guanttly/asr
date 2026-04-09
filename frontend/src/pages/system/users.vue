@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
 import { NTag, useMessage } from 'naive-ui'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 
 import { createUser, getUsers } from '@/api/user'
 import { useUserStore } from '@/stores/user'
 
-type UserItem = {
+interface UserItem {
   id: number
   username: string
   display_name?: string
@@ -99,15 +99,18 @@ onMounted(loadUsers)
 
 <template>
   <div class="flex-1 flex flex-col min-h-0 gap-5">
-
     <NCard class="card-main flex flex-col min-h-0 flex-1" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">用户列表</span>
           <div class="flex flex-wrap items-center gap-2">
             <NInput v-model:value="keyword" clearable placeholder="搜索用户名 / 显示名 / 角色" size="small" class="w-full sm:!w-56" />
-            <NButton quaternary size="small" @click="loadUsers">刷新</NButton>
-            <NButton v-if="userStore.profile?.role === 'admin'" type="primary" size="small" color="#0f766e" @click="showCreateModal = true">新增用户</NButton>
+            <NButton quaternary size="small" @click="loadUsers">
+              刷新
+            </NButton>
+            <NButton v-if="userStore.profile?.role === 'admin'" type="primary" size="small" color="#0f766e" @click="showCreateModal = true">
+              新增用户
+            </NButton>
           </div>
         </div>
       </template>
@@ -136,8 +139,12 @@ onMounted(loadUsers)
         </NFormItem>
 
         <div class="flex justify-end gap-3">
-          <NButton @click="showCreateModal = false">取消</NButton>
-          <NButton type="primary" color="#0f766e" :loading="creating" @click="handleCreateUser">创建</NButton>
+          <NButton @click="showCreateModal = false">
+            取消
+          </NButton>
+          <NButton type="primary" color="#0f766e" :loading="creating" @click="handleCreateUser">
+            创建
+          </NButton>
         </div>
       </NForm>
     </NModal>

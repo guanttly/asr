@@ -40,6 +40,7 @@ type TaskModel struct {
 	ResultText        string     `gorm:"type:longtext"`
 	Duration          float64
 	DictID            *uint64
+	WorkflowID        *uint64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -83,6 +84,7 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.TranscriptionTask) e
 		ResultText:        task.ResultText,
 		Duration:          task.Duration,
 		DictID:            task.DictID,
+		WorkflowID:        task.WorkflowID,
 	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		return err
@@ -120,6 +122,10 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.TranscriptionTask) e
 		"duration":            task.Duration,
 		"updated_at":          time.Now(),
 	}).Error
+}
+
+func (r *TaskRepo) Delete(ctx context.Context, id uint64) error {
+	return r.db.WithContext(ctx).Delete(&TaskModel{}, id).Error
 }
 
 func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
@@ -463,6 +469,7 @@ func (r *TaskRepo) toDomain(m *TaskModel) *domain.TranscriptionTask {
 		ResultText:        m.ResultText,
 		Duration:          m.Duration,
 		DictID:            m.DictID,
+		WorkflowID:        m.WorkflowID,
 		CreatedAt:         m.CreatedAt,
 		UpdatedAt:         m.UpdatedAt,
 	}

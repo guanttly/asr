@@ -118,6 +118,11 @@ func (p *BatchMeetingProcessor) ProcessCompletedTask(ctx context.Context, task *
 	return nil
 }
 
+// ResumeCompletedTaskFromFailure falls back to the legacy full post-process path.
+func (p *BatchMeetingProcessor) ResumeCompletedTaskFromFailure(ctx context.Context, task *asrdomain.TranscriptionTask) error {
+	return p.ProcessCompletedTask(ctx, task)
+}
+
 func buildMeetingTitle(task *asrdomain.TranscriptionTask) string {
 	fileName := path.Base(strings.TrimSpace(task.AudioURL))
 	if fileName == "." || fileName == "/" || fileName == "" {

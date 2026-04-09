@@ -3,10 +3,12 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // DictModel is the persistence model for terminology dictionaries.
@@ -140,6 +142,24 @@ func (r *EntryRepo) BatchCreate(ctx context.Context, entries []domain.TermEntry)
 	return r.db.WithContext(ctx).Create(&models).Error
 }
 
+func (r *EntryRepo) GetByID(ctx context.Context, id uint64) (*domain.TermEntry, error) {
+	var model EntryModel
+	if err := r.db.WithContext(ctx).First(&model, id).Error; err != nil {
+		return nil, err
+	}
+	var variants []string
+	if model.WrongVariantsJSON != "" {
+		_ = json.Unmarshal([]byte(model.WrongVariantsJSON), &variants)
+	}
+	return &domain.TermEntry{
+		ID:            model.ID,
+		DictID:        model.DictID,
+		CorrectTerm:   model.CorrectTerm,
+		WrongVariants: variants,
+		Pinyin:        model.Pinyin,
+	}, nil
+}
+
 func (r *EntryRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.TermEntry, error) {
 	var models []EntryModel
 	if err := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Order("id asc").Find(&models).Error; err != nil {
@@ -203,6 +223,22 @@ func (r *RuleRepo) Create(ctx context.Context, rule *domain.CorrectionRule) erro
 	return nil
 }
 
+func (r *RuleRepo) GetByID(ctx context.Context, id uint64) (*domain.CorrectionRule, error) {
+	var model RuleModel
+	if err := r.db.WithContext(ctx).First(&model, id).Error; err != nil {
+		return nil, err
+	}
+	return &domain.CorrectionRule{
+		ID:          model.ID,
+		DictID:      model.DictID,
+		Layer:       domain.CorrectionLayer(model.Layer),
+		Pattern:     model.Pattern,
+		Replacement: model.Replacement,
+		Enabled:     model.Enabled,
+		CreatedAt:   model.CreatedAt,
+	}, nil
+}
+
 func (r *RuleRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.CorrectionRule, error) {
 	var models []RuleModel
 	if err := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Order("layer asc, id asc").Find(&models).Error; err != nil {
@@ -235,4 +271,37 @@ func (r *RuleRepo) Update(ctx context.Context, rule *domain.CorrectionRule) erro
 
 func (r *RuleRepo) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&RuleModel{}, id).Error
+}
+
+type SeedStateRepo struct {
+	db *gorm.DB
+}
+
+func NewSeedStateRepo(db *gorm.DB) *SeedStateRepo {
+	return &SeedStateRepo{db: db}
+}
+
+func (r *SeedStateRepo) IsSeeded(ctx context.Context, key string) (bool, error) {
+	var model AdminOperationStateModel
+	if err := r.db.WithContext(ctx).First(&model, "operation_key = ?", key).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *SeedStateRepo) MarkSeeded(ctx context.Context, key string) error {
+	model := &AdminOperationStateModel{
+		OperationKey: key,
+		Payload:      `{"seeded":true}`,
+	}
+
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "operation_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"payload", "updated_at"}),
+		}).
+		Create(model).Error
 }

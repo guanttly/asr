@@ -8,6 +8,7 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 	domain "github.com/lgt/asr/internal/domain/user"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UserModel is the persistence model for users.
@@ -22,6 +23,18 @@ type UserModel struct {
 }
 
 func (UserModel) TableName() string { return "users" }
+
+// UserWorkflowBindingsModel stores default app workflow bindings for each user.
+type UserWorkflowBindingsModel struct {
+	UserID             uint64 `gorm:"primaryKey"`
+	RealtimeWorkflowID *uint64
+	BatchWorkflowID    *uint64
+	MeetingWorkflowID  *uint64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+func (UserWorkflowBindingsModel) TableName() string { return "user_workflow_bindings" }
 
 type UserRepo struct {
 	db *gorm.DB
@@ -71,6 +84,45 @@ func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*domain.
 		return nil, err
 	}
 	return r.toDomain(&model), nil
+}
+
+func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*domain.WorkflowBindings, error) {
+	var model UserWorkflowBindingsModel
+	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &domain.WorkflowBindings{UserID: userID}, nil
+		}
+		return nil, err
+	}
+
+	return &domain.WorkflowBindings{
+		UserID:             model.UserID,
+		RealtimeWorkflowID: model.RealtimeWorkflowID,
+		BatchWorkflowID:    model.BatchWorkflowID,
+		MeetingWorkflowID:  model.MeetingWorkflowID,
+		CreatedAt:          model.CreatedAt,
+		UpdatedAt:          model.UpdatedAt,
+	}, nil
+}
+
+func (r *UserRepo) SaveWorkflowBindings(ctx context.Context, bindings *domain.WorkflowBindings) error {
+	model := &UserWorkflowBindingsModel{
+		UserID:             bindings.UserID,
+		RealtimeWorkflowID: bindings.RealtimeWorkflowID,
+		BatchWorkflowID:    bindings.BatchWorkflowID,
+		MeetingWorkflowID:  bindings.MeetingWorkflowID,
+	}
+
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"realtime_workflow_id", "batch_workflow_id", "meeting_workflow_id", "updated_at"}),
+	}).Create(model).Error; err != nil {
+		return err
+	}
+
+	bindings.CreatedAt = model.CreatedAt
+	bindings.UpdatedAt = model.UpdatedAt
+	return nil
 }
 
 func (r *UserRepo) Update(ctx context.Context, user *domain.User) error {

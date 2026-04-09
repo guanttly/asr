@@ -4,6 +4,7 @@ import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { clearDashboardRetryHistory, deleteDashboardRetryHistoryItem, getDashboardOverview, retryDashboardPostProcessTasks, syncDashboardTask } from '@/api/dashboard'
+import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 
 interface SyncAlertItem {
   task_id: number
@@ -58,6 +59,7 @@ interface DashboardOverview {
 const message = useMessage()
 const route = useRoute()
 const router = useRouter()
+const confirmDelete = useDeleteConfirmDialog()
 const loading = ref(false)
 const bulkRetrying = ref(false)
 const clearingRetryHistory = ref(false)
@@ -178,49 +180,6 @@ const hiddenRetryResultCount = computed(() => {
   return Math.max(filteredRetryResultItems.value.length - visibleRetryResultItems.value.length, 0)
 })
 
-function formatPostProcessStatus(value?: string) {
-  switch (value) {
-    case 'pending':
-      return '待回流'
-    case 'processing':
-      return '处理中'
-    case 'completed':
-      return '已完成'
-    case 'failed':
-      return '失败'
-    default:
-      return value || '-'
-  }
-}
-
-function formatAlertReason(value?: string) {
-  switch (value) {
-    case 'repeated_sync_failure':
-      return '同步重试过多'
-    case 'post_process_failed':
-      return '后处理失败'
-    default:
-      return value || '-'
-  }
-}
-
-function formatRetryOutcome(value?: string) {
-  switch (value) {
-    case 'completed':
-      return '已恢复'
-    case 'failed':
-      return '仍失败'
-    case 'updated':
-      return '已更新'
-    case 'unchanged':
-      return '无变化'
-    case 'skipped':
-      return '已跳过'
-    default:
-      return value || '-'
-  }
-}
-
 function formatDateTime(value?: string) {
   if (!value)
     return '-'
@@ -228,13 +187,6 @@ function formatDateTime(value?: string) {
   if (Number.isNaN(date.getTime()))
     return value
   return date.toLocaleString('zh-CN', { hour12: false })
-}
-
-function renderTruncatedText(value?: string, widthClass = 'max-w-64') {
-  return h('span', {
-    class: `block ${widthClass} truncate`,
-    title: value || '-',
-  }, value || '-')
 }
 
 function renderStatusTag(value?: string) {
@@ -412,6 +364,14 @@ async function handleClearRetryHistory() {
   if (clearingRetryHistory.value)
     return
 
+  const confirmed = await confirmDelete({
+    entityType: '重试历史',
+    entityName: '全部批次记录',
+    description: '清空后，看板中的重试历史批次会全部移除，当前结果筛选也会被重置。',
+  })
+  if (!confirmed)
+    return
+
   clearingRetryHistory.value = true
   try {
     await clearDashboardRetryHistory()
@@ -436,6 +396,14 @@ async function handleDeleteCurrentRetryHistory() {
 
 async function handleDeleteRetryHistoryItem(createdAt?: string) {
   if (!createdAt || deletingRetryHistoryItem.value)
+    return
+
+  const confirmed = await confirmDelete({
+    entityType: '重试记录',
+    entityName: formatDateTime(createdAt),
+    description: '删除后，这一批次的重试结果将从历史列表中移除，但不会影响已经完成的任务状态。',
+  })
+  if (!confirmed)
     return
 
   deletingRetryHistoryItem.value = true
@@ -681,7 +649,6 @@ onMounted(loadOverview)
 
 <template>
   <div class="flex-1 flex flex-col min-w-0 gap-5 min-h-0">
-
     <section class="grid min-w-0 grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-7 shrink-0">
       <NCard v-for="metric in metrics" :key="metric.label" class="card-main min-w-0">
         <div class="text-xs text-slate/70">
@@ -778,20 +745,36 @@ onMounted(loadOverview)
         <div v-if="lastRetryResult" class="mb-4 min-w-0 rounded-2.5 bg-mist/60 p-4 text-sm text-slate">
           <div class="grid gap-2 text-ink sm:grid-cols-2 xl:grid-cols-4">
             <div class="rounded-2 bg-white/70 px-3 py-2">
-              <div class="text-[11px] text-slate/70">执行时间</div>
-              <div class="mt-1 text-xs font-600">{{ formatDateTime(lastRetryResult.created_at) }}</div>
+              <div class="text-[11px] text-slate/70">
+                执行时间
+              </div>
+              <div class="mt-1 text-xs font-600">
+                {{ formatDateTime(lastRetryResult.created_at) }}
+              </div>
             </div>
             <div class="rounded-2 bg-white/70 px-3 py-2">
-              <div class="text-[11px] text-slate/70">扫描 / 上限</div>
-              <div class="mt-1 text-xs font-600">{{ lastRetryResult.scanned }} / {{ lastRetryResult.limit || 0 }}</div>
+              <div class="text-[11px] text-slate/70">
+                扫描 / 上限
+              </div>
+              <div class="mt-1 text-xs font-600">
+                {{ lastRetryResult.scanned }} / {{ lastRetryResult.limit || 0 }}
+              </div>
             </div>
             <div class="rounded-2 bg-white/70 px-3 py-2">
-              <div class="text-[11px] text-slate/70">恢复 / 失败</div>
-              <div class="mt-1 text-xs font-600">{{ lastRetryResult.updated }} / {{ lastRetryResult.failed }}</div>
+              <div class="text-[11px] text-slate/70">
+                恢复 / 失败
+              </div>
+              <div class="mt-1 text-xs font-600">
+                {{ lastRetryResult.updated }} / {{ lastRetryResult.failed }}
+              </div>
             </div>
             <div class="rounded-2 bg-white/70 px-3 py-2">
-              <div class="text-[11px] text-slate/70">当前结果 / 历史批次</div>
-              <div class="mt-1 text-xs font-600">{{ filteredRetryResultItems.length }} / {{ filteredRetryHistory.length }}</div>
+              <div class="text-[11px] text-slate/70">
+                当前结果 / 历史批次
+              </div>
+              <div class="mt-1 text-xs font-600">
+                {{ filteredRetryResultItems.length }} / {{ filteredRetryHistory.length }}
+              </div>
             </div>
           </div>
           <div class="mt-3 flex flex-wrap items-center gap-3">

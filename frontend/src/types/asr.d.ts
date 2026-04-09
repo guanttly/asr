@@ -1,7 +1,5 @@
-export type StreamingMessage = {
-  type: string
+export interface RealtimeSegmentResponse {
+  status: string
   text: string
-  is_final: boolean
-  sequence: number
-  received_bytes?: number
+  duration: number
 }

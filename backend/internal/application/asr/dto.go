@@ -15,8 +15,22 @@ type CreateTaskRequest struct {
 	LocalFilePath string          `json:"-"`
 	Type          domain.TaskType `json:"type" binding:"required,oneof=realtime batch"`
 	DictID        *uint64         `json:"dict_id"`
+	WorkflowID    *uint64         `json:"workflow_id"`
 	ResultText    string          `json:"result_text"`
 	Duration      float64         `json:"duration"`
+}
+
+// TranscribeSnippetRequest is the DTO for one-shot short-segment recognition.
+type TranscribeSnippetRequest struct {
+	LocalFilePath string  `json:"-"`
+	DictID        *uint64 `json:"dict_id"`
+}
+
+// TranscribeSnippetResponse is the DTO returned by the short-segment endpoint.
+type TranscribeSnippetResponse struct {
+	Status   string  `json:"status"`
+	Text     string  `json:"text"`
+	Duration float64 `json:"duration"`
 }
 
 // TaskResponse is the DTO returned to clients.
@@ -41,7 +55,9 @@ type TaskResponse struct {
 	NextSyncAt        *time.Time               `json:"next_sync_at,omitempty"`
 	ResultText        string                   `json:"result_text,omitempty"`
 	Duration          float64                  `json:"duration"`
+	WorkflowID        *uint64                  `json:"workflow_id,omitempty"`
 	CreatedAt         time.Time                `json:"created_at"`
+	UpdatedAt         time.Time                `json:"updated_at"`
 }
 
 // TaskListResponse wraps a paginated list of tasks.
@@ -150,7 +166,9 @@ func ToResponse(t *domain.TranscriptionTask) *TaskResponse {
 		NextSyncAt:        t.NextSyncAt,
 		ResultText:        resultText,
 		Duration:          t.Duration,
+		WorkflowID:        t.WorkflowID,
 		CreatedAt:         t.CreatedAt,
+		UpdatedAt:         t.UpdatedAt,
 	}
 }
 

@@ -38,3 +38,5 @@ backend/configs/config.yaml
 
 # Runtime data
 backend/uploads/
+
+speaker-diarization-offline.tar.gz

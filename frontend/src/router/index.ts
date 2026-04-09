@@ -25,6 +25,12 @@ const routes: RouteRecordRaw[] = [
     redirect: '/dashboard',
     children: [
       {
+        path: 'realtime',
+        name: 'realtime',
+        meta: { title: '实时语音识别', desc: '采集麦克风音频，并按应用配置中的默认工作流完成保存后的后处理。' },
+        component: () => import('@/pages/realtime/index.vue'),
+      },
+      {
         path: 'dashboard',
         name: 'dashboard',
         meta: { title: '数据看板', desc: '统一查看批量转写、回流和后处理链路的整体健康度。' },
@@ -33,31 +39,51 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'transcription',
         name: 'transcription',
-        meta: { title: '实时转写工作台', desc: '使用 WebSocket 推送 300ms chunk，并在前端按句子聚合展示。' },
-        component: () => import('@/pages/transcription/index.vue'),
+        meta: { pageManagedScroll: true, title: '批量转写', desc: '上传本地音频或提交 URL，并按应用配置中的默认工作流执行后处理。' },
+        component: () => import('@/pages/transcription/history.vue'),
       },
       {
         path: 'transcription/history',
-        name: 'transcription-history',
-        meta: { pageManagedScroll: true, title: '转写历史', desc: '查看实时转写与批量转写任务状态，便于联调 ASR 流程。' },
-        component: () => import('@/pages/transcription/history.vue'),
+        redirect: '/transcription',
+      },
+      {
+        path: 'applications/settings',
+        redirect: '/workflows/application-settings',
+      },
+      {
+        path: 'workflows/application-settings',
+        name: 'application-settings',
+        meta: { pageManagedScroll: true, title: '应用配置', desc: '在工作流目录下统一配置实时、批量和会议纪要应用默认绑定的工作流。' },
+        component: () => import('@/pages/application/settings.vue'),
+      },
+      {
+        path: 'workflows',
+        name: 'workflows',
+        meta: { pageManagedScroll: true, title: '工作流管理', desc: '管理系统模板与个人工作流，编排纠错、过滤、纪要等节点。' },
+        component: () => import('@/pages/workflow/index.vue'),
+      },
+      {
+        path: 'workflows/:id',
+        name: 'workflow-editor',
+        meta: { pageManagedScroll: true, title: '工作流编辑器', desc: '调整节点顺序、配置参数，并对单节点或整条工作流做验证。' },
+        component: () => import('@/pages/workflow/editor.vue'),
       },
       {
         path: 'meetings',
         name: 'meetings',
-        meta: { title: '会议管理', desc: '上传会议录音、查看说话人标注与结构化纪要。' },
+        meta: { title: '会议纪要', desc: '上传会议录音、查看说话人标注，并按应用配置生成结构化纪要。' },
         component: () => import('@/pages/meeting/index.vue'),
       },
       {
         path: 'meetings/upload',
         name: 'meeting-upload',
-        meta: { title: '新建会议', desc: '当前阶段先使用音频 URL 创建会议任务，后续再接入真实文件上传与对象存储。' },
+        meta: { title: '新建会议', desc: '创建会议任务，摘要生成工作流由应用配置页统一维护。' },
         component: () => import('@/pages/meeting/upload.vue'),
       },
       {
         path: 'meetings/:id',
         name: 'meeting-detail',
-        meta: { title: '会议详情', desc: '查看逐字稿、说话人片段与会议摘要。' },
+        meta: { title: '会议详情', desc: '查看逐字稿、说话人片段与会议摘要，并按应用配置重新生成。' },
         component: () => import('@/pages/meeting/detail.vue'),
       },
       {

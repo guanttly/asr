@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 
 import { getCurrentUser } from '@/api/user'
 
-type UserProfile = {
+interface UserProfile {
   id: number
   username: string
   displayName: string

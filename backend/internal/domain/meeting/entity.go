@@ -14,17 +14,24 @@ const (
 
 // Meeting is the aggregate root for meeting recordings.
 type Meeting struct {
-	ID           uint64        `json:"id"`
-	SourceTaskID *uint64       `json:"source_task_id,omitempty"`
-	UserID       uint64        `json:"user_id"`
-	Title        string        `json:"title"`
-	AudioURL     string        `json:"audio_url"`
-	Duration     float64       `json:"duration"` // seconds
-	Status       MeetingStatus `json:"status"`
-	Transcripts  []Transcript  `json:"transcripts,omitempty"`
-	Summary      *Summary      `json:"summary,omitempty"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ID             uint64        `json:"id"`
+	SourceTaskID   *uint64       `json:"source_task_id,omitempty"`
+	WorkflowID     *uint64       `json:"workflow_id,omitempty"`
+	UserID         uint64        `json:"user_id"`
+	Title          string        `json:"title"`
+	AudioURL       string        `json:"audio_url"`
+	ExternalTaskID string        `json:"external_task_id,omitempty"`
+	LocalFilePath  string        `json:"local_file_path,omitempty"`
+	Duration       float64       `json:"duration"` // seconds
+	Status         MeetingStatus `json:"status"`
+	SyncFailCount  int           `json:"sync_fail_count"`
+	LastSyncError  string        `json:"last_sync_error,omitempty"`
+	LastSyncAt     *time.Time    `json:"last_sync_at,omitempty"`
+	NextSyncAt     *time.Time    `json:"next_sync_at,omitempty"`
+	Transcripts    []Transcript  `json:"transcripts,omitempty"`
+	Summary        *Summary      `json:"summary,omitempty"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
 }
 
 // Transcript represents a speaker-attributed segment of the meeting.

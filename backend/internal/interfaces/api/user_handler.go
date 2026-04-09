@@ -36,6 +36,8 @@ func (h *UserHandler) RegisterProtected(group *gin.RouterGroup) {
 	group.GET("/users", h.ListUsers)
 	group.GET("/users/:id", h.GetUser)
 	group.GET("/me", h.GetCurrentUser)
+	group.GET("/me/workflow-bindings", h.GetCurrentUserWorkflowBindings)
+	group.PUT("/me/workflow-bindings", h.UpdateCurrentUserWorkflowBindings)
 }
 
 func (h *UserHandler) Login(c *gin.Context) {
@@ -119,6 +121,34 @@ func (h *UserHandler) GetCurrentUser(c *gin.Context) {
 	result, err := h.service.GetUser(c.Request.Context(), userID)
 	if err != nil {
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *UserHandler) GetCurrentUserWorkflowBindings(c *gin.Context) {
+	userID := middleware.UserIDFromContext(c)
+	result, err := h.service.GetWorkflowBindings(c.Request.Context(), userID)
+	if err != nil {
+		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *UserHandler) UpdateCurrentUserWorkflowBindings(c *gin.Context) {
+	userID := middleware.UserIDFromContext(c)
+	var req appuser.UpdateWorkflowBindingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	result, err := h.service.UpdateWorkflowBindings(c.Request.Context(), userID, &req)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
 

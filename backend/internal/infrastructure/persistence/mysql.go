@@ -66,6 +66,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&EntryModel{},
 		&RuleModel{},
 		&UserModel{},
+		&UserWorkflowBindingsModel{},
+		&WorkflowModel{},
+		&WorkflowNodeModel{},
+		&WorkflowExecutionModel{},
+		&WorkflowNodeResultModel{},
 	)
 }
 

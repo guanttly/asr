@@ -2,8 +2,10 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -30,6 +32,7 @@ type EventPublisher interface {
 // CompletedTaskProcessor materializes completed batch tasks into downstream resources.
 type CompletedTaskProcessor interface {
 	ProcessCompletedTask(ctx context.Context, task *domain.TranscriptionTask) error
+	ResumeCompletedTaskFromFailure(ctx context.Context, task *domain.TranscriptionTask) error
 }
 
 // BatchEngine describes the upstream batch ASR submission contract.
@@ -88,11 +91,17 @@ const (
 	baseSyncBackoff    = 30 * time.Second
 	maxSyncBackoff     = 10 * time.Minute
 	batchSubmitTimeout = 30 * time.Minute
+	snippetPollTimeout = 2 * time.Minute
+	snippetPollEvery   = 1200 * time.Millisecond
 )
 
 var transcriptionMarkupPattern = regexp.MustCompile(`(?i)language\s+[a-z_-]+<asr_text>|</?asr_text>`)
 var transcriptionTokenPattern = regexp.MustCompile(`<\|[^>]+\|>`)
 var transcriptionWhitespacePattern = regexp.MustCompile(`[\t\f\r ]+`)
+
+var ErrTaskNotFound = errors.New("task not found")
+var ErrTaskDeleteNotAllowed = errors.New("only completed or failed tasks can be deleted")
+var ErrTaskResumeNotAllowed = errors.New("only completed batch tasks with failed workflow post-process can continue from the failed node")
 
 // NewService creates a new ASR application service.
 func NewService(taskRepo domain.TaskRepository, batchSubmitter BatchEngine, postProcessor CompletedTaskProcessor, retryHistoryLimit int, eventPublisher EventPublisher) *Service {
@@ -124,11 +133,12 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 		ResultText:        resultText,
 		Duration:          req.Duration,
 		DictID:            req.DictID,
+		WorkflowID:        req.WorkflowID,
 	}
 
 	if req.Type == domain.TaskTypeRealtime {
 		task.Status = domain.TaskStatusCompleted
-		task.PostProcessStatus = domain.PostProcessCompleted
+		task.PostProcessStatus = domain.PostProcessPending
 	}
 
 	if err := s.taskRepo.Create(ctx, task); err != nil {
@@ -137,7 +147,21 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 	s.publishTaskUpdated(task)
 
 	if req.Type == domain.TaskTypeRealtime {
-		task.PostProcessedAt = &task.CreatedAt
+		now := task.CreatedAt
+		task.PostProcessedAt = &now
+
+		if s.postProcessor != nil {
+			task.PostProcessStatus = domain.PostProcessProcessing
+			if err := s.postProcessor.ProcessCompletedTask(ctx, task); err != nil {
+				task.PostProcessStatus = domain.PostProcessFailed
+				task.PostProcessError = err.Error()
+			} else {
+				task.PostProcessStatus = domain.PostProcessCompleted
+			}
+		} else {
+			task.PostProcessStatus = domain.PostProcessCompleted
+		}
+
 		if err := s.taskRepo.Update(ctx, task); err != nil {
 			return nil, err
 		}
@@ -160,6 +184,26 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 	return ToResponse(task), nil
 }
 
+// TranscribeSnippet submits a short local audio file and waits for the final text.
+func (s *Service) TranscribeSnippet(ctx context.Context, req *TranscribeSnippetRequest) (*TranscribeSnippetResponse, error) {
+	if req == nil || strings.TrimSpace(req.LocalFilePath) == "" {
+		return nil, fmt.Errorf("local audio file is required")
+	}
+	if s.batchSubmitter == nil {
+		return nil, fmt.Errorf("asr batch engine is not configured")
+	}
+
+	result, err := s.batchSubmitter.SubmitBatch(ctx, BatchSubmitRequest{
+		LocalFilePath: strings.TrimSpace(req.LocalFilePath),
+		DictID:        req.DictID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return s.awaitSnippetResult(ctx, result)
+}
+
 // GetTask retrieves a task by ID.
 func (s *Service) GetTask(ctx context.Context, userID, id uint64) (*TaskResponse, error) {
 	task, err := s.getOwnedTask(ctx, userID, id)
@@ -168,6 +212,27 @@ func (s *Service) GetTask(ctx context.Context, userID, id uint64) (*TaskResponse
 	}
 
 	return ToResponse(task), nil
+}
+
+// DeleteTask removes a finished transcription task from the user's history.
+func (s *Service) DeleteTask(ctx context.Context, userID, id uint64) error {
+	task, err := s.getOwnedTask(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if !canDeleteTask(task) {
+		return ErrTaskDeleteNotAllowed
+	}
+	if err := s.taskRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+	if localFilePath := strings.TrimSpace(task.LocalFilePath); localFilePath != "" {
+		removeErr := os.Remove(localFilePath)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			// Ignore best-effort cleanup failures after the database record is gone.
+		}
+	}
+	return nil
 }
 
 // AdminSyncTask refreshes a batch task status without user ownership filtering.
@@ -202,6 +267,49 @@ func (s *Service) SyncTask(ctx context.Context, userID, id uint64) (*TaskRespons
 	if _, err := s.syncTaskState(ctx, task); err != nil {
 		return nil, err
 	}
+
+	return ToResponse(task), nil
+}
+
+// ResumeTaskPostProcessFromFailure continues a failed batch workflow from the failed node.
+func (s *Service) ResumeTaskPostProcessFromFailure(ctx context.Context, userID, id uint64) (*TaskResponse, error) {
+	task, err := s.getOwnedTask(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if task.Type != domain.TaskTypeBatch || task.Status != domain.TaskStatusCompleted || task.WorkflowID == nil || task.PostProcessStatus != domain.PostProcessFailed {
+		return nil, ErrTaskResumeNotAllowed
+	}
+	if task.MeetingID != nil {
+		return nil, ErrTaskResumeNotAllowed
+	}
+	if s.postProcessor == nil {
+		return nil, fmt.Errorf("workflow post processor is not configured")
+	}
+
+	now := time.Now()
+	task.PostProcessStatus = domain.PostProcessProcessing
+	task.PostProcessError = ""
+
+	resumeErr := s.postProcessor.ResumeCompletedTaskFromFailure(ctx, task)
+	if resumeErr != nil {
+		task.PostProcessStatus = domain.PostProcessFailed
+		task.PostProcessError = resumeErr.Error()
+		task.PostProcessedAt = nil
+		s.recordSyncFailure(task, now, resumeErr)
+		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
+			return nil, updateErr
+		}
+		s.publishTaskUpdated(task)
+		return ToResponse(task), nil
+	}
+
+	_ = s.recordSyncSuccess(task, now)
+	s.markPostProcessCompleted(task, now)
+	if err := s.taskRepo.Update(ctx, task); err != nil {
+		return nil, err
+	}
+	s.publishTaskUpdated(task)
 
 	return ToResponse(task), nil
 }
@@ -518,12 +626,28 @@ func toRetryPostProcessRecord(result *RetryPostProcessResponse) *domain.RetryPos
 func (s *Service) getOwnedTask(ctx context.Context, userID, id uint64) (*domain.TranscriptionTask, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, ErrTaskNotFound
 	}
 	if task.UserID != userID {
-		return nil, fmt.Errorf("task not found")
+		return nil, ErrTaskNotFound
 	}
 	return task, nil
+}
+
+func canDeleteTask(task *domain.TranscriptionTask) bool {
+	if task == nil {
+		return false
+	}
+	if task.Status == domain.TaskStatusFailed {
+		return true
+	}
+	if task.Status != domain.TaskStatusCompleted {
+		return false
+	}
+	if task.Type != domain.TaskTypeBatch {
+		return true
+	}
+	return task.PostProcessStatus == domain.PostProcessCompleted || task.PostProcessStatus == domain.PostProcessFailed
 }
 
 func (s *Service) syncTaskState(ctx context.Context, task *domain.TranscriptionTask) (bool, error) {
@@ -892,6 +1016,64 @@ func (s *Service) dispatchBatchTask(taskID uint64) {
 
 		_, _ = s.syncTaskState(ctx, task)
 	}()
+}
+
+func (s *Service) awaitSnippetResult(ctx context.Context, result *BatchSubmitResult) (*TranscribeSnippetResponse, error) {
+	if result == nil {
+		return nil, fmt.Errorf("empty asr response")
+	}
+
+	status := normalizeTaskStatus(result.Status)
+	text := sanitizeTranscriptionText(result.ResultText)
+	if status == domain.TaskStatusFailed {
+		return nil, fmt.Errorf("snippet transcription failed")
+	}
+	if text != "" || strings.TrimSpace(result.TaskID) == "" {
+		if status == "" {
+			status = domain.TaskStatusCompleted
+		}
+		return &TranscribeSnippetResponse{
+			Status:   string(status),
+			Text:     text,
+			Duration: result.Duration,
+		}, nil
+	}
+
+	pollCtx, cancel := context.WithTimeout(ctx, snippetPollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(snippetPollEvery)
+	defer ticker.Stop()
+
+	taskID := strings.TrimSpace(result.TaskID)
+	for {
+		statusResult, err := s.batchSubmitter.QueryBatchTask(pollCtx, taskID)
+		if err != nil {
+			return nil, err
+		}
+
+		status = normalizeTaskStatus(statusResult.Status)
+		text = sanitizeTranscriptionText(statusResult.ResultText)
+		if status == domain.TaskStatusFailed {
+			return nil, fmt.Errorf("snippet transcription failed")
+		}
+		if text != "" || status == domain.TaskStatusCompleted {
+			if status == "" {
+				status = domain.TaskStatusCompleted
+			}
+			return &TranscribeSnippetResponse{
+				Status:   string(status),
+				Text:     text,
+				Duration: statusResult.Duration,
+			}, nil
+		}
+
+		select {
+		case <-pollCtx.Done():
+			return nil, fmt.Errorf("snippet transcription timed out")
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Service) beginTaskRun(taskID uint64) bool {

@@ -1,0 +1,66 @@
+# ========================================
+# 说话人分离服务 - Docker Compose 配置
+# ========================================
+#
+# 构建：docker compose build
+# 启动：docker compose up -d
+# 查看日志：docker compose logs -f
+# 停止：docker compose down
+
+services:
+  speaker-diarization:
+    image: "${SD_IMAGE:-speaker-diarization:1.0.0}"
+    pull_policy: never
+    container_name: speaker-diarization
+    restart: unless-stopped
+
+    ports:
+      - "${SD_PORT:-8080}:8080"
+
+    environment:
+      # 设备：cpu 或 cuda:0（需要 GPU 版本镜像和 nvidia-docker）
+      - DEVICE=${DEVICE:-cpu}
+      # 并发 worker 数（CPU 部署建议 1-2，模型会占内存）
+      - WORKERS=${WORKERS:-1}
+      # 最大上传大小（MB）
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-500}
+      # 离线模式
+      - MODELSCOPE_DOMAIN=
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+
+    volumes:
+      # 持久化日志（可选）
+      - ./logs:/app/logs
+      # 如果需要从外部挂载模型（替代镜像内置模型）
+      # - ./models:/app/models
+
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+    # GPU 支持（取消注释以启用）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"

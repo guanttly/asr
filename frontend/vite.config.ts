@@ -1,7 +1,8 @@
-import basicSsl from '@vitejs/plugin-basic-ssl'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
@@ -22,8 +23,8 @@ export default defineConfig(({ mode }) => {
         key: readFileSync(keyPath),
       }
     : useHttps
-        ? {}
-        : undefined
+      ? {}
+      : undefined
 
   const forwardedHeaders = useHttps
     ? {

@@ -10,15 +10,22 @@ import (
 
 // MeetingModel is the persistence model for meetings.
 type MeetingModel struct {
-	ID           uint64  `gorm:"primaryKey;autoIncrement"`
-	SourceTaskID *uint64 `gorm:"uniqueIndex"`
-	UserID       uint64  `gorm:"index;not null"`
-	Title        string  `gorm:"type:varchar(255);not null"`
-	AudioURL     string  `gorm:"type:varchar(512);not null"`
-	Duration     float64
-	Status       string `gorm:"type:varchar(20);not null;default:'uploaded'"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             uint64  `gorm:"primaryKey;autoIncrement"`
+	SourceTaskID   *uint64 `gorm:"uniqueIndex"`
+	WorkflowID     *uint64 `gorm:"index"`
+	UserID         uint64  `gorm:"index;not null"`
+	Title          string  `gorm:"type:varchar(255);not null"`
+	AudioURL       string  `gorm:"type:varchar(512);not null"`
+	ExternalTaskID string  `gorm:"type:varchar(128);index"`
+	LocalFilePath  string  `gorm:"type:varchar(1024)"`
+	Duration       float64
+	Status         string `gorm:"type:varchar(20);not null;default:'uploaded'"`
+	SyncFailCount  int    `gorm:"not null;default:0"`
+	LastSyncError  string `gorm:"type:text"`
+	LastSyncAt     *time.Time
+	NextSyncAt     *time.Time `gorm:"index"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (MeetingModel) TableName() string { return "meetings" }
@@ -59,12 +66,19 @@ func NewMeetingRepo(db *gorm.DB) *MeetingRepo {
 
 func (r *MeetingRepo) Create(ctx context.Context, meeting *domain.Meeting) error {
 	model := &MeetingModel{
-		SourceTaskID: meeting.SourceTaskID,
-		UserID:       meeting.UserID,
-		Title:        meeting.Title,
-		AudioURL:     meeting.AudioURL,
-		Duration:     meeting.Duration,
-		Status:       string(meeting.Status),
+		SourceTaskID:   meeting.SourceTaskID,
+		WorkflowID:     meeting.WorkflowID,
+		UserID:         meeting.UserID,
+		Title:          meeting.Title,
+		AudioURL:       meeting.AudioURL,
+		ExternalTaskID: meeting.ExternalTaskID,
+		LocalFilePath:  meeting.LocalFilePath,
+		Duration:       meeting.Duration,
+		Status:         string(meeting.Status),
+		SyncFailCount:  meeting.SyncFailCount,
+		LastSyncError:  meeting.LastSyncError,
+		LastSyncAt:     meeting.LastSyncAt,
+		NextSyncAt:     meeting.NextSyncAt,
 	}
 	if err := r.db.WithContext(ctx).Create(model).Error; err != nil {
 		return err
@@ -97,11 +111,18 @@ func (r *MeetingRepo) GetByID(ctx context.Context, id uint64) (*domain.Meeting, 
 
 func (r *MeetingRepo) Update(ctx context.Context, meeting *domain.Meeting) error {
 	return r.db.WithContext(ctx).Model(&MeetingModel{}).Where("id = ?", meeting.ID).Updates(map[string]any{
-		"source_task_id": meeting.SourceTaskID,
-		"title":          meeting.Title,
-		"status":         string(meeting.Status),
-		"duration":       meeting.Duration,
-		"updated_at":     time.Now(),
+		"source_task_id":   meeting.SourceTaskID,
+		"workflow_id":      meeting.WorkflowID,
+		"title":            meeting.Title,
+		"external_task_id": meeting.ExternalTaskID,
+		"local_file_path":  meeting.LocalFilePath,
+		"status":           string(meeting.Status),
+		"duration":         meeting.Duration,
+		"sync_fail_count":  meeting.SyncFailCount,
+		"last_sync_error":  meeting.LastSyncError,
+		"last_sync_at":     meeting.LastSyncAt,
+		"next_sync_at":     meeting.NextSyncAt,
+		"updated_at":       time.Now(),
 	}).Error
 }
 
@@ -122,21 +143,51 @@ func (r *MeetingRepo) List(ctx context.Context, userID uint64, offset, limit int
 	return items, total, nil
 }
 
+func (r *MeetingRepo) ListSyncCandidates(ctx context.Context, limit int) ([]*domain.Meeting, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var models []MeetingModel
+	err := r.db.WithContext(ctx).
+		Where("status IN ?", []string{string(domain.MeetingStatusUploaded), string(domain.MeetingStatusProcessing)}).
+		Where("next_sync_at IS NULL OR next_sync_at <= ?", time.Now()).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*domain.Meeting, len(models))
+	for i := range models {
+		items[i] = r.toDomain(&models[i])
+	}
+	return items, nil
+}
+
 func (r *MeetingRepo) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&MeetingModel{}, id).Error
 }
 
 func (r *MeetingRepo) toDomain(model *MeetingModel) *domain.Meeting {
 	return &domain.Meeting{
-		ID:           model.ID,
-		SourceTaskID: model.SourceTaskID,
-		UserID:       model.UserID,
-		Title:        model.Title,
-		AudioURL:     model.AudioURL,
-		Duration:     model.Duration,
-		Status:       domain.MeetingStatus(model.Status),
-		CreatedAt:    model.CreatedAt,
-		UpdatedAt:    model.UpdatedAt,
+		ID:             model.ID,
+		SourceTaskID:   model.SourceTaskID,
+		WorkflowID:     model.WorkflowID,
+		UserID:         model.UserID,
+		Title:          model.Title,
+		AudioURL:       model.AudioURL,
+		ExternalTaskID: model.ExternalTaskID,
+		LocalFilePath:  model.LocalFilePath,
+		Duration:       model.Duration,
+		Status:         domain.MeetingStatus(model.Status),
+		SyncFailCount:  model.SyncFailCount,
+		LastSyncError:  model.LastSyncError,
+		LastSyncAt:     model.LastSyncAt,
+		NextSyncAt:     model.NextSyncAt,
+		CreatedAt:      model.CreatedAt,
+		UpdatedAt:      model.UpdatedAt,
 	}
 }
 
@@ -181,6 +232,10 @@ func (r *TranscriptRepo) ListByMeeting(ctx context.Context, meetingID uint64) ([
 	return items, nil
 }
 
+func (r *TranscriptRepo) DeleteByMeeting(ctx context.Context, meetingID uint64) error {
+	return r.db.WithContext(ctx).Delete(&TranscriptModel{}, "meeting_id = ?", meetingID).Error
+}
+
 type SummaryRepo struct {
 	db *gorm.DB
 }
@@ -215,6 +270,10 @@ func (r *SummaryRepo) GetByMeeting(ctx context.Context, meetingID uint64) (*doma
 		ModelVersion: model.ModelVersion,
 		CreatedAt:    model.CreatedAt,
 	}, nil
+}
+
+func (r *SummaryRepo) DeleteByMeeting(ctx context.Context, meetingID uint64) error {
+	return r.db.WithContext(ctx).Delete(&SummaryModel{}, "meeting_id = ?", meetingID).Error
 }
 
 func (r *SummaryRepo) Update(ctx context.Context, summary *domain.Summary) error {

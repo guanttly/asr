@@ -19,7 +19,7 @@ services:
 
     environment:
       # 设备：cpu 或 cuda:0（需要 GPU 版本镜像和 nvidia-docker）
-      - DEVICE=${DEVICE:-cpu}
+      - DEVICE=${DEVICE:-cuda:0}
       # 并发 worker 数（CPU 部署建议 1-2，模型会占内存）
       - WORKERS=${WORKERS:-1}
       # 最大上传大小（MB）
@@ -35,22 +35,17 @@ services:
       # 如果需要从外部挂载模型（替代镜像内置模型）
       # - ./models:/app/models
 
-    # 资源限制
+    # 资源限制与 GPU 透传
     deploy:
       resources:
         limits:
           memory: 4G
         reservations:
           memory: 2G
-
-    # GPU 支持（取消注释以启用）
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

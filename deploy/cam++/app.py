@@ -60,6 +60,25 @@ MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR", "/app/models")
 # 支持的音频格式
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wma"}
 
+
+def resolve_model_reference(model_ref: str) -> str:
+    """优先使用镜像内已打包的本地模型目录，避免运行时再次访问远端仓库。"""
+    if not model_ref:
+        return model_ref
+
+    direct_path = Path(model_ref)
+    if direct_path.exists():
+        return str(direct_path)
+
+    candidates = [
+        Path(MODEL_CACHE_DIR) / "models" / model_ref,
+        Path(MODEL_CACHE_DIR) / model_ref,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return model_ref
+
 # ──────────────────────────────────────────────
 # 全局模型实例
 # ──────────────────────────────────────────────
@@ -259,10 +278,17 @@ def load_models():
     os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
     os.environ["MODELSCOPE_CACHE"] = MODEL_CACHE_DIR
 
+    diarization_model_ref = resolve_model_reference(DIARIZATION_MODEL)
+    sv_model_ref = resolve_model_reference(SV_MODEL)
+    if diarization_model_ref != DIARIZATION_MODEL:
+        logger.info(f"说话人分离模型使用本地缓存: {diarization_model_ref}")
+    if sv_model_ref != SV_MODEL:
+        logger.info(f"声纹提取模型使用本地缓存: {sv_model_ref}")
+
     # 加载说话人分离 pipeline
     diarization_pipeline = ms_pipeline(
         task="speaker-diarization",
-        model=DIARIZATION_MODEL,
+        model=diarization_model_ref,
         device=DEVICE,
     )
     logger.info("说话人分离模型加载完成")
@@ -271,7 +297,7 @@ def load_models():
     try:
         sv_pipeline = ms_pipeline(
             task="speaker-verification",
-            model=SV_MODEL,
+            model=sv_model_ref,
             device=DEVICE,
         )
         logger.info("声纹提取模型加载完成")

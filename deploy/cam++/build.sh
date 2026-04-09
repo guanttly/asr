@@ -34,6 +34,18 @@ info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+compose_version() {
+    if docker compose version >/dev/null 2>&1; then
+        echo "docker compose"
+        return
+    fi
+    if command -v docker-compose >/dev/null 2>&1; then
+        echo "docker-compose"
+        return
+    fi
+    echo ""
+}
+
 compose() {
     if docker compose version >/dev/null 2>&1; then
         docker compose "$@"
@@ -45,6 +57,53 @@ compose() {
     fi
     error "未检测到 Docker Compose，请安装 docker compose 插件或 docker-compose"
     exit 1
+}
+
+detect_device() {
+    if [ -n "${DEVICE}" ]; then
+        echo "${DEVICE}"
+        return
+    fi
+    echo "cuda:0"
+}
+
+check_gpu_readiness() {
+    DEVICE_VALUE="$(detect_device)"
+    COMPOSE_IMPL="$(compose_version)"
+
+    if [[ "${DEVICE_VALUE}" != cuda* ]]; then
+        info "当前 DEVICE=${DEVICE_VALUE}，按 CPU 模式启动"
+        return
+    fi
+
+    info "当前 DEVICE=${DEVICE_VALUE}，准备按 GPU 模式启动"
+
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        warn "宿主机未检测到 nvidia-smi，容器大概率无法使用 GPU"
+    else
+        GPU_SUMMARY="$(nvidia-smi -L 2>/dev/null | head -3 || true)"
+        if [ -n "${GPU_SUMMARY}" ]; then
+            info "宿主机 GPU:"
+            echo "${GPU_SUMMARY}"
+        else
+            warn "nvidia-smi 可执行，但未读取到 GPU 列表"
+        fi
+    fi
+
+    if ! docker info >/tmp/campp-docker-info.$$ 2>/dev/null; then
+        warn "无法读取 docker info，跳过 Docker GPU 支持检查"
+    else
+        if ! grep -qi 'nvidia' /tmp/campp-docker-info.$$; then
+            warn "docker info 中未发现 nvidia 相关 runtime / CDI 信息，请确认已安装 nvidia-container-toolkit"
+        fi
+        rm -f /tmp/campp-docker-info.$$
+    fi
+
+    if [ "${COMPOSE_IMPL}" = "docker-compose" ]; then
+        warn "当前使用 legacy docker-compose，部分 deploy.gpu 配置可能不会完整生效；目标环境建议使用新的 docker compose"
+    else
+        info "当前使用 ${COMPOSE_IMPL}"
+    fi
 }
 
 case "${1}" in
@@ -90,6 +149,7 @@ start)
         error "请先执行 ./build.sh import，或在联网环境执行 ./build.sh build"
         exit 1
     fi
+    check_gpu_readiness
     SD_IMAGE="${FULL_IMAGE}" compose up -d --no-build
     info "服务启动中，首次启动需加载模型，约 60-120 秒..."
     info "可通过以下命令查看日志: ./build.sh logs"

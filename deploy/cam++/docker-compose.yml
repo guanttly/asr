@@ -18,8 +18,13 @@ services:
       - "${SD_PORT:-10003}:8080"
 
     environment:
-      # 设备：cpu 或 cuda:0（需要 GPU 版本镜像和 nvidia-docker）
+      # 宿主机可见 GPU；如指定 NVIDIA_VISIBLE_DEVICES=2，则容器内通常应使用 cuda:0
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      # 容器内设备编号：cpu 或 cuda:0；不要直接把宿主机编号写进来
       - DEVICE=${DEVICE:-cuda:0}
+      # 如需分别指定，可单独设置；留空则回退到 DEVICE
+      - DIARIZATION_DEVICE=${DIARIZATION_DEVICE:-}
+      - SV_DEVICE=${SV_DEVICE:-}
       # 并发 worker 数（CPU 部署建议 1-2，模型会占内存）
       - WORKERS=${WORKERS:-1}
       # 最大上传大小（MB）

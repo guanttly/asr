@@ -15,6 +15,7 @@ import uuid
 import logging
 import tempfile
 import shutil
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +37,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("speaker-diarization")
 
+
+def getenv_nonempty(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value if value else default
+
 # ──────────────────────────────────────────────
 # 配置项（可通过环境变量覆盖）
 # ──────────────────────────────────────────────
@@ -50,7 +59,9 @@ SV_MODEL = os.getenv(
     "damo/speech_campplus_sv_zh-cn_16k-common",
 )
 # 设备：cpu 或 cuda:0 等
-DEVICE = os.getenv("DEVICE", "cpu")
+DEVICE = getenv_nonempty("DEVICE", "cpu")
+DIARIZATION_DEVICE = getenv_nonempty("DIARIZATION_DEVICE", DEVICE)
+SV_DEVICE = getenv_nonempty("SV_DEVICE", DEVICE)
 # 最大上传文件大小（MB）
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "500"))
 # 临时文件目录
@@ -79,11 +90,74 @@ def resolve_model_reference(model_ref: str) -> str:
             return str(candidate)
     return model_ref
 
+
+def resolve_runtime_device(requested_device: str, pipeline_name: str) -> str:
+    """校验请求的 CUDA 设备号；无效时回退到可用设备。"""
+    device = (requested_device or "cpu").strip()
+    if not device.startswith("cuda"):
+        return device
+
+    try:
+        import torch
+    except Exception as exc:
+        logger.warning(f"{pipeline_name} 无法导入 torch 校验设备，回退到 CPU: {exc}")
+        return "cpu"
+
+    if not torch.cuda.is_available():
+        logger.warning(f"{pipeline_name} 请求使用 {device}，但容器内未检测到可用 CUDA，回退到 CPU")
+        return "cpu"
+
+    visible_count = torch.cuda.device_count()
+    if visible_count <= 0:
+        logger.warning(f"{pipeline_name} 请求使用 {device}，但容器内可见 GPU 数量为 0，回退到 CPU")
+        return "cpu"
+
+    matched = re.match(r"^cuda(?::(\d+))?$", device)
+    ordinal = int(matched.group(1)) if matched and matched.group(1) is not None else 0
+    if ordinal >= visible_count:
+        fallback = "cuda:0"
+        logger.warning(
+            f"{pipeline_name} 请求使用 {device}，但容器内仅检测到 {visible_count} 张 GPU，"
+            f"回退到 {fallback}"
+        )
+        return fallback
+
+    return device
+
+
+def should_fallback_to_cpu(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "invalid device ordinal",
+        "no cuda",
+        "cuda error",
+        "driver",
+        "device-side assert",
+        "not compiled with cuda",
+    )
+    return any(marker in message for marker in markers)
+
+
+def build_pipeline(ms_pipeline, task: str, model: str, requested_device: str, pipeline_name: str):
+    """按请求设备加载 pipeline；GPU 不可用时自动退回 CPU。"""
+    runtime_device = resolve_runtime_device(requested_device, pipeline_name)
+    try:
+        return ms_pipeline(task=task, model=model, device=runtime_device), runtime_device
+    except Exception as exc:
+        if runtime_device != "cpu" and should_fallback_to_cpu(exc):
+            logger.warning(
+                f"{pipeline_name} 使用 {runtime_device} 加载失败，回退到 CPU: {exc}"
+            )
+            return ms_pipeline(task=task, model=model, device="cpu"), "cpu"
+        raise
+
 # ──────────────────────────────────────────────
 # 全局模型实例
 # ──────────────────────────────────────────────
 diarization_pipeline = None
 sv_pipeline = None
+ACTIVE_DIARIZATION_DEVICE = DIARIZATION_DEVICE
+ACTIVE_SV_DEVICE = SV_DEVICE
 
 # ──────────────────────────────────────────────
 # FastAPI 应用
@@ -268,12 +342,13 @@ def _run_diarization(wav_path: str) -> list[SpeakerSegment]:
 # ──────────────────────────────────────────────
 def load_models():
     """启动时加载说话人分离和声纹提取模型"""
-    global diarization_pipeline, sv_pipeline
+    global diarization_pipeline, sv_pipeline, ACTIVE_DIARIZATION_DEVICE, ACTIVE_SV_DEVICE
 
     from modelscope.pipelines import pipeline as ms_pipeline
 
     logger.info(f"正在加载说话人分离模型: {DIARIZATION_MODEL}")
-    logger.info(f"设备: {DEVICE}")
+    logger.info(f"分离设备: {DIARIZATION_DEVICE}")
+    logger.info(f"声纹设备: {SV_DEVICE}")
 
     os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
     os.environ["MODELSCOPE_CACHE"] = MODEL_CACHE_DIR
@@ -286,24 +361,29 @@ def load_models():
         logger.info(f"声纹提取模型使用本地缓存: {sv_model_ref}")
 
     # 加载说话人分离 pipeline
-    diarization_pipeline = ms_pipeline(
+    diarization_pipeline, ACTIVE_DIARIZATION_DEVICE = build_pipeline(
+        ms_pipeline=ms_pipeline,
         task="speaker-diarization",
         model=diarization_model_ref,
-        device=DEVICE,
+        requested_device=DIARIZATION_DEVICE,
+        pipeline_name="说话人分离模型",
     )
-    logger.info("说话人分离模型加载完成")
+    logger.info(f"说话人分离模型加载完成 (device={ACTIVE_DIARIZATION_DEVICE})")
 
     # 加载声纹提取 pipeline（用于详细接口）
     try:
-        sv_pipeline = ms_pipeline(
+        sv_pipeline, ACTIVE_SV_DEVICE = build_pipeline(
+            ms_pipeline=ms_pipeline,
             task="speaker-verification",
             model=sv_model_ref,
-            device=DEVICE,
+            requested_device=SV_DEVICE,
+            pipeline_name="声纹提取模型",
         )
-        logger.info("声纹提取模型加载完成")
+        logger.info(f"声纹提取模型加载完成 (device={ACTIVE_SV_DEVICE})")
     except Exception as e:
         logger.warning(f"声纹提取模型加载失败（/diarize/detail 接口将不可用）: {e}")
         sv_pipeline = None
+        ACTIVE_SV_DEVICE = "unavailable"
 
 
 @app.on_event("startup")
@@ -326,7 +406,7 @@ async def health_check():
     return HealthResponse(
         status="ok" if diarization_pipeline is not None else "degraded",
         model_loaded=diarization_pipeline is not None,
-        device=DEVICE,
+        device=ACTIVE_DIARIZATION_DEVICE,
         diarization_model=DIARIZATION_MODEL,
     )
 

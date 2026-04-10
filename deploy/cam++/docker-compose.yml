@@ -18,8 +18,8 @@ services:
       - "${SD_PORT:-10003}:8080"
 
     environment:
-      # 宿主机可见 GPU；如指定 NVIDIA_VISIBLE_DEVICES=2，则容器内通常应使用 cuda:0
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+      # 显式选择宿主机 GPU 编号；容器内通常会把它重新映射成 cuda:0
+      - NVIDIA_VISIBLE_DEVICES=${HOST_GPU_ID:-0}
       # 容器内设备编号：cpu 或 cuda:0；不要直接把宿主机编号写进来
       - DEVICE=${DEVICE:-cuda:0}
       # 如需分别指定，可单独设置；留空则回退到 DEVICE
@@ -49,7 +49,7 @@ services:
           memory: 2G
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ["${HOST_GPU_ID:-0}"]
               capabilities: [gpu]
 
     healthcheck:

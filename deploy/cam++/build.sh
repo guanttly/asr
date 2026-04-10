@@ -60,6 +60,10 @@ compose() {
 }
 
 detect_device() {
+    if [ -n "${DIARIZATION_DEVICE}" ]; then
+        echo "${DIARIZATION_DEVICE}"
+        return
+    fi
     if [ -n "${DEVICE}" ]; then
         echo "${DEVICE}"
         return
@@ -67,8 +71,17 @@ detect_device() {
     echo "cuda:0"
 }
 
+detect_host_gpu() {
+    if [ -n "${HOST_GPU_ID}" ]; then
+        echo "${HOST_GPU_ID}"
+        return
+    fi
+    echo "0"
+}
+
 check_gpu_readiness() {
     DEVICE_VALUE="$(detect_device)"
+    HOST_GPU_VALUE="$(detect_host_gpu)"
     COMPOSE_IMPL="$(compose_version)"
 
     if [[ "${DEVICE_VALUE}" != cuda* ]]; then
@@ -76,7 +89,8 @@ check_gpu_readiness() {
         return
     fi
 
-    info "当前 DEVICE=${DEVICE_VALUE}，准备按 GPU 模式启动"
+    info "当前宿主机 GPU= ${HOST_GPU_VALUE}，容器内 DEVICE=${DEVICE_VALUE}，准备按 GPU 模式启动"
+    info "注意：宿主机 GPU ${HOST_GPU_VALUE} 在容器内通常会重新编号为 cuda:0"
 
     if ! command -v nvidia-smi >/dev/null 2>&1; then
         warn "宿主机未检测到 nvidia-smi，容器大概率无法使用 GPU"
@@ -150,7 +164,7 @@ start)
         exit 1
     fi
     check_gpu_readiness
-    SD_IMAGE="${FULL_IMAGE}" compose up -d --no-build
+    SD_IMAGE="${FULL_IMAGE}" compose up -d --no-build --force-recreate
     info "服务启动中，首次启动需加载模型，约 60-120 秒..."
     info "可通过以下命令查看日志: ./build.sh logs"
     info "API 文档: http://localhost:8080/docs"

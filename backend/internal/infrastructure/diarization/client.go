@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 )
 
 // Client wraps calls to an external diarization service.
@@ -26,10 +26,40 @@ type Segment struct {
 	EndTime   float64 `json:"end_time"`
 }
 
+func (s *Segment) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Speaker   string   `json:"speaker"`
+		SpeakerID string   `json:"speaker_id"`
+		StartTime *float64 `json:"start_time"`
+		EndTime   *float64 `json:"end_time"`
+		Start     *float64 `json:"start"`
+		End       *float64 `json:"end"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	s.Speaker = strings.TrimSpace(raw.Speaker)
+	if s.Speaker == "" {
+		s.Speaker = strings.TrimSpace(raw.SpeakerID)
+	}
+	if raw.StartTime != nil {
+		s.StartTime = *raw.StartTime
+	} else if raw.Start != nil {
+		s.StartTime = *raw.Start
+	}
+	if raw.EndTime != nil {
+		s.EndTime = *raw.EndTime
+	} else if raw.End != nil {
+		s.EndTime = *raw.End
+	}
+	return nil
+}
+
 // NewClient creates a new diarization client.
 func NewClient(baseURL string) *Client {
 	return &Client{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: &http.Client{},
 		baseURL:    baseURL,
 	}
 }
@@ -57,8 +87,8 @@ func (c *Client) Analyze(ctx context.Context, audioURL string) ([]Segment, error
 		return nil, buildDiarizationServiceError(resp)
 	}
 
-	var segments []Segment
-	if err := json.NewDecoder(resp.Body).Decode(&segments); err != nil {
+	segments, err := decodeSegmentsResponse(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 
@@ -102,12 +132,36 @@ func (c *Client) AnalyzeFile(ctx context.Context, audioFilePath string) ([]Segme
 		return nil, buildDiarizationServiceError(resp)
 	}
 
-	var segments []Segment
-	if err := json.NewDecoder(resp.Body).Decode(&segments); err != nil {
+	segments, err := decodeSegmentsResponse(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 
 	return segments, nil
+}
+
+func decodeSegmentsResponse(body io.Reader) ([]Segment, error) {
+	payload, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty diarization response")
+	}
+
+	var segments []Segment
+	if err := json.Unmarshal(trimmed, &segments); err == nil {
+		return segments, nil
+	} else {
+		var wrapped struct {
+			Segments []Segment `json:"segments"`
+		}
+		if wrappedErr := json.Unmarshal(trimmed, &wrapped); wrappedErr == nil && wrapped.Segments != nil {
+			return wrapped.Segments, nil
+		}
+		return nil, err
+	}
 }
 
 func buildDiarizationServiceError(resp *http.Response) error {

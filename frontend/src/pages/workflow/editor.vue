@@ -1702,7 +1702,7 @@ watch(selectedIndex, () => {
                   </NButton>
                 </div>
                 <div class="grid gap-3 lg:grid-cols-2">
-                  <TextDiffPreview :before-text="nodeTestInputPreview" :after-text="nodeTestOutput" :before-label="selectedNodeNeedsAudio ? '上传音频' : '测试输入'" after-label="节点输出" />
+                  <TextDiffPreview :mode="selectedNodeNeedsAudio ? 'plain' : 'diff'" :before-text="nodeTestInputPreview" :after-text="nodeTestOutput" :before-label="selectedNodeNeedsAudio ? '上传音频' : '测试输入'" after-label="节点输出" />
                   <div class="rounded-2 bg-white p-3">
                     <div class="text-xs text-slate/70">
                       Detail
@@ -1781,7 +1781,7 @@ watch(selectedIndex, () => {
                       </div>
                     </div>
                     <div class="mt-3 grid gap-3 xl:grid-cols-2">
-                      <TextDiffPreview :before-text="sanitizeText(node.input_text)" :after-text="sanitizeText(node.output_text)" />
+                      <TextDiffPreview :mode="isAudioDrivenNodeType(node.node_type) ? 'plain' : 'diff'" :before-text="sanitizeText(node.input_text)" :after-text="sanitizeText(node.output_text)" />
                     </div>
                     <div class="mt-3">
                       <NodeDetailPanel :detail="node.detail" empty-label="当前节点没有 detail 信息。" />

@@ -9,20 +9,23 @@ const props = withDefaults(defineProps<{
   beforeLabel?: string
   afterLabel?: string
   emptyLabel?: string
+  mode?: 'diff' | 'plain'
 }>(), {
   beforeText: '',
   afterText: '',
   beforeLabel: '输入',
   afterLabel: '输出',
   emptyLabel: '暂无可展示文本',
+  mode: 'diff',
 })
 
 const diff = computed(() => buildTextDiff(props.beforeText || '', props.afterText || ''))
+const showDiffMeta = computed(() => props.mode === 'diff')
 </script>
 
 <template>
   <div class="diff-preview">
-    <div class="diff-meta">
+    <div v-if="showDiffMeta" class="diff-meta">
       <span>{{ diff.changed ? '已检测到差异' : '输入输出一致' }}</span>
       <span v-if="diff.changed">+{{ diff.addedCount }} / -{{ diff.removedCount }}</span>
     </div>
@@ -35,13 +38,16 @@ const diff = computed(() => buildTextDiff(props.beforeText || '', props.afterTex
         <div v-if="!beforeText" class="diff-empty">
           {{ emptyLabel }}
         </div>
-        <div v-else class="diff-body">
+        <div v-else-if="showDiffMeta" class="diff-body">
           <span
             v-for="(segment, index) in diff.beforeSegments"
             :key="`${beforeLabel}-${index}`"
             class="diff-segment"
             :class="`diff-segment--${segment.kind}`"
           >{{ segment.text }}</span>
+        </div>
+        <div v-else class="diff-body">
+          {{ beforeText }}
         </div>
       </div>
 
@@ -52,13 +58,16 @@ const diff = computed(() => buildTextDiff(props.beforeText || '', props.afterTex
         <div v-if="!afterText" class="diff-empty">
           {{ emptyLabel }}
         </div>
-        <div v-else class="diff-body">
+        <div v-else-if="showDiffMeta" class="diff-body">
           <span
             v-for="(segment, index) in diff.afterSegments"
             :key="`${afterLabel}-${index}`"
             class="diff-segment"
             :class="`diff-segment--${segment.kind}`"
           >{{ segment.text }}</span>
+        </div>
+        <div v-else class="diff-body">
+          {{ afterText }}
         </div>
       </div>
     </div>

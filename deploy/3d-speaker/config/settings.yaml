@@ -8,6 +8,9 @@ server:
   workers: 1                      # Uvicorn worker 数量
   max_upload_size_mb: 500         # 最大上传文件大小
 
+service:
+  name: "speaker-analysis-service"
+
 # ─── 模型配置 ───
 models:
   # 说话人嵌入模型（二选一）
@@ -24,6 +27,9 @@ models:
     model_id: "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
     local_dir: "./models/fsmn_vad"
     device: "cpu"
+    min_speech_duration: 0.2
+    min_silence_duration: 0.15
+    speech_pad_duration: 0.1
 
 # ─── 说话人分离配置 ───
 diarization:

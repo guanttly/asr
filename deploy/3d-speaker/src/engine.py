@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from loguru import logger
@@ -22,6 +22,9 @@ from src.utils import (
 )
 from src.voiceprint import VoiceprintManager
 
+if TYPE_CHECKING:
+    from src.vad import VoiceActivityDetector
+
 
 class DiarizationEngine:
     """
@@ -29,7 +32,7 @@ class DiarizationEngine:
 
     完整流水线:
       1. 音频加载 + 预处理（重采样、单声道）
-      2. VAD 检测有效语音段
+    2. VAD 检测有效语音段
       3. 语音分段 + 嵌入提取
       4. 聚类（谱聚类 / UMAP-HDBSCAN）
       5. [可选] 声纹匹配 → 匿名标签替换为真实姓名
@@ -43,6 +46,7 @@ class DiarizationEngine:
     def __init__(
         self,
         extractor: EmbeddingExtractor,
+        vad: Optional["VoiceActivityDetector"] = None,
         voiceprint_mgr: Optional[VoiceprintManager] = None,
         matcher: Optional[SpeakerMatcher] = None,
         clustering_method: str = "spectral",
@@ -51,6 +55,7 @@ class DiarizationEngine:
         segment_step: float = 0.75,
     ):
         self.extractor = extractor
+        self.vad = vad
         self.voiceprint_mgr = voiceprint_mgr
         self.matcher = matcher
         self.clustering_method = clustering_method
@@ -107,6 +112,7 @@ class DiarizationEngine:
             )
         else:
             raw_segments, cluster_embeddings = self._diarize_fallback(
+                audio_path,
                 waveform, sr, min_speakers, max_speakers, method
             )
 
@@ -227,6 +233,7 @@ class DiarizationEngine:
 
     def _diarize_fallback(
         self,
+        audio_path: str,
         waveform: np.ndarray,
         sr: int,
         min_speakers: Optional[int],
@@ -238,25 +245,31 @@ class DiarizationEngine:
         适用于 speakerlab 未安装的环境。
 
         步骤:
-          1. 简单 VAD（基于能量阈值）
+          1. 优先使用独立 VAD 检测人声段
           2. 固定窗口分段
           3. 嵌入提取
           4. 聚类
         """
         from scipy.cluster.hierarchy import fcluster, linkage
-        from src.utils import extract_segment, save_temp_audio
+        from src.utils import save_temp_audio
 
         logger.info("使用兼容模式分离流水线")
 
-        # 简单 VAD: 基于短时能量
-        frame_length = int(0.025 * sr)  # 25ms
-        hop_length = int(0.010 * sr)    # 10ms
-        energy = np.array([
-            np.sum(waveform[i:i + frame_length] ** 2)
-            for i in range(0, len(waveform) - frame_length, hop_length)
-        ])
-        energy_threshold = np.percentile(energy, 30)
-        speech_frames = energy > energy_threshold
+        speech_mask = np.zeros(len(waveform), dtype=bool)
+        if self.vad is not None:
+            try:
+                vad_segments = self.vad.detect_segments(audio_path, waveform=waveform, sample_rate=sr)
+            except Exception as exc:
+                logger.warning(f"调用独立 VAD 失败，改用全量窗口扫描: {exc}")
+                vad_segments = []
+
+            for segment in vad_segments:
+                start_sample = max(0, int(segment.start_time * sr))
+                end_sample = min(len(waveform), int(segment.end_time * sr))
+                if end_sample > start_sample:
+                    speech_mask[start_sample:end_sample] = True
+        else:
+            speech_mask[:] = True
 
         # 分段提取嵌入
         seg_samples = int(self.segment_duration * sr)
@@ -269,11 +282,7 @@ class DiarizationEngine:
             end_time = (start_sample + seg_samples) / sr
 
             # 检查该段是否包含语音
-            frame_start = start_sample // hop_length
-            frame_end = min((start_sample + seg_samples) // hop_length, len(speech_frames))
-            if frame_start >= len(speech_frames):
-                continue
-            speech_ratio = np.mean(speech_frames[frame_start:frame_end])
+            speech_ratio = np.mean(speech_mask[start_sample:start_sample + seg_samples])
             if speech_ratio < 0.3:
                 continue
 

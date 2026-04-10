@@ -49,6 +49,7 @@ class TestHealthAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
+        assert data["service_name"] == "speaker-analysis-service"
         assert "version" in data
         assert "voiceprint_count" in data
 
@@ -112,3 +113,39 @@ class TestDiarizeAPI:
                 files={"file": ("test.wav", wav_data, "audio/wav")},
             )
             assert response.status_code == 400
+
+
+class TestVADAPI:
+    """VAD API 测试"""
+
+    def test_vad_endpoint_with_stub_detector(self):
+        from fastapi.testclient import TestClient
+        import src.server as server_module
+        from src.models import VADResponse, VADSegment
+
+        class StubDetector:
+            def detect(self, _audio_path):
+                return VADResponse(
+                    task_id="test-vad",
+                    audio_duration=2.0,
+                    speech_duration=1.2,
+                    speech_ratio=60.0,
+                    num_segments=1,
+                    segments=[VADSegment(start_time=0.2, end_time=1.4, duration=1.2)],
+                    detector_backend="stub",
+                    processing_time=0.01,
+                )
+
+        server_module._vad = StubDetector()
+
+        client = TestClient(server_module.app)
+        wav_data = generate_test_wav(duration=2.0)
+        response = client.post(
+            "/api/v1/vad",
+            files={"file": ("vad.wav", wav_data, "audio/wav")},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["detector_backend"] == "stub"
+        assert data["num_segments"] == 1

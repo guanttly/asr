@@ -1,6 +1,8 @@
-# 3D-Speaker 说话人分离服务 —— 离线部署开发包
+# Speaker Analysis Service —— 离线部署开发包
 
-> 基于阿里 3D-Speaker 工具包的说话人分离 + 声纹注册匹配服务，面向局域网私有化部署。
+> 基于 3D-Speaker + FSMN-VAD 的说话人分析服务，提供说话人分离、声纹注册匹配和独立语音活动检测接口，面向局域网私有化部署。
+
+说明：目录仍保留为 deploy/3d-speaker，用于表达底层模型技术栈；对外交付名统一为 Speaker Analysis Service。
 
 ## 架构概览
 
@@ -10,6 +12,7 @@
 │                                                         │
 │  POST /api/v1/diarize          说话人分离（匿名标签）      │
 │  POST /api/v1/diarize-identify 分离 + 声纹匹配（真实姓名） │
+│  POST /api/v1/vad              语音活动检测               │
 │  POST /api/v1/voiceprint/enroll   声纹注册               │
 │  DELETE /api/v1/voiceprint/{id}   声纹删除               │
 │  GET  /api/v1/voiceprint/list     声纹列表               │
@@ -19,6 +22,7 @@
 │                    核心引擎层                             │
 │                                                         │
 │  DiarizationEngine    说话人分离（VAD→分段→嵌入→聚类）     │
+│  VoiceActivityDetector 独立 VAD 接口 + fallback VAD      │
 │  VoiceprintManager    声纹库管理（注册/删除/持久化）       │
 │  SpeakerMatcher       身份匹配（余弦相似度比对）           │
 │  EmbeddingExtractor   嵌入提取（ERes2NetV2 / CAM++）     │
@@ -35,10 +39,12 @@
 
 ```
 speaker-diarization-service/
-├── build.sh                    # 一键构建打包脚本
+├── build.sh                    # 构建/导出/导入/启动脚本（与 cam++ 风格统一）
 ├── README.md                   # 本文档
 ├── requirements.txt            # Python 依赖
 ├── Makefile                    # 常用操作快捷命令
+├── Dockerfile                  # 生产镜像构建入口
+├── docker-compose.yml          # Compose 启动入口
 ├── config/
 │   └── settings.yaml           # 服务配置文件
 ├── src/
@@ -49,20 +55,21 @@ speaker-diarization-service/
 │   ├── voiceprint.py           # 声纹库管理
 │   ├── matcher.py              # 说话人身份匹配
 │   ├── models.py               # Pydantic 数据模型
+│   ├── vad.py                  # VAD 检测器
 │   └── utils.py                # 工具函数（音频预处理等）
 ├── scripts/
 │   ├── download_models.sh      # 模型权重离线下载
-│   ├── export_onnx.sh          # 导出 ONNX 格式（可选）
+│   ├── install_speakerlab.sh   # 原生 3D-Speaker 依赖安装
 │   └── init_db.py              # 数据库初始化
-├── docker/
-│   ├── Dockerfile              # Docker 镜像构建
-│   └── docker-compose.yaml     # 编排配置
 ├── tests/
 │   ├── test_diarization.py     # 分离功能测试
 │   ├── test_voiceprint.py      # 声纹注册匹配测试
-│   └── test_api.py             # API 接口测试
+│   ├── test_api.py             # API 接口测试
+│   └── test_vad.py             # VAD 单元测试
 ├── docs/
 │   └── deployment_guide.md     # 部署指南
+├── wheels/                     # 可选：speakerlab 离线 wheel
+│   └── .gitkeep
 └── models/                     # 模型权重存放目录（构建时填充）
     └── .gitkeep
 ```
@@ -70,19 +77,24 @@ speaker-diarization-service/
 ## 快速开始
 
 ```bash
-# 1. 构建离线部署包（含模型下载 + Docker 镜像）
-bash build.sh --download-models --build-docker
+# 1. 下载模型（联网构建机执行一次）
+./build.sh download-models
 
-# 2. 仅构建（模型已手动下载到 models/ 目录）
-bash build.sh --build-docker
+# 2. 构建镜像
+./build.sh build
 
-# 3. 本地开发运行
-pip install -r requirements.txt
-python -m src.server
+# 3. 导出离线镜像包
+./build.sh export
 
-# 4. Docker 部署
-cd docker && docker-compose up -d
+# 4. 本地开发运行
+make init
+make serve
+
+# 5. Docker 部署
+./build.sh start
 ```
+
+和 cam++ 一样，这套脚本统一使用 build / export / import / start / stop / test / logs 命令；不再使用旧的参数式构建入口。
 
 ## 模型说明
 
@@ -91,6 +103,21 @@ cd docker && docker-compose up -d
 | ERes2NetV2 | iic/speech_eres2netv2_sv_zh-cn_16k-common | 说话人嵌入（默认） | ~70MB |
 | CAM++ | iic/speech_campplus_sv_zh-cn_16k-common | 说话人嵌入（轻量） | ~30MB |
 | FSMN-VAD | iic/speech_fsmn_vad_zh-cn-16k-common-pytorch | 语音活动检测 | ~40MB |
+
+## 服务命名
+
+- 对外交付名建议使用 Speaker Analysis Service。
+- 原因是当前职责已经覆盖 VAD、说话人分离、声纹注册与匹配，不再只是单一 diarization。
+- 目录名保留 3d-speaker，是为了保留底层技术来源，不建议再把目录和交付名混用。
+
+## API 概览
+
+- POST /api/v1/vad：独立 VAD 接口，返回语音片段，可直接作为实时 ASR 切段依据。
+- POST /api/v1/diarize：说话人分离，返回匿名标签。
+- POST /api/v1/diarize-identify：说话人分离并尝试匹配已注册声纹。
+- POST /api/v1/voiceprint/enroll：注册声纹。
+- GET /api/v1/voiceprint/list：列出声纹库。
+- GET /api/v1/health：健康检查。
 
 ## 许可证
 

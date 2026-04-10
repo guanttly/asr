@@ -33,6 +33,18 @@ RUN python -c "\
 from modelscope.hub.snapshot_download import snapshot_download; \
 snapshot_download('damo/speech_campplus_sv_zh-cn_16k-common', cache_dir='/models')"
 
+# CAM++ 说话人分离 pipeline 在首次真实推理时会懒加载 FSMN-VAD 子模型，
+# 仅初始化 pipeline 不足以避免运行时联网下载，因此这里显式打包该依赖。
+RUN python -c "\
+from modelscope.hub.snapshot_download import snapshot_download; \
+snapshot_download('damo/speech_fsmn_vad_zh-cn-16k-common-pytorch', cache_dir='/models')"
+
+# 真实分离阶段还会拉取 CAM++ 的 SCL 子模型；同样需要提前打包，
+# 否则首次任务执行时仍会访问 ModelScope。
+RUN python -c "\
+from modelscope.hub.snapshot_download import snapshot_download; \
+snapshot_download('damo/speech_campplus-transformer_scl_zh-cn_16k-common', cache_dir='/models')"
+
 # --------------------------------------------------
 # 阶段2：运行环境
 # --------------------------------------------------
@@ -75,15 +87,26 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # 从阶段1复制预下载的模型
 COPY --from=model-downloader /models /app/models
 
-# 在构建阶段预热 pipeline，确保运行时需要的附加模型资源也被打包进镜像。
+# 在构建阶段做一次最小推理预热，尽量把真实推理路径上的懒加载依赖都打包进镜像。
 RUN python - <<'PY'
 import os
+import wave
+from pathlib import Path
+
+import numpy as np
 from modelscope.pipelines import pipeline
 
 os.environ['MODELSCOPE_CACHE'] = '/app/models'
 os.environ['MODEL_CACHE_DIR'] = '/app/models'
 
-pipeline(
+sample_path = Path('/tmp/campp_warmup.wav')
+with wave.open(str(sample_path), 'wb') as wav_file:
+    wav_file.setnchannels(1)
+    wav_file.setsampwidth(2)
+    wav_file.setframerate(16000)
+    wav_file.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
+
+diarization = pipeline(
     task='speaker-diarization',
     model='damo/speech_campplus_speaker-diarization_common',
     device='cpu',
@@ -93,6 +116,11 @@ pipeline(
     model='damo/speech_campplus_sv_zh-cn_16k-common',
     device='cpu',
 )
+
+try:
+    diarization(str(sample_path))
+except Exception:
+    pass
 PY
 
 # 环境变量

@@ -8,7 +8,7 @@ UVICORN := $(VENV)/bin/uvicorn
 
 help: ## 显示帮助
 	@echo "═══════════════════════════════════════════════════"
-	@echo " 3D-Speaker 说话人分离服务 — 开发命令"
+	@echo " Speaker Analysis Service — 开发命令"
 	@echo "═══════════════════════════════════════════════════"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -19,6 +19,7 @@ venv: ## 创建虚拟环境并安装依赖
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip -q
 	$(PIP) install -r requirements.txt -q
+	bash scripts/install_speakerlab.sh $(PIP)
 	@echo "虚拟环境就绪: source $(VENV)/bin/activate"
 
 init: venv ## 初始化项目（虚拟环境 + 数据目录）
@@ -51,24 +52,27 @@ download-models: ## 下载模型权重（需联网）
 # ─── Docker ───
 
 docker: ## 构建 Docker 镜像
-	docker build -t speaker-diarization-service:1.0.0 -f docker/Dockerfile .
+	bash build.sh build
 
 docker-up: ## Docker Compose 启动
-	cd docker && docker-compose up -d
+	bash build.sh start
 
 docker-down: ## Docker Compose 停止
-	cd docker && docker-compose down
+	bash build.sh stop
 
 docker-logs: ## 查看 Docker 日志
-	cd docker && docker-compose logs -f
+	bash build.sh logs
 
 # ─── 打包 ───
 
 pack: ## 构建离线部署包
-	bash build.sh --build-docker --pack-offline --skip-tests
+	bash build.sh build
+	bash build.sh export
 
 pack-full: ## 完整构建（含模型下载）
-	bash build.sh --download-models --build-docker --pack-offline
+	bash build.sh download-models
+	bash build.sh build
+	bash build.sh export
 
 # ─── 清理 ───
 

@@ -5,7 +5,6 @@ FastAPI 服务入口 —— 说话人分离 + 声纹注册匹配 RESTful API
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,10 +21,12 @@ from src.models import (
     DiarizeResponse,
     ErrorResponse,
     HealthResponse,
+    VADResponse,
     VoiceprintEnrollRequest,
     VoiceprintListResponse,
     VoiceprintRecord,
 )
+from src.vad import VoiceActivityDetector
 from src.voiceprint import VoiceprintManager
 
 # ─── 全局实例 ───
@@ -34,23 +35,45 @@ _extractor: EmbeddingExtractor | None = None
 _voiceprint_mgr: VoiceprintManager | None = None
 _matcher: SpeakerMatcher | None = None
 _engine: DiarizationEngine | None = None
+_vad: VoiceActivityDetector | None = None
 
-VERSION = "1.0.0"
+SERVICE_NAME = "speaker-analysis-service"
+VERSION = "1.1.0"
 
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
     """加载配置文件"""
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            config = yaml.safe_load(f) or {}
+            return apply_env_overrides(config)
     logger.warning(f"配置文件未找到: {config_path}, 使用默认配置")
-    return {}
+    return apply_env_overrides({})
+
+
+def apply_env_overrides(config: dict) -> dict:
+    server_cfg = config.setdefault("server", {})
+    server_cfg["host"] = os.getenv("HOST", server_cfg.get("host", "0.0.0.0"))
+    server_cfg["port"] = int(os.getenv("PORT", server_cfg.get("port", 8100)))
+    server_cfg["workers"] = int(os.getenv("WORKERS", server_cfg.get("workers", 1)))
+
+    models_cfg = config.setdefault("models", {})
+    embedding_cfg = models_cfg.setdefault("embedding", {})
+    vad_cfg = models_cfg.setdefault("vad", {})
+
+    default_device = os.getenv("DEVICE")
+    embedding_device = os.getenv("EMBEDDING_DEVICE", default_device or embedding_cfg.get("device", "cpu"))
+    vad_device = os.getenv("VAD_DEVICE", default_device or vad_cfg.get("device", "cpu"))
+    embedding_cfg["device"] = embedding_device
+    vad_cfg["device"] = vad_device
+
+    return config
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global _config, _extractor, _voiceprint_mgr, _matcher, _engine
+    global _config, _extractor, _voiceprint_mgr, _matcher, _engine, _vad
 
     logger.info("正在初始化服务...")
     _config = load_config()
@@ -82,10 +105,22 @@ async def lifespan(app: FastAPI):
         high_confidence_threshold=vp_cfg.get("high_confidence_threshold", 0.82),
     )
 
-    # 初始化分离引擎
     diar_cfg = _config.get("diarization", {})
+    vad_cfg = _config.get("models", {}).get("vad", {})
+    _vad = VoiceActivityDetector(
+        model_id=vad_cfg.get("model_id", "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"),
+        local_dir=vad_cfg.get("local_dir", "./models/fsmn_vad"),
+        device=vad_cfg.get("device", "cpu"),
+        target_sr=diar_cfg.get("target_sample_rate", 16000),
+        min_speech_duration=vad_cfg.get("min_speech_duration", 0.2),
+        min_silence_duration=vad_cfg.get("min_silence_duration", 0.15),
+        speech_pad_duration=vad_cfg.get("speech_pad_duration", 0.1),
+    )
+
+    # 初始化分离引擎
     _engine = DiarizationEngine(
         extractor=_extractor,
+        vad=_vad,
         voiceprint_mgr=_voiceprint_mgr,
         matcher=_matcher,
         clustering_method=diar_cfg.get("clustering_method", "spectral"),
@@ -102,8 +137,8 @@ async def lifespan(app: FastAPI):
 # ─── 创建 FastAPI 应用 ───
 
 app = FastAPI(
-    title="3D-Speaker 说话人分离服务",
-    description="基于 3D-Speaker 的说话人分离 + 声纹注册匹配 API，面向局域网私有化部署",
+    title="Speaker Analysis Service",
+    description="基于 3D-Speaker / FSMN-VAD 的说话人分离、声纹管理与语音活动检测 API，面向局域网私有化部署",
     version=VERSION,
     lifespan=lifespan,
 )
@@ -139,14 +174,39 @@ async def save_upload_to_temp(file: UploadFile) -> str:
 async def health():
     """服务健康检查"""
     return HealthResponse(
+        service_name=SERVICE_NAME,
         version=VERSION,
         models_loaded={
             "embedding": _extractor is not None and _extractor._loaded,
+            "vad": _vad is not None and _vad.is_loaded,
             "engine": _engine is not None,
         },
         voiceprint_count=_voiceprint_mgr.count if _voiceprint_mgr else 0,
         device=_extractor.device if _extractor else "unknown",
     )
+
+
+@app.post(
+    "/api/v1/vad",
+    response_model=VADResponse,
+    tags=["语音活动检测"],
+    summary="语音活动检测",
+)
+async def detect_voice_activity(
+    file: UploadFile = File(..., description="音频文件 (WAV/MP3/FLAC/M4A)"),
+):
+    """上传音频文件，返回语音活动片段，可作为实时 ASR 或切段依据。"""
+    if _vad is None:
+        raise HTTPException(status_code=503, detail="VAD 模型未初始化")
+
+    tmp_path = await save_upload_to_temp(file)
+    try:
+        return _vad.detect(tmp_path)
+    except Exception as exc:
+        logger.exception("VAD 检测失败")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        os.unlink(tmp_path)
 
 
 # ─── 说话人分离 ───

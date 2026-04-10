@@ -57,6 +57,25 @@ class SpeakerSummary(BaseModel):
 DiarizeResponse.model_rebuild()
 
 
+class VADSegment(BaseModel):
+    """单个语音活动片段"""
+    start_time: float = Field(description="起始时间（秒）")
+    end_time: float = Field(description="结束时间（秒）")
+    duration: float = Field(description="持续时长（秒）")
+
+
+class VADResponse(BaseModel):
+    """语音活动检测响应"""
+    task_id: str = Field(description="任务 ID")
+    audio_duration: float = Field(description="音频总时长（秒）")
+    speech_duration: float = Field(description="检测到的人声总时长（秒）")
+    speech_ratio: float = Field(description="人声占比（%）")
+    num_segments: int = Field(description="人声片段数量")
+    segments: list[VADSegment] = Field(description="人声片段列表")
+    detector_backend: str = Field(description="实际使用的检测后端")
+    processing_time: float = Field(description="处理耗时（秒）")
+
+
 # =============================================================================
 # 声纹注册相关
 # =============================================================================
@@ -103,6 +122,7 @@ class VoiceprintMatchResult(BaseModel):
 class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str = "ok"
+    service_name: str
     version: str
     models_loaded: dict[str, bool]
     voiceprint_count: int

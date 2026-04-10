@@ -1,4 +1,4 @@
-# 部署指南
+# Speaker Analysis Service 部署指南
 
 ## 1. 部署架构
 
@@ -39,31 +39,28 @@
 ### 方式一：Docker 部署（推荐）
 
 ```bash
-# 1. 解压离线部署包
-tar -xzf speaker-diarization-service-1.0.0-offline.tar.gz
-cd speaker-diarization-service-1.0.0
+# 1. 将整个部署目录和导出的离线镜像包拷贝到目标服务器
+cd speaker-analysis-service
 
 # 2. 加载 Docker 镜像
-docker load -i docker/speaker-diarization-service-1.0.0.tar
+./build.sh import
 
 # 3. 启动服务
-cd docker && docker-compose up -d
+./build.sh start
 
 # 4. 验证
 curl http://localhost:8100/api/v1/health
 ```
 
+说明：`./build.sh export` 只导出 Docker 镜像 tar.gz；因此离线部署时仍需要把当前目录下的 `build.sh`、`docker-compose.yml`、`config/` 等文件一并带到目标服务器。
+
 ### 方式二：裸机部署
 
 ```bash
-# 1. 解压并安装
-tar -xzf speaker-diarization-service-1.0.0-offline.tar.gz
-cd speaker-diarization-service-1.0.0
-bash install.sh
+# 1. 安装依赖与原生 speakerlab
+make init
 
 # 2. 启动
-cd /opt/speaker-diarization-service
-source .venv/bin/activate
 make serve
 ```
 
@@ -77,7 +74,7 @@ models:
     device: "cuda:0"    # 改为 GPU
 ```
 
-Docker 方式需取消 `docker-compose.yaml` 中 GPU 部分的注释。
+Docker 方式默认读取根目录 `docker-compose.yml`。如需 GPU，请设置 `DEVICE=cuda:0 ./build.sh start`。
 
 ## 4. API 使用示例
 
@@ -101,7 +98,14 @@ curl -X POST http://localhost:8100/api/v1/diarize \
   -F "max_speakers=6"
 ```
 
-### 4.3 说话人分离 + 身份识别
+### 4.3 语音活动检测（VAD）
+
+```bash
+curl -X POST http://localhost:8100/api/v1/vad \
+  -F "file=@meeting.wav"
+```
+
+### 4.4 说话人分离 + 身份识别
 
 ```bash
 # 上传会议音频，自动匹配已注册声纹
@@ -109,7 +113,7 @@ curl -X POST http://localhost:8100/api/v1/diarize-identify \
   -F "file=@meeting.wav"
 ```
 
-### 4.4 响应示例
+### 4.5 响应示例
 
 ```json
 {
@@ -165,6 +169,6 @@ for asr_segment in asr_results:
 |------|------|
 | 查看服务状态 | `curl localhost:8100/api/v1/health` |
 | 查看声纹数量 | `curl localhost:8100/api/v1/voiceprint/list` |
-| 查看日志 | `docker-compose logs -f` 或 `tail -f logs/*.log` |
+| 查看日志 | `./build.sh logs` 或 `tail -f logs/*.log` |
 | 备份声纹库 | 备份 `data/` 目录 |
 | 恢复声纹库 | 还原 `data/` 目录后重启服务 |

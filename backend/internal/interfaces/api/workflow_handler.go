@@ -1,11 +1,19 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	appasr "github.com/lgt/asr/internal/application/asr"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	wfengine "github.com/lgt/asr/internal/infrastructure/workflow"
@@ -16,12 +24,13 @@ import (
 
 // WorkflowHandler handles HTTP requests for workflow management.
 type WorkflowHandler struct {
-	service *appwf.Service
+	service    *appwf.Service
+	asrService *appasr.Service
 }
 
 // NewWorkflowHandler creates a new workflow handler.
-func NewWorkflowHandler(service *appwf.Service) *WorkflowHandler {
-	return &WorkflowHandler{service: service}
+func NewWorkflowHandler(service *appwf.Service, asrService *appasr.Service) *WorkflowHandler {
+	return &WorkflowHandler{service: service, asrService: asrService}
 }
 
 // Register registers workflow routes on the given router group.
@@ -229,18 +238,44 @@ func (h *WorkflowHandler) ExecuteWorkflow(c *gin.Context) {
 		return
 	}
 
-	var req appwf.ExecuteWorkflowRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	req, cleanup, err := h.bindExecuteWorkflowRequest(c)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
+	}
+	defer cleanup()
+
+	inputText := req.InputText
+	if req.AudioFilePath != "" {
+		workflowResp, err := h.service.GetWorkflow(c.Request.Context(), id)
+		if err != nil {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+		if firstNodeType := firstEnabledNodeType(workflowResp.Nodes); firstNodeType != nil && firstNodeType.IsSource() {
+			if h.asrService == nil {
+				response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "asr service is not configured")
+				return
+			}
+			snippet, err := h.asrService.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{LocalFilePath: req.AudioFilePath})
+			if err != nil {
+				if isASRBadRequest(err) {
+					response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+					return
+				}
+				response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+				return
+			}
+			inputText = snippet.Text
+		}
 	}
 
 	userID := middleware.UserIDFromContext(c)
 	result, err := h.service.ExecuteWorkflow(
 		c.Request.Context(), id,
 		domain.TriggerManual, "",
-		req.InputText,
-		&wfengine.ExecutionMeta{UserID: userID, AudioURL: req.AudioURL},
+		inputText,
+		&wfengine.ExecutionMeta{UserID: userID, AudioURL: req.AudioURL, AudioFilePath: req.AudioFilePath},
 	)
 	if err != nil {
 		// Still return the execution result even on failure
@@ -273,9 +308,32 @@ func (h *WorkflowHandler) CloneWorkflow(c *gin.Context) {
 
 // TestNode handles POST /api/workflows/test-node
 func (h *WorkflowHandler) TestNode(c *gin.Context) {
-	var req appwf.TestNodeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	req, cleanup, err := h.bindTestNodeRequest(c)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+	defer cleanup()
+
+	nodeType := domain.NodeType(req.NodeType)
+	if nodeType.IsSource() && req.AudioFilePath != "" {
+		if h.asrService == nil {
+			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "asr service is not configured")
+			return
+		}
+		snippet, err := h.asrService.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{LocalFilePath: req.AudioFilePath})
+		if err != nil {
+			if isASRBadRequest(err) {
+				response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+				return
+			}
+			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+			return
+		}
+		response.Success(c, &appwf.TestNodeResponse{
+			OutputText: snippet.Text,
+			Detail:     json.RawMessage(fmt.Sprintf(`{"mode":"audio_source","status":%q,"duration":%v}`, snippet.Status, snippet.Duration)),
+		})
 		return
 	}
 
@@ -307,4 +365,124 @@ func (h *WorkflowHandler) GetExecution(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+func (h *WorkflowHandler) bindExecuteWorkflowRequest(c *gin.Context) (appwf.ExecuteWorkflowRequest, func(), error) {
+	if !isMultipartWorkflowRequest(c) {
+		var req appwf.ExecuteWorkflowRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			return appwf.ExecuteWorkflowRequest{}, nil, err
+		}
+		return req, func() {}, nil
+	}
+
+	path, cleanup, err := saveOptionalWorkflowAudio(c, "workflow-execute")
+	if err != nil {
+		return appwf.ExecuteWorkflowRequest{}, cleanup, err
+	}
+
+	return appwf.ExecuteWorkflowRequest{
+		InputText:     strings.TrimSpace(c.PostForm("input_text")),
+		AudioURL:      strings.TrimSpace(c.PostForm("audio_url")),
+		AudioFilePath: path,
+	}, cleanup, nil
+}
+
+func (h *WorkflowHandler) bindTestNodeRequest(c *gin.Context) (appwf.TestNodeRequest, func(), error) {
+	if !isMultipartWorkflowRequest(c) {
+		var req appwf.TestNodeRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			return appwf.TestNodeRequest{}, nil, err
+		}
+		return req, func() {}, nil
+	}
+
+	path, cleanup, err := saveOptionalWorkflowAudio(c, "workflow-test-node")
+	if err != nil {
+		return appwf.TestNodeRequest{}, cleanup, err
+	}
+
+	nodeType := strings.TrimSpace(c.PostForm("node_type"))
+	if nodeType == "" {
+		cleanup()
+		return appwf.TestNodeRequest{}, func() {}, fmt.Errorf("node_type is required")
+	}
+
+	configText := strings.TrimSpace(c.PostForm("config"))
+	if configText == "" {
+		configText = "{}"
+	}
+	if !json.Valid([]byte(configText)) {
+		cleanup()
+		return appwf.TestNodeRequest{}, func() {}, fmt.Errorf("config must be valid JSON")
+	}
+
+	return appwf.TestNodeRequest{
+		NodeType:      nodeType,
+		Config:        json.RawMessage(configText),
+		InputText:     strings.TrimSpace(c.PostForm("input_text")),
+		AudioURL:      strings.TrimSpace(c.PostForm("audio_url")),
+		AudioFilePath: path,
+	}, cleanup, nil
+}
+
+func isMultipartWorkflowRequest(c *gin.Context) bool {
+	return strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "multipart/form-data")
+}
+
+func saveOptionalWorkflowAudio(c *gin.Context, prefix string) (string, func(), error) {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		if errors.Is(err, http.ErrMissingFile) {
+			return "", func() {}, nil
+		}
+		return "", func() {}, err
+	}
+
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	if !isSupportedAudioExtension(ext) {
+		return "", func() {}, fmt.Errorf("unsupported audio file type")
+	}
+
+	absPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d%s", prefix, time.Now().UnixNano(), ext))
+	src, err := fileHeader.Open()
+	if err != nil {
+		return "", func() {}, fmt.Errorf("failed to open uploaded audio file: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(absPath)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("failed to create temp audio file: %w", err)
+	}
+
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(absPath)
+		return "", func() {}, fmt.Errorf("failed to save audio file: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(absPath)
+		return "", func() {}, fmt.Errorf("failed to finalize audio file: %w", err)
+	}
+
+	return absPath, func() {
+		_ = os.Remove(absPath)
+	}, nil
+}
+
+func firstEnabledNodeType(nodes []appwf.NodeResponse) *domain.NodeType {
+	var selected *domain.NodeType
+	selectedPosition := 0
+	for _, node := range nodes {
+		if !node.Enabled {
+			continue
+		}
+		if selected == nil || node.Position < selectedPosition {
+			nodeType := node.NodeType
+			selected = &nodeType
+			selectedPosition = node.Position
+		}
+	}
+	return selected
 }

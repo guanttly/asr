@@ -286,7 +286,10 @@ func (s *Service) TestNode(ctx context.Context, req *TestNodeRequest) (*TestNode
 		}, nil
 	}
 
-	result, err := s.engine.TestNode(ctx, nodeType, req.Config, req.InputText)
+	result, err := s.engine.TestNode(ctx, nodeType, req.Config, req.InputText, &engine.ExecutionMeta{
+		AudioURL:      req.AudioURL,
+		AudioFilePath: req.AudioFilePath,
+	})
 	if err != nil {
 		return &TestNodeResponse{Error: err.Error()}, nil
 	}

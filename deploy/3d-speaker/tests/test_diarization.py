@@ -1,0 +1,88 @@
+"""
+说话人分离引擎测试
+"""
+
+from src.engine import DiarizationEngine
+from src.utils import segments_to_rttm
+
+
+class TestRTTMParsing:
+    """RTTM 格式测试"""
+
+    def test_segments_to_rttm(self):
+        """测试 RTTM 格式输出"""
+        segments = [
+            {"speaker_id": "speaker_0", "start_time": 0.5, "duration": 3.2},
+            {"speaker_id": "speaker_1", "start_time": 4.0, "duration": 5.1},
+        ]
+        rttm = segments_to_rttm(segments, file_id="test")
+        lines = rttm.strip().split("\n")
+        assert len(lines) == 2
+        assert "speaker_0" in lines[0]
+        assert "speaker_1" in lines[1]
+        assert "SPEAKER test" in lines[0]
+
+    def test_parse_rttm(self):
+        """测试 RTTM 解析"""
+        import tempfile, os
+        rttm_content = (
+            "SPEAKER test 1 0.500 3.200 <NA> <NA> speaker_0 <NA> <NA>\n"
+            "SPEAKER test 1 4.000 5.100 <NA> <NA> speaker_1 <NA> <NA>\n"
+        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".rttm", delete=False)
+        tmp.write(rttm_content)
+        tmp.close()
+
+        try:
+            segments = DiarizationEngine._parse_rttm(tmp.name)
+            assert len(segments) == 2
+            assert segments[0]["speaker_id"] == "speaker_0"
+            assert segments[0]["start_time"] == 0.5
+            assert segments[0]["duration"] == 3.2
+            assert segments[1]["speaker_id"] == "speaker_1"
+        finally:
+            os.unlink(tmp.name)
+
+
+class TestMergeSegments:
+    """片段合并测试"""
+
+    def test_merge_adjacent_same_speaker(self):
+        """相邻同一说话人片段应合并"""
+        segments = [
+            {"speaker_id": "A", "start_time": 0.0, "duration": 2.0},
+            {"speaker_id": "A", "start_time": 2.1, "duration": 3.0},  # gap=0.1
+            {"speaker_id": "B", "start_time": 5.5, "duration": 2.0},
+        ]
+        merged = DiarizationEngine._merge_adjacent_segments(segments, gap_threshold=0.3)
+        assert len(merged) == 2
+        assert merged[0]["speaker_id"] == "A"
+        assert merged[0]["duration"] == pytest.approx(5.1, abs=0.01)
+        assert merged[1]["speaker_id"] == "B"
+
+    def test_no_merge_different_speakers(self):
+        """不同说话人不应合并"""
+        segments = [
+            {"speaker_id": "A", "start_time": 0.0, "duration": 2.0},
+            {"speaker_id": "B", "start_time": 2.1, "duration": 3.0},
+        ]
+        merged = DiarizationEngine._merge_adjacent_segments(segments, gap_threshold=0.3)
+        assert len(merged) == 2
+
+    def test_no_merge_large_gap(self):
+        """间隔过大的同一说话人不应合并"""
+        segments = [
+            {"speaker_id": "A", "start_time": 0.0, "duration": 2.0},
+            {"speaker_id": "A", "start_time": 5.0, "duration": 3.0},  # gap=3.0
+        ]
+        merged = DiarizationEngine._merge_adjacent_segments(segments, gap_threshold=0.3)
+        assert len(merged) == 2
+
+    def test_empty_segments(self):
+        """空列表"""
+        merged = DiarizationEngine._merge_adjacent_segments([])
+        assert merged == []
+
+
+# 需要 pytest
+import pytest

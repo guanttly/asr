@@ -15,6 +15,9 @@ FROM python:3.10-slim AS model-downloader
 
 ARG PIP_INDEX
 ARG PIP_TRUSTED_HOST
+ARG TORCH_VERSION=2.5.1
+ARG TORCHAUDIO_VERSION=2.5.1
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 
 RUN pip install --no-cache-dir modelscope \
     -i ${PIP_INDEX} \
@@ -37,6 +40,9 @@ FROM python:3.10-slim AS runtime
 
 ARG PIP_INDEX
 ARG PIP_TRUSTED_HOST
+ARG TORCH_VERSION=2.5.1
+ARG TORCHAUDIO_VERSION=2.5.1
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 
 LABEL maintainer="Speech Team"
 LABEL description="说话人分离服务 - 基于 3D-Speaker CAM++"
@@ -54,11 +60,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── 第一步：单独安装 PyTorch GPU 版（大包约 530MB，单独一层便于缓存） ──
-# 从 PyTorch 官方 CUDA 12.4 源下载，比通用 PyPI 镜像更稳定
+# 固定版本并显式指定 CUDA 轮子源，避免随时间漂移到与宿主机驱动不兼容的新版本。
 RUN pip install --no-cache-dir \
-    torch torchaudio \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple/ \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
+    torch==${TORCH_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
+    --index-url ${PYTORCH_INDEX_URL}
  
 # ── 第二步：安装其余 Python 依赖（小包，走阿里云镜像） ──
 COPY requirements.txt .
@@ -68,9 +74,6 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 # 从阶段1复制预下载的模型
 COPY --from=model-downloader /models /app/models
-
-# 复制应用代码
-COPY app.py .
 
 # 在构建阶段预热 pipeline，确保运行时需要的附加模型资源也被打包进镜像。
 RUN python - <<'PY'
@@ -108,6 +111,9 @@ ENV MODELSCOPE_CACHE=/app/models \
 
 # 创建临时目录
 RUN mkdir -p /tmp/diarization
+
+# 最后复制应用代码，避免仅修改服务逻辑时触发前面的大层重建。
+COPY app.py .
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

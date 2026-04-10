@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${SD_PORT:-8080}:8080"
+      - "${SD_PORT:-10003}:8080"
 
     environment:
       # 设备：cpu 或 cuda:0（需要 GPU 版本镜像和 nvidia-docker）

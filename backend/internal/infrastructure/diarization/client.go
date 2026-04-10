@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -50,7 +54,7 @@ func (c *Client) Analyze(ctx context.Context, audioURL string) ([]Segment, error
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("diarization service returned status %d", resp.StatusCode)
+		return nil, buildDiarizationServiceError(resp)
 	}
 
 	var segments []Segment
@@ -59,4 +63,58 @@ func (c *Client) Analyze(ctx context.Context, audioURL string) ([]Segment, error
 	}
 
 	return segments, nil
+}
+
+// AnalyzeFile uploads a local audio file to the diarization service.
+func (c *Client) AnalyzeFile(ctx context.Context, audioFilePath string) ([]Segment, error) {
+	file, err := os.Open(audioFilePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filepath.Base(audioFilePath))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/diarize", c.baseURL), &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, buildDiarizationServiceError(resp)
+	}
+
+	var segments []Segment
+	if err := json.NewDecoder(resp.Body).Decode(&segments); err != nil {
+		return nil, err
+	}
+
+	return segments, nil
+}
+
+func buildDiarizationServiceError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	message := bytes.TrimSpace(body)
+	if len(message) == 0 {
+		return fmt.Errorf("diarization service returned status %d", resp.StatusCode)
+	}
+	return fmt.Errorf("diarization service returned status %d: %s", resp.StatusCode, string(message))
 }

@@ -50,16 +50,30 @@ export function updateWorkflowNodes(workflowId: number | string, nodes: Workflow
 
 /* ── 执行 & 测试 ── */
 
-export function executeWorkflow(workflowId: number | string, payload: { input_text: string, audio_url?: string }) {
-  return request.post(`/api/admin/workflows/${workflowId}/execute`, payload)
+export function executeWorkflow(workflowId: number | string, payload: { input_text?: string, audio_url?: string } | FormData) {
+  return request.post(`/api/admin/workflows/${workflowId}/execute`, payload, payload instanceof FormData
+    ? {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 0,
+      }
+    : undefined)
 }
 
 export function cloneWorkflow(workflowId: number | string) {
   return request.post(`/api/admin/workflows/${workflowId}/clone`)
 }
 
-export function testNode(payload: { node_type: string, config: Record<string, unknown>, input_text: string }) {
-  return request.post('/api/admin/workflows/test-node', payload)
+export function testNode(payload: { node_type: string, config: Record<string, unknown>, input_text?: string, audio_url?: string } | FormData) {
+  return request.post('/api/admin/workflows/test-node', payload, payload instanceof FormData
+    ? {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 0,
+      }
+    : undefined)
 }
 
 export function getNodeTypes() {

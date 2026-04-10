@@ -11,7 +11,7 @@ import (
 func TestTestNodeRejectsSourceNodes(t *testing.T) {
 	engine := NewEngine(zap.NewNop())
 
-	result, err := engine.TestNode(context.Background(), domain.NodeBatchASR, []byte(`{}`), "示例文本")
+	result, err := engine.TestNode(context.Background(), domain.NodeBatchASR, []byte(`{}`), "示例文本", nil)
 	if err != nil {
 		t.Fatalf("TestNode returned error: %v", err)
 	}

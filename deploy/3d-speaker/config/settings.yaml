@@ -1,0 +1,75 @@
+# =============================================================================
+# 3D-Speaker 说话人分离服务配置
+# =============================================================================
+
+server:
+  host: "0.0.0.0"
+  port: 8100
+  workers: 1                      # Uvicorn worker 数量
+  max_upload_size_mb: 500         # 最大上传文件大小
+
+# ─── 模型配置 ───
+models:
+  # 说话人嵌入模型（二选一）
+  embedding:
+    # 默认使用 ERes2NetV2（精度更高）
+    model_id: "iic/speech_eres2netv2_sv_zh-cn_16k-common"
+    # 轻量替代: "iic/speech_campplus_sv_zh-cn_16k-common"
+    local_dir: "./models/eres2netv2"    # 离线模型路径
+    device: "cpu"                        # "cpu" 或 "cuda:0"
+    embedding_dim: 192                   # 嵌入向量维度
+
+  # VAD 模型
+  vad:
+    model_id: "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+    local_dir: "./models/fsmn_vad"
+    device: "cpu"
+
+# ─── 说话人分离配置 ───
+diarization:
+  # 聚类算法: "spectral" (< 30min, < 6人) 或 "umap_hdbscan" (长音频, 多人)
+  clustering_method: "spectral"
+  # 最小/最大说话人数（可选，不设则自动检测）
+  min_speakers: null
+  max_speakers: null
+  # 语音分段参数
+  segment_duration: 1.5              # 分段窗口长度（秒）
+  segment_step: 0.75                 # 分段步进（秒）
+  # 音频预处理
+  target_sample_rate: 16000
+  mono: true
+
+# ─── 声纹匹配配置 ───
+voiceprint:
+  # 声纹数据库
+  db_path: "./data/voiceprint.db"
+  # 嵌入向量存储目录
+  embeddings_dir: "./data/voiceprint_embeddings"
+  # 注册音频备份目录
+  enrollment_audio_dir: "./data/enrollment_audio"
+  # 匹配阈值（余弦相似度，0~1）
+  match_threshold: 0.68
+  # 高置信阈值（高于此值直接确认身份）
+  high_confidence_threshold: 0.82
+  # 每个说话人注册时，从其聚类片段中取最长 N 段计算代表性嵌入
+  representative_segments: 5
+  # 注册音频最低时长（秒）
+  min_enrollment_duration: 5.0
+  # 注册音频推荐时长（秒）
+  recommended_enrollment_duration: 15.0
+
+# ─── 日志配置 ───
+logging:
+  level: "INFO"                    # DEBUG / INFO / WARNING / ERROR
+  log_dir: "./logs"
+  max_file_size_mb: 50
+  retention_days: 30
+
+# ─── 存储配置 ───
+storage:
+  # 处理结果临时存储
+  temp_dir: "./data/temp"
+  # 分离结果存储
+  results_dir: "./data/results"
+  # 结果保留天数（0 = 永久）
+  retention_days: 90

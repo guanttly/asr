@@ -39,7 +39,7 @@ type NodeTestResult struct {
 }
 
 // TestNode executes a single node handler against sample input.
-func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config json.RawMessage, inputText string) (*NodeTestResult, error) {
+func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config json.RawMessage, inputText string, meta *ExecutionMeta) (*NodeTestResult, error) {
 	if nodeType.IsSource() {
 		return &NodeTestResult{
 			DurationMs: 0,
@@ -57,7 +57,7 @@ func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config 
 	}
 
 	start := time.Now()
-	outputText, detail, err := handler.Execute(ctx, config, inputText, nil)
+	outputText, detail, err := handler.Execute(ctx, config, inputText, meta)
 	durationMs := int(time.Since(start).Milliseconds())
 
 	result := &NodeTestResult{

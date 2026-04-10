@@ -39,15 +39,18 @@ type BatchUpdateNodesRequest struct {
 
 // TestNodeRequest is the request DTO for testing a single node.
 type TestNodeRequest struct {
-	NodeType  string          `json:"node_type" binding:"required"`
-	Config    json.RawMessage `json:"config" binding:"required"`
-	InputText string          `json:"input_text" binding:"required"`
+	NodeType      string          `json:"node_type" binding:"required"`
+	Config        json.RawMessage `json:"config" binding:"required"`
+	InputText     string          `json:"input_text"`
+	AudioURL      string          `json:"audio_url,omitempty"`
+	AudioFilePath string          `json:"-"`
 }
 
 // ExecuteWorkflowRequest is the request DTO for executing a workflow.
 type ExecuteWorkflowRequest struct {
-	InputText string `json:"input_text" binding:"required"`
-	AudioURL  string `json:"audio_url,omitempty"`
+	InputText     string `json:"input_text"`
+	AudioURL      string `json:"audio_url,omitempty"`
+	AudioFilePath string `json:"-"`
 }
 
 // ─── Response DTOs ──────────────────────────────────────

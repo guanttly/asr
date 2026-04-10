@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import soundfile as sf
@@ -538,56 +538,84 @@ def _parse_diarization_result(result) -> list[SpeakerSegment]:
       - result['text']: "0.32 3.15 spk_0\n3.52 8.10 spk_1\n..."
       - 或 result 本身是 dict/list 结构
     """
-    segments = []
+    segments: list[SpeakerSegment] = []
 
-    # 情况1：result 是字典且包含 'text' 键（最常见）
-    if isinstance(result, dict) and "text" in result:
-        text = result["text"]
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            if len(parts) >= 3:
-                try:
-                    start = float(parts[0])
-                    end = float(parts[1])
-                    speaker = parts[2]
-                    segments.append(SpeakerSegment(
-                        speaker=speaker,
-                        start=round(start, 3),
-                        end=round(end, 3),
-                        duration=round(end - start, 3),
-                    ))
-                except (ValueError, IndexError):
-                    continue
+    def _to_float(value: Any) -> Optional[float]:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
-    # 情况2：result 是列表
-    elif isinstance(result, list):
-        for item in result:
-            if isinstance(item, dict):
-                segments.append(SpeakerSegment(
-                    speaker=item.get("speaker", "unknown"),
-                    start=round(float(item.get("start", 0)), 3),
-                    end=round(float(item.get("end", 0)), 3),
-                    duration=round(
-                        float(item.get("end", 0)) - float(item.get("start", 0)),
-                        3,
-                    ),
-                ))
+    def _build_segment(speaker: Any, start: Any, end: Any) -> Optional[SpeakerSegment]:
+        start_value = _to_float(start)
+        end_value = _to_float(end)
+        if start_value is None or end_value is None:
+            return None
+        if end_value < start_value:
+            start_value, end_value = end_value, start_value
+        speaker_value = str(speaker or "unknown").strip() or "unknown"
+        return SpeakerSegment(
+            speaker=speaker_value,
+            start=round(start_value, 3),
+            end=round(end_value, 3),
+            duration=round(end_value - start_value, 3),
+        )
 
-    # 情况3：result 是字典但结构不同
-    elif isinstance(result, dict) and "segments" in result:
-        for seg in result["segments"]:
-            segments.append(SpeakerSegment(
-                speaker=seg.get("speaker", "unknown"),
-                start=round(float(seg.get("start", 0)), 3),
-                end=round(float(seg.get("end", 0)), 3),
-                duration=round(
-                    float(seg.get("end", 0)) - float(seg.get("start", 0)),
-                    3,
-                ),
-            ))
+    def _collect_from_line(text_line: str):
+        parts = text_line.split()
+        if len(parts) < 3:
+            return
+        segment = _build_segment(parts[2], parts[0], parts[1])
+        if segment is not None:
+            segments.append(segment)
+
+    def _collect(payload: Any):
+        if payload is None:
+            return
+
+        if isinstance(payload, str):
+            for line in payload.strip().splitlines():
+                line = line.strip()
+                if line:
+                    _collect_from_line(line)
+            return
+
+        if isinstance(payload, dict):
+            segment = _build_segment(
+                payload.get("speaker") or payload.get("spk") or payload.get("label") or payload.get("name"),
+                payload.get("start", payload.get("start_time", payload.get("begin", payload.get("begin_time")))),
+                payload.get("end", payload.get("end_time", payload.get("stop", payload.get("finish_time")))),
+            )
+            if segment is not None:
+                segments.append(segment)
+                return
+
+            for key in ("segments", "text", "value", "output", "result", "results", "prediction", "predictions"):
+                if key in payload:
+                    _collect(payload[key])
+            return
+
+        if isinstance(payload, (list, tuple)):
+            if len(payload) >= 3:
+                first, second, third = payload[0], payload[1], payload[2]
+                segment = None
+                if _to_float(first) is not None and _to_float(second) is not None:
+                    segment = _build_segment(third, first, second)
+                elif _to_float(second) is not None and _to_float(third) is not None:
+                    segment = _build_segment(first, second, third)
+                if segment is not None:
+                    segments.append(segment)
+                    return
+
+            for item in payload:
+                _collect(item)
+
+    _collect(result)
+
+    if not segments:
+        logger.warning("未能解析说话人分离结果", extra={"result_type": type(result).__name__})
 
     # 按时间排序
     segments.sort(key=lambda s: s.start)

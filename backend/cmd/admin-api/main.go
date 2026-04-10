@@ -150,7 +150,7 @@ func main() {
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
 	api.NewDashboardHandler(asrService, cfg.Services.ASRBatchSyncWarnThreshold, 6).Register(protected)
-	api.NewWorkflowHandler(workflowService).Register(protected)
+	api.NewWorkflowHandler(workflowService, asrService).Register(protected)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.AdminAPIPort)
 	logger.Info("admin-api listening", zap.String("addr", addr))

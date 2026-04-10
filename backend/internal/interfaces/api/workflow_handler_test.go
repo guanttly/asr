@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -85,7 +87,7 @@ func TestCreateWorkflowBindsSourceIDForUserRequest(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service)
+	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -154,7 +156,7 @@ func TestCreateWorkflowAsAdminDefaultsToUserWorkflow(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service)
+	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -203,7 +205,7 @@ func TestCreateWorkflowAsAdminCanExplicitlyCreateSystemWorkflow(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service)
+	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -247,7 +249,7 @@ func TestListWorkflowsAppliesFilterBeforePagination(t *testing.T) {
 		3: {{WorkflowID: 3, NodeType: domain.NodeBatchASR, Position: 1, Enabled: true}},
 	}}
 	service := appwf.NewService(repo, nodes, nil, nil, nil)
-	handler := NewWorkflowHandler(service)
+	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -283,5 +285,56 @@ func TestListWorkflowsAppliesFilterBeforePagination(t *testing.T) {
 	}
 	if envelope.Data.Items[0].ID != 2 {
 		t.Fatalf("expected first filtered workflow id=2, got %d", envelope.Data.Items[0].ID)
+	}
+}
+
+func TestSaveOptionalWorkflowAudioStoresMultipartFile(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("node_type", "speaker_diarize"); err != nil {
+		t.Fatalf("write node_type: %v", err)
+	}
+	if err := writer.WriteField("config", `{}`); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	part, err := writer.CreateFormFile("file", "sample.wav")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("RIFF0000WAVEfmt ")); err != nil {
+		t.Fatalf("write sample file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(http.MethodPost, "/workflows/test-node", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	ctx.Request = req
+
+	path, cleanup, err := saveOptionalWorkflowAudio(ctx, "workflow-test-node")
+	if err != nil {
+		t.Fatalf("saveOptionalWorkflowAudio returned error: %v", err)
+	}
+	defer cleanup()
+
+	if path == "" {
+		t.Fatal("expected temp audio path to be returned")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat saved file: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("expected saved audio file to contain data")
+	}
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected cleanup to remove temp file, got err=%v", err)
 	}
 }

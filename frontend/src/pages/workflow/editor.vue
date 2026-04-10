@@ -118,9 +118,12 @@ const sourceWorkflowName = ref('')
 const nodeTestInput = ref('')
 const nodeTestOutput = ref('')
 const nodeTestDetail = ref<Record<string, unknown> | string | null>(null)
+const nodeTestAudioInputRef = ref<HTMLInputElement | null>(null)
+const nodeTestAudioFile = ref<File | null>(null)
 const executeInput = ref('')
 const executeOutput = ref('')
-const executeAudioUrl = ref('')
+const executeAudioInputRef = ref<HTMLInputElement | null>(null)
+const executeAudioFile = ref<File | null>(null)
 const executeResult = ref<WorkflowExecutionResult | null>(null)
 const workflow = reactive({
   name: '',
@@ -214,6 +217,7 @@ const selectedNodeHasDraftChanges = computed(() => {
     || normalizeConfigForCompare(selectedNode.value.configText) !== normalizeConfigForCompare(nodeDraft.configText)
 })
 let highlightTimer: ReturnType<typeof setTimeout> | null = null
+const audioFileAccept = 'audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm'
 
 function prettyJSON(value: unknown) {
   return JSON.stringify(value, null, 2)
@@ -454,6 +458,43 @@ function formatExecutionStatus(value?: string) {
   }
   return map[value || ''] || value || '-'
 }
+
+function isAudioDrivenNodeType(type?: string | null) {
+  return type === 'batch_asr' || type === 'realtime_asr' || type === 'speaker_diarize'
+}
+
+function formatFileSize(size?: number) {
+  if (!size)
+    return '0 B'
+  if (size < 1024)
+    return `${size} B`
+  if (size < 1024 * 1024)
+    return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+const selectedNodeNeedsAudio = computed(() => isAudioDrivenNodeType(selectedNode.value?.node_type))
+const firstEnabledNode = computed(() => nodes.value.find(item => item.enabled) || null)
+const workflowNeedsAudio = computed(() => isAudioDrivenNodeType(firstEnabledNode.value?.node_type))
+const nodeTestInputPreview = computed(() => selectedNodeNeedsAudio.value
+  ? (nodeTestAudioFile.value ? `已上传音频：${nodeTestAudioFile.value.name}` : '尚未选择音频文件')
+  : nodeTestInput.value)
+const nodeTestHint = computed(() => {
+  if (!selectedNode.value)
+    return ''
+  if (selectedNode.value.node_type === 'speaker_diarize')
+    return '上传音频后会直接调用说话人分离服务，并返回当前节点输出。'
+  if (selectedNode.value.node_type === 'batch_asr' || selectedNode.value.node_type === 'realtime_asr')
+    return '上传音频后会先做一次短音频识别，返回当前源节点的识别结果。'
+  return '输入样本文本，验证当前节点输出。'
+})
+const workflowTestHint = computed(() => {
+  if (!workflowNeedsAudio.value)
+    return '输入整条工作流测试文本。'
+  if (firstEnabledNode.value?.node_type === 'speaker_diarize')
+    return '首个节点依赖音频输入，执行时会上传音频并直接进入工作流。'
+  return '首个节点是音频源，执行时会先识别音频，再串行执行后续工作流。'
+})
 
 function workflowTypeLabel(value?: typeof workflow.workflow_type) {
   const map: Record<string, string> = {
@@ -1022,18 +1063,59 @@ function handleCancelCurrentNodeChanges() {
   message.info('已撤销当前节点的未保存修改')
 }
 
+function openNodeTestAudioPicker() {
+  nodeTestAudioInputRef.value?.click()
+}
+
+function clearNodeTestAudioFile() {
+  nodeTestAudioFile.value = null
+}
+
+function handleNodeTestAudioSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  nodeTestAudioFile.value = input.files?.[0] || null
+  input.value = ''
+}
+
+function openExecuteAudioPicker() {
+  executeAudioInputRef.value?.click()
+}
+
+function clearExecuteAudioFile() {
+  executeAudioFile.value = null
+}
+
+function handleExecuteAudioSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  executeAudioFile.value = input.files?.[0] || null
+  input.value = ''
+}
+
 async function handleTestNode() {
   if (!selectedNode.value) {
     message.warning('请先选择一个节点')
     return
   }
+  if (selectedNodeNeedsAudio.value && !nodeTestAudioFile.value) {
+    message.warning('请先上传音频文件')
+    return
+  }
   testingNode.value = true
   try {
-    const result = await testNode({
-      node_type: selectedNode.value.node_type,
-      config: parseConfig(nodeDraft.configText),
-      input_text: nodeTestInput.value,
-    })
+    const payload = selectedNodeNeedsAudio.value
+      ? (() => {
+          const formData = new FormData()
+          formData.append('node_type', selectedNode.value!.node_type)
+          formData.append('config', JSON.stringify(parseConfig(nodeDraft.configText)))
+          formData.append('file', nodeTestAudioFile.value!)
+          return formData
+        })()
+      : {
+          node_type: selectedNode.value.node_type,
+          config: parseConfig(nodeDraft.configText),
+          input_text: nodeTestInput.value,
+        }
+    const result = await testNode(payload)
     nodeTestOutput.value = result.data.output_text || ''
     nodeTestDetail.value = result.data.detail ?? result.data.error ?? null
   }
@@ -1051,19 +1133,30 @@ async function handleExecuteWorkflow() {
   const ok = await handleSave(false)
   if (!ok)
     return
+  if (workflowNeedsAudio.value && !executeAudioFile.value) {
+    message.warning('请先上传音频文件')
+    return
+  }
 
   executing.value = true
   executeResult.value = null
   try {
-    const result = await executeWorkflow(workflowId.value, {
-      input_text: executeInput.value,
-      audio_url: executeAudioUrl.value || undefined,
-    })
+    const payload = workflowNeedsAudio.value
+      ? (() => {
+          const formData = new FormData()
+          formData.append('file', executeAudioFile.value!)
+          return formData
+        })()
+      : {
+          input_text: executeInput.value,
+        }
+    const result = await executeWorkflow(workflowId.value, payload)
     executeOutput.value = result.data.final_text || ''
     executeResult.value = result.data
     message.success(result.data.status === 'failed' ? '工作流执行完成，但有节点失败' : '工作流执行完成')
   }
   catch {
+    executeOutput.value = ''
     executeResult.value = null
     message.error('工作流执行失败')
   }
@@ -1577,14 +1670,39 @@ watch(selectedIndex, () => {
                 <div class="text-sm font-600 text-ink">
                   单节点测试
                 </div>
-                <NInput v-model:value="nodeTestInput" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入样本文本，验证当前节点输出。" />
+                <div class="text-xs leading-6 text-slate/70">
+                  {{ nodeTestHint }}
+                </div>
+                <template v-if="selectedNodeNeedsAudio">
+                  <div class="rounded-2 bg-white p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div class="text-sm font-600 text-ink">
+                          测试音频
+                        </div>
+                        <div class="text-xs text-slate/60">
+                          {{ nodeTestAudioFile ? `${nodeTestAudioFile.name} · ${formatFileSize(nodeTestAudioFile.size)}` : '支持 WAV、MP3、M4A、AAC、FLAC、OGG、OPUS、WEBM。' }}
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <NButton size="small" @click="openNodeTestAudioPicker">
+                          {{ nodeTestAudioFile ? '重新选择' : '上传音频' }}
+                        </NButton>
+                        <NButton v-if="nodeTestAudioFile" size="small" quaternary @click="clearNodeTestAudioFile">
+                          清空
+                        </NButton>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <NInput v-else v-model:value="nodeTestInput" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入样本文本，验证当前节点输出。" />
                 <div class="flex justify-end">
                   <NButton size="small" type="primary" color="#0f766e" :loading="testingNode" @click="handleTestNode">
                     测试当前节点
                   </NButton>
                 </div>
                 <div class="grid gap-3 lg:grid-cols-2">
-                  <TextDiffPreview :before-text="nodeTestInput" :after-text="nodeTestOutput" before-label="测试输入" after-label="节点输出" />
+                  <TextDiffPreview :before-text="nodeTestInputPreview" :after-text="nodeTestOutput" :before-label="selectedNodeNeedsAudio ? '上传音频' : '测试输入'" after-label="节点输出" />
                   <div class="rounded-2 bg-white p-3">
                     <div class="text-xs text-slate/70">
                       Detail
@@ -1606,8 +1724,32 @@ watch(selectedIndex, () => {
               <span class="text-sm font-600">整条工作流测试</span>
             </template>
             <div class="flex min-h-0 flex-1 flex-col gap-3">
-              <NInput v-model:value="executeInput" type="textarea" :autosize="{ minRows: 9, maxRows: 14 }" placeholder="输入整条工作流测试文本。" />
-              <NInput v-model:value="executeAudioUrl" placeholder="可选：音频 URL，供说话人分离节点使用" />
+              <div class="text-xs leading-6 text-slate/70">
+                {{ workflowTestHint }}
+              </div>
+              <template v-if="workflowNeedsAudio">
+                <div class="rounded-2 bg-white p-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div class="text-sm font-600 text-ink">
+                        工作流输入音频
+                      </div>
+                      <div class="text-xs text-slate/60">
+                        {{ executeAudioFile ? `${executeAudioFile.name} · ${formatFileSize(executeAudioFile.size)}` : '根据首节点自动切换为音频输入模式。' }}
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <NButton size="small" @click="openExecuteAudioPicker">
+                        {{ executeAudioFile ? '重新选择' : '上传音频' }}
+                      </NButton>
+                      <NButton v-if="executeAudioFile" size="small" quaternary @click="clearExecuteAudioFile">
+                        清空
+                      </NButton>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <NInput v-else v-model:value="executeInput" type="textarea" :autosize="{ minRows: 9, maxRows: 14 }" placeholder="输入整条工作流测试文本。" />
               <div class="flex justify-end">
                 <NButton type="primary" color="#0f766e" :loading="executing" @click="handleExecuteWorkflow">
                   保存并执行
@@ -1670,5 +1812,20 @@ watch(selectedIndex, () => {
         </div>
       </div>
     </NModal>
+
+    <input
+      ref="nodeTestAudioInputRef"
+      type="file"
+      :accept="audioFileAccept"
+      class="hidden"
+      @change="handleNodeTestAudioSelected"
+    >
+    <input
+      ref="executeAudioInputRef"
+      type="file"
+      :accept="audioFileAccept"
+      class="hidden"
+      @change="handleExecuteAudioSelected"
+    >
   </div>
 </template>

@@ -49,6 +49,24 @@ chmod +x build.sh
 ./build.sh test /path/to/meeting.wav
 ```
 
+默认镜像固定使用 CUDA 12.4 对应的 PyTorch 轮子，目的是避免 `pip install torch` 随时间拉到过新的版本，导致容器内 CUDA 运行时高于宿主机驱动能力。
+
+如果目标机器驱动偏老，优先处理顺序如下：
+
+1. 升级宿主机 NVIDIA 驱动。
+2. 如果驱动暂时不能升级，则在构建时改用更低版本的 PyTorch CUDA 轮子。
+3. 如果只追求稳定可用，直接按 CPU 模式部署。
+
+示例：显式指定 PyTorch 版本/轮子源构建
+
+```bash
+docker build \
+  --build-arg TORCH_VERSION=2.5.1 \
+  --build-arg TORCHAUDIO_VERSION=2.5.1 \
+  --build-arg PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 \
+  -t speaker-diarization:1.0.0 .
+```
+
 ---
 
 ## API 接口
@@ -141,6 +159,7 @@ curl -X POST http://localhost:8080/diarize \
 
 ## 注意事项
 
+- 如果日志里出现 “The NVIDIA driver on your system is too old”，含义通常不是模型有问题，而是容器内 PyTorch 对应的 CUDA 版本高于宿主机驱动所支持的版本。
 - 首次启动需 60-120 秒加载模型，后续请求响应在秒级
 - 音频会自动转为 16kHz 单声道 WAV（需容器内有 ffmpeg）
 - 支持格式：WAV、MP3、M4A、AAC、FLAC、OGG

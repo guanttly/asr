@@ -1,0 +1,2 @@
+# 模型权重存放目录
+# 使用 scripts/download_models.sh 或 build.sh --download-models 下载

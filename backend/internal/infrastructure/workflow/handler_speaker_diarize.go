@@ -15,7 +15,7 @@ type SpeakerDiarizeConfig struct {
 }
 
 // SpeakerDiarizeHandler calls an external diarization service and merges
-// speaker labels into the text. This node requires audio URL from ExecutionMeta.
+// speaker labels into the text. This node requires audio context from ExecutionMeta.
 type SpeakerDiarizeHandler struct {
 	defaultClient *diarization.Client
 }
@@ -36,9 +36,9 @@ func (h *SpeakerDiarizeHandler) Validate(config json.RawMessage) error {
 }
 
 func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, meta *ExecutionMeta) (string, json.RawMessage, error) {
-	if meta == nil || meta.AudioURL == "" {
-		// Cannot perform diarization without audio URL; pass through text
-		detail, _ := json.Marshal(map[string]string{"warning": "no audio_url in execution context, skipping diarization"})
+	if meta == nil || (meta.AudioURL == "" && meta.AudioFilePath == "") {
+		// Cannot perform diarization without audio context; pass through text
+		detail, _ := json.Marshal(map[string]string{"warning": "no audio context in execution context, skipping diarization"})
 		return inputText, detail, nil
 	}
 
@@ -55,7 +55,13 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 		return inputText, nil, fmt.Errorf("no diarization service configured")
 	}
 
-	segments, err := client.Analyze(ctx, meta.AudioURL)
+	var segments []diarization.Segment
+	var err error
+	if meta.AudioFilePath != "" {
+		segments, err = client.AnalyzeFile(ctx, meta.AudioFilePath)
+	} else {
+		segments, err = client.Analyze(ctx, meta.AudioURL)
+	}
 	if err != nil {
 		return inputText, nil, fmt.Errorf("diarization failed: %w", err)
 	}

@@ -59,7 +59,7 @@ speaker-diarization-service/
 │   └── utils.py                # 工具函数（音频预处理等）
 ├── scripts/
 │   ├── download_models.sh      # 模型权重离线下载
-│   ├── install_speakerlab.sh   # 原生 3D-Speaker 依赖安装
+│   ├── install_speakerlab.sh   # 注册 wheel/源码并补齐原生依赖
 │   └── init_db.py              # 数据库初始化
 ├── tests/
 │   ├── test_diarization.py     # 分离功能测试
@@ -95,6 +95,16 @@ make serve
 ```
 
 和 cam++ 一样，这套脚本统一使用 build / export / import / start / stop / test / logs 命令；不再使用旧的参数式构建入口。
+
+`make init` 会优先安装 `wheels/` 下的 `speakerlab-*.whl`；如果没有 wheel，则自动拉取 3D-Speaker 源码并通过 `.pth` 注册到当前 Python 环境。
+
+基础 `requirements.txt` 还会一并安装 ModelScope pipeline 所需依赖，因此 FSMN-VAD 和 speakerlab 原生推理不再依赖运行时临时补包。
+
+完全离线的裸机场景如果没有 wheel，需要先准备一份 3D-Speaker 源码目录，然后执行：
+
+```bash
+SPEAKERLAB_SOURCE=/path/to/3D-Speaker make init
+```
 
 ## 模型说明
 

@@ -64,6 +64,10 @@ make init
 make serve
 ```
 
+说明：`make init` 会优先使用 `wheels/` 下的离线 wheel；若 wheel 不存在，则自动拉取 3D-Speaker 源码并注册到当前 Python 环境。完全离线且不使用 wheel 时，可先准备源码目录，再执行 `SPEAKERLAB_SOURCE=/path/to/3D-Speaker make init`。
+
+说明：基础依赖里已包含 ModelScope pipeline 的运行时依赖，FSMN-VAD 与 speakerlab 原生音频分离无需在首次请求时再动态补装 Python 包。
+
 ### 方式三：GPU 加速
 
 修改 `config/settings.yaml`:

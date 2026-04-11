@@ -2,9 +2,18 @@
 torch>=2.0.0,<2.5.0
 torchaudio>=2.0.0,<2.5.0
 modelscope>=1.10.0
-# 3D-Speaker 工具包（从源码安装或本地路径）
-# pip install git+https://github.com/modelscope/3D-Speaker.git
-# 离线部署时使用本地 wheel: pip install ./wheels/speakerlab-*.whl
+# ModelScope pipeline 运行时依赖（VAD / speakerlab 原生推理都需要）
+addict>=2.4.0
+attrs>=23.0.0
+datasets>=4.0.0,<=4.8.4
+einops>=0.7.0
+pillow>=10.0.0
+python-dateutil>=2.1
+simplejson>=3.3.0
+sortedcontainers>=1.5.9
+transformers>=4.40.0
+# 3D-Speaker 源码 / wheel 由 scripts/install_speakerlab.sh 处理
+# 优先使用本地 wheel，其次注册源码树并补齐原生运行依赖
 
 # ─── 音频处理 ───
 soundfile>=0.12.0

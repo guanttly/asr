@@ -28,6 +28,11 @@ DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-mirrors.aliyun.com}"
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SPEAKERLAB_VENDOR_DIR="${WORKSPACE_DIR}/vendor/3D-Speaker"
+SPEAKERLAB_REPO="${SPEAKERLAB_REPO:-https://github.com/modelscope/3D-Speaker.git}"
+SPEAKERLAB_REF="${SPEAKERLAB_REF:-main}"
+SPEAKERLAB_CLONE_IMAGE="${SPEAKERLAB_CLONE_IMAGE:-alpine/git:latest}"
+SPEAKERLAB_CLONE_RETRIES="${SPEAKERLAB_CLONE_RETRIES:-3}"
 
 # 终端输出颜色。
 GREEN='\033[0;32m'
@@ -44,6 +49,72 @@ require_docker() {
         error "未检测到 Docker，无法使用容器模式下载模型"
         exit 1
     fi
+}
+
+speakerlab_wheel_present() {
+    compgen -G "${WORKSPACE_DIR}/wheels/speakerlab-*.whl" >/dev/null
+}
+
+speakerlab_source_ready() {
+    [ -d "${SPEAKERLAB_VENDOR_DIR}/speakerlab" ]
+}
+
+clone_speakerlab_with_git() {
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${SPEAKERLAB_REF}" "${SPEAKERLAB_REPO}" "${SPEAKERLAB_VENDOR_DIR}"
+}
+
+clone_speakerlab_with_docker() {
+    require_docker
+    info "宿主机未检测到 git，使用容器拉取源码: ${SPEAKERLAB_CLONE_IMAGE}"
+    docker pull "${SPEAKERLAB_CLONE_IMAGE}"
+    docker run --rm \
+        -v "${WORKSPACE_DIR}:/workspace" \
+        -w /workspace \
+        "${SPEAKERLAB_CLONE_IMAGE}" \
+        clone --depth 1 --branch "${SPEAKERLAB_REF}" "${SPEAKERLAB_REPO}" "vendor/3D-Speaker"
+}
+
+ensure_speakerlab_source() {
+    local attempt=1
+
+    if speakerlab_wheel_present; then
+        info "检测到本地 speakerlab wheel，跳过源码预拉取"
+        return
+    fi
+
+    if speakerlab_source_ready; then
+        info "检测到本地 3D-Speaker 源码缓存: ${SPEAKERLAB_VENDOR_DIR}"
+        return
+    fi
+
+    mkdir -p "$(dirname "${SPEAKERLAB_VENDOR_DIR}")"
+    while [ "${attempt}" -le "${SPEAKERLAB_CLONE_RETRIES}" ]; do
+        info "预拉取 3D-Speaker 源码到本地缓存 [${attempt}/${SPEAKERLAB_CLONE_RETRIES}]"
+        rm -rf "${SPEAKERLAB_VENDOR_DIR}"
+
+        if command -v git >/dev/null 2>&1; then
+            if clone_speakerlab_with_git; then
+                break
+            fi
+        else
+            if clone_speakerlab_with_docker; then
+                break
+            fi
+        fi
+
+        if [ "${attempt}" -lt "${SPEAKERLAB_CLONE_RETRIES}" ]; then
+            warn "3D-Speaker 源码拉取失败，2 秒后重试"
+            sleep 2
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    if ! speakerlab_source_ready; then
+        error "3D-Speaker 源码预拉取失败，请检查网络，或提前将源码放到 ${SPEAKERLAB_VENDOR_DIR}"
+        exit 1
+    fi
+
+    info "3D-Speaker 源码已缓存: ${SPEAKERLAB_VENDOR_DIR}"
 }
 
 # 兼容 docker compose 与 legacy docker-compose 两种命令形态。
@@ -73,12 +144,51 @@ compose() {
     exit 1
 }
 
+detect_device_from_compose() {
+    local compose_output
+
+    compose_output="$(compose config 2>/dev/null || true)"
+    if [ -z "${compose_output}" ]; then
+        return 1
+    fi
+
+    printf '%s\n' "${compose_output}" | awk '
+        /^[[:space:]]+environment:$/ {
+            in_env = 1
+            next
+        }
+        in_env && /^[[:space:]]+[A-Za-z0-9_]+:/ {
+            key = $1
+            sub(/:$/, "", key)
+            if (key == "DEVICE") {
+                value = $2
+                gsub(/"/, "", value)
+                print value
+                exit
+            }
+            next
+        }
+        in_env && /^[^[:space:]]/ {
+            in_env = 0
+        }
+    '
+}
+
 # 读取目标设备；默认按 CPU 模式运行。
 detect_device() {
-    if [ -n "${DEVICE}" ]; then
+    local compose_device
+
+    if [ -n "${DEVICE:-}" ]; then
         echo "${DEVICE}"
         return
     fi
+
+    compose_device="$(detect_device_from_compose || true)"
+    if [ -n "${compose_device}" ]; then
+        echo "${compose_device}"
+        return
+    fi
+
     echo "cpu"
 }
 
@@ -215,8 +325,9 @@ download-models-docker)
 # 联网环境：基于根目录 Dockerfile 构建服务镜像。
 build)
     check_models
+    ensure_speakerlab_source
     info "开始构建 Docker 镜像: ${FULL_IMAGE}"
-    docker build -t "${FULL_IMAGE}" .
+    DOCKER_BUILDKIT=1 docker build -t "${FULL_IMAGE}" .
     docker tag "${FULL_IMAGE}" "${IMAGE_NAME}:latest"
     info "镜像构建完成: ${FULL_IMAGE}"
     docker images | grep "${IMAGE_NAME}"
@@ -301,7 +412,7 @@ logs)
     echo "命令（联网环境）:"
     echo "  download-models  下载模型权重到 models/"
     echo "  download-models-docker  通过 Docker 拉取辅助镜像下载模型（无需宿主机 Python）"
-    echo "  build            构建 Docker 镜像"
+    echo "  build            构建 Docker 镜像（自动缓存 3D-Speaker 源码与 pip 下载）"
     echo "  export           导出镜像为 tar.gz 文件"
     echo ""
     echo "命令（离线环境）:"

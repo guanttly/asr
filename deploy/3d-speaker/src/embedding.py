@@ -63,23 +63,36 @@ class EmbeddingExtractor:
         from speakerlab.process.processor import FBank
         from speakerlab.utils.builder import dynamic_import
 
-        # 根据 model_id 确定架构
-        if "eres2netv2" in self.model_id:
-            model_cls = dynamic_import("speakerlab.models.eres2netv2.ERes2NetV2")
-            self._feature_extractor = FBank(80, sample_rate=16000, mean_nor=True)
-        elif "campplus" in self.model_id:
-            model_cls = dynamic_import("speakerlab.models.campplus.CAMPPlus")
-            self._feature_extractor = FBank(80, sample_rate=16000, mean_nor=True)
-        else:
-            raise ValueError(f"不支持的模型: {self.model_id}")
+        import_path, model_kwargs = self._resolve_speakerlab_model_spec()
+        model_cls = dynamic_import(import_path)
+        self._feature_extractor = FBank(80, sample_rate=16000, mean_nor=True)
 
         # 加载权重
         model_path = self._resolve_model_path()
-        self._model = model_cls()
+        self._model = model_cls(**model_kwargs)
         state_dict = torch.load(model_path, map_location=self.device)
         self._model.load_state_dict(state_dict)
         self._model.to(self.device)
         self._model.eval()
+
+    def _resolve_speakerlab_model_spec(self) -> tuple[str, dict[str, int]]:
+        """根据 ModelScope ID 映射到 speakerlab 内部模型定义。"""
+        if "eres2netv2" in self.model_id:
+            return (
+                "speakerlab.models.eres2net.ERes2NetV2.ERes2NetV2",
+                {"feat_dim": 80, "embedding_size": self.embedding_dim},
+            )
+        if "eres2net" in self.model_id:
+            return (
+                "speakerlab.models.eres2net.ERes2Net_huge.ERes2Net",
+                {"feat_dim": 80, "embedding_size": self.embedding_dim},
+            )
+        if "campplus" in self.model_id:
+            return (
+                "speakerlab.models.campplus.DTDNN.CAMPPlus",
+                {"feat_dim": 80, "embedding_size": self.embedding_dim},
+            )
+        raise ValueError(f"不支持的模型: {self.model_id}")
 
     def _load_via_modelscope(self) -> None:
         """通过 ModelScope Pipeline 加载（兼容方案）"""
@@ -99,8 +112,8 @@ class EmbeddingExtractor:
     def _resolve_model_path(self) -> str:
         """查找本地模型权重文件"""
         if self.local_dir and os.path.isdir(self.local_dir):
-            # 查找 .pt / .bin / .pth 文件
-            for ext in [".pt", ".bin", ".pth"]:
+            # 查找 .pt / .bin / .pth / .ckpt 文件
+            for ext in [".pt", ".bin", ".pth", ".ckpt"]:
                 for f in Path(self.local_dir).rglob(f"*{ext}"):
                     return str(f)
         raise FileNotFoundError(

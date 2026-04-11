@@ -1,0 +1,1 @@
+# Keep vendor/ in the Docker build context.

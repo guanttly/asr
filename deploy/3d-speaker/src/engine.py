@@ -68,9 +68,13 @@ class DiarizationEngine:
     def _check_native(self) -> bool:
         """检查 3D-Speaker 原生分离流水线是否可用"""
         try:
-            from speakerlab.bin.infer_diarization import main as _
-            return True
-        except ImportError:
+            from src.speakerlab_entry import can_run_native_pipeline
+
+            if can_run_native_pipeline():
+                return True
+        except Exception:
+            pass
+
             logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
             return False
 
@@ -205,7 +209,7 @@ class DiarizationEngine:
         out_dir = tempfile.mkdtemp(prefix="diar_")
 
         cmd = [
-            "python", "-m", "speakerlab.bin.infer_diarization",
+            "python", "-m", "src.speakerlab_entry",
             "--wav", audio_path,
             "--out_dir", out_dir,
         ]

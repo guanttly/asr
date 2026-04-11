@@ -30,7 +30,7 @@ const (
 
 // SummaryWorkflowExecutor runs a workflow against meeting transcript text.
 type SummaryWorkflowExecutor interface {
-	ExecuteMeetingSummaryWorkflow(ctx context.Context, workflowID, meetingID, userID uint64, inputText, audioURL string) (*appwf.ExecutionResponse, error)
+	ExecuteMeetingSummaryWorkflow(ctx context.Context, workflowID, meetingID, userID uint64, inputText, audioURL, audioFilePath string) (*appwf.ExecutionResponse, error)
 }
 
 // BatchEngine submits and queries long-running ASR jobs for meetings.
@@ -314,7 +314,7 @@ func (s *Service) RegenerateSummary(ctx context.Context, meetingID uint64, userI
 	}
 
 	inputText := buildSummaryInput(transcripts)
-	exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, inputText, meeting.AudioURL)
+	exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, inputText, meeting.AudioURL, meeting.LocalFilePath)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +515,7 @@ func (s *Service) finalizeCompletedMeeting(ctx context.Context, meeting *domain.
 		if s.workflowExec == nil {
 			return false, fmt.Errorf("workflow executor unavailable")
 		}
-		exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, text, meeting.AudioURL)
+		exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, text, meeting.AudioURL, meeting.LocalFilePath)
 		if err != nil {
 			return false, err
 		}

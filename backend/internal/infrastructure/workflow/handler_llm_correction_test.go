@@ -23,9 +23,9 @@ func TestNormalizeOpenAIChatEndpoint(t *testing.T) {
 			want:  "http://127.0.0.1:8000/v1/chat/completions",
 		},
 		{
-			name:    "base url with v1 is rejected",
-			input:   "http://127.0.0.1:8000/v1",
-			wantErr: "do not end with /v1",
+			name:  "base url with v1 suffix",
+			input: "http://127.0.0.1:8000/v1",
+			want:  "http://127.0.0.1:8000/v1/chat/completions",
 		},
 		{
 			name:  "full chat completions url",
@@ -33,9 +33,14 @@ func TestNormalizeOpenAIChatEndpoint(t *testing.T) {
 			want:  "http://127.0.0.1:8000/v1/chat/completions",
 		},
 		{
-			name:    "trailing slash with v1 is rejected",
-			input:   "http://127.0.0.1:8000/v1/",
-			wantErr: "do not end with /v1",
+			name:  "dashscope compatible mode base url",
+			input: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			want:  "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+		},
+		{
+			name:  "dashscope compatible mode root",
+			input: "https://dashscope.aliyuncs.com/compatible-mode",
+			want:  "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 		},
 	}
 

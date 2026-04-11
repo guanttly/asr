@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appterm "github.com/lgt/asr/internal/application/terminology"
@@ -116,6 +117,7 @@ func main() {
 	summarizer := nlpengine.NewSummarizer(cfg.Services.SummaryModel)
 	postProcessor := postprocess.NewBatchMeetingProcessor(meetingRepo, transcriptRepo, summaryRepo, corrector, summarizer)
 	asrService := appasr.NewService(persistence.NewTaskRepo(db), &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, nil)
+	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 
 	// Initialize workflow engine and handlers
 	engine := wfengine.NewEngine(logger)

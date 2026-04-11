@@ -11,13 +11,14 @@ import (
 
 // CreateTaskRequest is the DTO for creating a new transcription task.
 type CreateTaskRequest struct {
-	AudioURL      string          `json:"audio_url"`
-	LocalFilePath string          `json:"-"`
-	Type          domain.TaskType `json:"type" binding:"required,oneof=realtime batch"`
-	DictID        *uint64         `json:"dict_id"`
-	WorkflowID    *uint64         `json:"workflow_id"`
-	ResultText    string          `json:"result_text"`
-	Duration      float64         `json:"duration"`
+	AudioURL        string          `json:"audio_url"`
+	StreamSessionID string          `json:"stream_session_id,omitempty"`
+	LocalFilePath   string          `json:"-"`
+	Type            domain.TaskType `json:"type" binding:"required,oneof=realtime batch"`
+	DictID          *uint64         `json:"dict_id"`
+	WorkflowID      *uint64         `json:"workflow_id"`
+	ResultText      string          `json:"result_text"`
+	Duration        float64         `json:"duration"`
 }
 
 // TranscribeSnippetRequest is the DTO for one-shot short-segment recognition.
@@ -31,6 +32,26 @@ type TranscribeSnippetResponse struct {
 	Status   string  `json:"status"`
 	Text     string  `json:"text"`
 	Duration float64 `json:"duration"`
+}
+
+// PushStreamChunkRequest is the DTO for pushing one PCM chunk into a streaming session.
+type PushStreamChunkRequest struct {
+	SessionID string `json:"session_id"`
+	PCMData   []byte `json:"-"`
+}
+
+// StreamSessionResponse reports the backend-managed upstream streaming session id.
+type StreamSessionResponse struct {
+	SessionID string `json:"session_id"`
+}
+
+// StreamChunkResponse is the normalized incremental/final streaming ASR result.
+type StreamChunkResponse struct {
+	SessionID string `json:"session_id,omitempty"`
+	Language  string `json:"language,omitempty"`
+	Text      string `json:"text"`
+	TextDelta string `json:"text_delta,omitempty"`
+	IsFinal   bool   `json:"is_final,omitempty"`
 }
 
 // TaskResponse is the DTO returned to clients.

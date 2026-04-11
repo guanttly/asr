@@ -24,6 +24,10 @@ IMAGE_TAG="1.1.0"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 EXPORT_FILE="speaker-analysis-service-offline.tar.gz"
 MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
+DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-mirrors.aliyun.com}"
+WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 终端输出颜色。
 GREEN='\033[0;32m'
@@ -34,6 +38,13 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+require_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        error "未检测到 Docker，无法使用容器模式下载模型"
+        exit 1
+    fi
+}
 
 # 兼容 docker compose 与 legacy docker-compose 两种命令形态。
 compose_version() {
@@ -131,11 +142,74 @@ check_gpu_readiness() {
     fi
 }
 
+download_models_locally() {
+    info "使用宿主机 Python 下载模型..."
+    bash scripts/download_models.sh
+}
+
+can_download_models_locally() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 1
+    fi
+    if python3 -c "import modelscope" >/dev/null 2>&1; then
+        return 0
+    fi
+    if python3 -m pip --version >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+download_models_via_docker() {
+    require_docker
+    info "使用容器模式下载模型，不依赖宿主机 Python"
+    info "拉取辅助镜像: ${DOWNLOAD_IMAGE}"
+    docker pull "${DOWNLOAD_IMAGE}"
+    docker run --rm \
+        -e PYTHON_BIN=python3 \
+        -e PIP_INDEX_URL="${PIP_INDEX_URL}" \
+        -e PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+        -v "${WORKSPACE_DIR}:/workspace" \
+        -w /workspace \
+        "${DOWNLOAD_IMAGE}" \
+        sh ./scripts/download_models.sh
+}
+
+download_models() {
+    MODE="${DOWNLOAD_MODE:-auto}"
+    case "${MODE}" in
+        local)
+            download_models_locally
+            ;;
+        docker)
+            download_models_via_docker
+            ;;
+        auto)
+            if can_download_models_locally; then
+                download_models_locally
+            else
+                warn "宿主机缺少可用的 Python/modelscope/pip 运行环境，自动切换到容器模式"
+                download_models_via_docker
+            fi
+            ;;
+        *)
+            error "未知 DOWNLOAD_MODE=${MODE}，可选值: auto / local / docker"
+            exit 1
+            ;;
+    esac
+}
+
 case "${1}" in
 # 联网环境：下载模型权重到本地 models/ 目录。
 download-models)
     info "下载模型权重..."
-    bash scripts/download_models.sh
+    download_models
+    ;;
+
+# 联网环境：强制使用 Docker 容器下载模型，不依赖宿主机 Python。
+download-models-docker)
+    info "下载模型权重（容器模式）..."
+    download_models_via_docker
     ;;
 
 # 联网环境：基于根目录 Dockerfile 构建服务镜像。
@@ -226,6 +300,7 @@ logs)
     echo ""
     echo "命令（联网环境）:"
     echo "  download-models  下载模型权重到 models/"
+    echo "  download-models-docker  通过 Docker 拉取辅助镜像下载模型（无需宿主机 Python）"
     echo "  build            构建 Docker 镜像"
     echo "  export           导出镜像为 tar.gz 文件"
     echo ""

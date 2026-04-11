@@ -18,6 +18,10 @@ import (
 type Service struct {
 	taskRepo          domain.TaskRepository
 	batchSubmitter    BatchEngine
+	streamingEngine   StreamingEngine
+	streamSessions    sync.Map
+	streamSessionTTL  time.Duration
+	streamSessionIDFn func() string
 	postProcessor     CompletedTaskProcessor
 	retryHistoryLimit int
 	inflightTasks     sync.Map
@@ -39,6 +43,13 @@ type CompletedTaskProcessor interface {
 type BatchEngine interface {
 	SubmitBatch(ctx context.Context, req BatchSubmitRequest) (*BatchSubmitResult, error)
 	QueryBatchTask(ctx context.Context, taskID string) (*BatchTaskStatus, error)
+}
+
+// StreamingEngine describes the upstream streaming ASR contract.
+type StreamingEngine interface {
+	StartStreamSession(ctx context.Context) (string, error)
+	PushStreamChunk(ctx context.Context, sessionID string, pcmData []byte) (*StreamChunkResponse, error)
+	FinishStreamSession(ctx context.Context, sessionID string) (*StreamChunkResponse, error)
 }
 
 // BatchSubmitRequest is the application-level payload sent to the ASR engine.
@@ -108,7 +119,19 @@ func NewService(taskRepo domain.TaskRepository, batchSubmitter BatchEngine, post
 	if retryHistoryLimit <= 0 {
 		retryHistoryLimit = 5
 	}
-	return &Service{taskRepo: taskRepo, batchSubmitter: batchSubmitter, postProcessor: postProcessor, retryHistoryLimit: retryHistoryLimit, eventPublisher: eventPublisher}
+	service := &Service{
+		taskRepo:          taskRepo,
+		batchSubmitter:    batchSubmitter,
+		postProcessor:     postProcessor,
+		retryHistoryLimit: retryHistoryLimit,
+		eventPublisher:    eventPublisher,
+		streamSessionTTL:  defaultStreamSessionTTL,
+		streamSessionIDFn: generateRandomStreamSessionID,
+	}
+	if streamingEngine, ok := batchSubmitter.(StreamingEngine); ok {
+		service.streamingEngine = streamingEngine
+	}
+	return service
 }
 
 // CreateTask creates a new batch transcription task.
@@ -118,6 +141,18 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 
 	if req.Type == domain.TaskTypeBatch && audioURL == "" {
 		return nil, fmt.Errorf("audio_url is required for batch transcription")
+	}
+	if req.Type == domain.TaskTypeRealtime && strings.TrimSpace(req.StreamSessionID) != "" {
+		localFilePath, duration, err := s.consumeManagedStreamAudio(strings.TrimSpace(req.StreamSessionID))
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(req.LocalFilePath) == "" {
+			req.LocalFilePath = localFilePath
+		}
+		if req.Duration <= 0 {
+			req.Duration = duration
+		}
 	}
 	if req.Type == domain.TaskTypeRealtime && resultText == "" {
 		return nil, fmt.Errorf("result_text is required for realtime transcription")
@@ -202,6 +237,114 @@ func (s *Service) TranscribeSnippet(ctx context.Context, req *TranscribeSnippetR
 	}
 
 	return s.awaitSnippetResult(ctx, result)
+}
+
+// StartStreamSession creates a backend-managed upstream streaming session.
+func (s *Service) StartStreamSession(ctx context.Context) (*StreamSessionResponse, error) {
+	if s.streamingEngine == nil {
+		return nil, fmt.Errorf("asr stream engine is not configured")
+	}
+
+	now := time.Now()
+	s.cleanupExpiredStreamSessions(now)
+	sessionID, err := s.streamingEngine.StartStreamSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	managedSessionID := s.newStreamSessionID()
+	s.streamSessions.Store(managedSessionID, s.newManagedStreamSession(sessionID, now))
+
+	return &StreamSessionResponse{SessionID: managedSessionID}, nil
+}
+
+// PushStreamChunk forwards one PCM chunk into the active upstream session.
+func (s *Service) PushStreamChunk(ctx context.Context, req *PushStreamChunkRequest) (*StreamChunkResponse, error) {
+	if s.streamingEngine == nil {
+		return nil, fmt.Errorf("asr stream engine is not configured")
+	}
+	if req == nil || strings.TrimSpace(req.SessionID) == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	if len(req.PCMData) == 0 {
+		return nil, fmt.Errorf("audio chunk is required")
+	}
+
+	now := time.Now()
+	sessionID := strings.TrimSpace(req.SessionID)
+	session, err := s.loadManagedStreamSession(sessionID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.finalized {
+		return nil, ErrStreamSessionClosed
+	}
+
+	result, err := s.streamingEngine.PushStreamChunk(ctx, session.upstreamSessionID, req.PCMData)
+	if err != nil {
+		return nil, err
+	}
+	session.pcmData = append(session.pcmData, req.PCMData...)
+	session.durationSeconds = pcmBytesToDurationSeconds(session.pcmData)
+	return s.applyStreamChunkResult(sessionID, session, result, now, false), nil
+}
+
+// CommitStreamSegment commits the current cumulative streaming transcript since the last sentence boundary.
+func (s *Service) CommitStreamSegment(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
+	if s.streamingEngine == nil {
+		return nil, fmt.Errorf("asr stream engine is not configured")
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	now := time.Now()
+	session, err := s.loadManagedStreamSession(trimmedSessionID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return s.applyStreamCommitResult(trimmedSessionID, session, now, false), nil
+}
+
+// FinishStreamSession finalizes an active upstream streaming session.
+func (s *Service) FinishStreamSession(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
+	if s.streamingEngine == nil {
+		return nil, fmt.Errorf("asr stream engine is not configured")
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+
+	now := time.Now()
+	session, err := s.loadManagedStreamSession(trimmedSessionID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.finalized {
+		return s.applyStreamCommitResult(trimmedSessionID, session, now, true), nil
+	}
+
+	result, err := s.streamingEngine.FinishStreamSession(ctx, session.upstreamSessionID)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.applyStreamChunkResult(trimmedSessionID, session, result, now, true)
+	session.finalized = true
+	if _, _, err := s.materializeManagedStreamAudio(trimmedSessionID, session); err != nil && !errors.Is(err, ErrStreamSessionEmptyAudio) {
+		return nil, err
+	}
+	return s.applyStreamCommitResult(trimmedSessionID, session, now, true), nil
 }
 
 // GetTask retrieves a task by ID.

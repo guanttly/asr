@@ -48,6 +48,13 @@ const menuIconShapes: Record<string, IconShape[]> = {
     { tag: 'path', attrs: { d: 'M13 18a4 4 0 0 0-2-3.46' } },
     { tag: 'path', attrs: { d: 'M20.5 18a3.5 3.5 0 0 0-5.64-2.8' } },
   ],
+  voiceprints: [
+    { tag: 'path', attrs: { d: 'M6.5 16.5a5.5 5.5 0 0 1 0-9' } },
+    { tag: 'path', attrs: { d: 'M9.5 14a3 3 0 0 1 0-4' } },
+    { tag: 'path', attrs: { d: 'M15 10h5' } },
+    { tag: 'path', attrs: { d: 'M15 14h3.5' } },
+    { tag: 'circle', attrs: { cx: 12, cy: 12, r: 1.5 } },
+  ],
   workflows: [
     { tag: 'rect', attrs: { x: 3.5, y: 5, width: 6, height: 4.5, rx: 1.5 } },
     { tag: 'rect', attrs: { x: 14.5, y: 4, width: 6, height: 6, rx: 1.5 } },
@@ -163,6 +170,7 @@ const menuOptions: MenuOption[] = [
       { label: '实时语音识别', key: '/realtime', icon: renderMenuIcon('realtime', '实时语音识别') },
       { label: '批量转写', key: '/transcription', icon: renderMenuIcon('transcription', '批量转写') },
       { label: '会议纪要', key: '/meetings', icon: renderMenuIcon('meetings', '会议纪要') },
+      { label: '声纹库', key: '/meetings/voiceprints', icon: renderMenuIcon('voiceprints', '声纹库') },
     ],
   },
   {
@@ -214,6 +222,8 @@ const currentPath = computed(() => {
     return '/workflows/application-settings'
   if (path.startsWith('/workflows'))
     return '/workflows'
+  if (path.startsWith('/meetings/voiceprints'))
+    return '/meetings/voiceprints'
   if (path.startsWith('/meetings'))
     return '/meetings'
   if (path.startsWith('/terminology/rules'))

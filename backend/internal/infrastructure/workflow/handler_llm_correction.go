@@ -224,10 +224,6 @@ func validateOpenAIChatEndpoint(raw string) error {
 	if trimmed == "" {
 		return fmt.Errorf("endpoint is required")
 	}
-	lower := strings.ToLower(trimmed)
-	if strings.HasSuffix(lower, "/v1") {
-		return fmt.Errorf("endpoint must be base URL or full /v1/chat/completions URL; do not end with /v1")
-	}
 	return nil
 }
 
@@ -239,6 +235,9 @@ func normalizeOpenAIChatEndpoint(raw string) (string, error) {
 	lower := strings.ToLower(trimmed)
 	if strings.HasSuffix(lower, "/chat/completions") {
 		return trimmed, nil
+	}
+	if strings.HasSuffix(lower, "/v1") {
+		return trimmed + "/chat/completions", nil
 	}
 	return trimmed + "/v1/chat/completions", nil
 }

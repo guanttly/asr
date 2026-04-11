@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
+	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	asrdomain "github.com/lgt/asr/internal/domain/asr"
 	"github.com/lgt/asr/internal/infrastructure/asrengine"
@@ -50,9 +52,9 @@ func (a *workflowExecutorAdapter) ExecuteForTask(ctx context.Context, task *asrd
 		err  error
 	)
 	if task.Type == asrdomain.TaskTypeRealtime {
-		resp, err = a.svc.ExecuteWorkflowForRealtimeTask(ctx, *task.WorkflowID, task.ID, task.UserID, inputText, task.AudioURL)
+		resp, err = a.svc.ExecuteWorkflowForRealtimeTask(ctx, *task.WorkflowID, task.ID, task.UserID, inputText, task.AudioURL, task.LocalFilePath)
 	} else {
-		resp, err = a.svc.ExecuteWorkflowForTask(ctx, *task.WorkflowID, task.ID, task.UserID, inputText, task.AudioURL)
+		resp, err = a.svc.ExecuteWorkflowForTask(ctx, *task.WorkflowID, task.ID, task.UserID, inputText, task.AudioURL, task.LocalFilePath)
 	}
 	if err != nil {
 		return nil, err
@@ -70,9 +72,9 @@ func (a *workflowExecutorAdapter) ResumeForTaskFromFailure(ctx context.Context, 
 		err  error
 	)
 	if task.Type == asrdomain.TaskTypeRealtime {
-		resp, err = a.svc.ResumeLatestFailedExecutionForRealtimeTask(ctx, *task.WorkflowID, task.ID, task.UserID, task.AudioURL)
+		resp, err = a.svc.ResumeLatestFailedExecutionForRealtimeTask(ctx, *task.WorkflowID, task.ID, task.UserID, task.AudioURL, task.LocalFilePath)
 	} else {
-		resp, err = a.svc.ResumeLatestFailedExecutionForTask(ctx, *task.WorkflowID, task.ID, task.UserID, task.AudioURL)
+		resp, err = a.svc.ResumeLatestFailedExecutionForTask(ctx, *task.WorkflowID, task.ID, task.UserID, task.AudioURL, task.LocalFilePath)
 	}
 	if err != nil {
 		return nil, err
@@ -80,11 +82,12 @@ func (a *workflowExecutorAdapter) ResumeForTaskFromFailure(ctx context.Context, 
 	return resp, nil
 }
 
-func (a *workflowExecutorAdapter) ExecuteMeetingSummaryWorkflow(ctx context.Context, workflowID, meetingID, userID uint64, inputText, audioURL string) (*appwf.ExecutionResponse, error) {
+func (a *workflowExecutorAdapter) ExecuteMeetingSummaryWorkflow(ctx context.Context, workflowID, meetingID, userID uint64, inputText, audioURL, audioFilePath string) (*appwf.ExecutionResponse, error) {
 	return a.svc.ExecuteWorkflow(ctx, workflowID, wfdomain.TriggerManual, fmt.Sprintf("meeting:%d", meetingID), inputText, &wfengine.ExecutionMeta{
-		AudioURL:  audioURL,
-		UserID:    userID,
-		MeetingID: meetingID,
+		AudioURL:      audioURL,
+		AudioFilePath: audioFilePath,
+		UserID:        userID,
+		MeetingID:     meetingID,
 	})
 }
 
@@ -124,6 +127,36 @@ func (a *batchEngineAdapter) QueryBatchTask(ctx context.Context, taskID string) 
 		Status:     result.Status,
 		ResultText: result.ResultText,
 		Duration:   result.Duration,
+	}, nil
+}
+
+func (a *batchEngineAdapter) StartStreamSession(ctx context.Context) (string, error) {
+	return a.client.StartStreamSession(ctx)
+}
+
+func (a *batchEngineAdapter) PushStreamChunk(ctx context.Context, sessionID string, pcmData []byte) (*appasr.StreamChunkResponse, error) {
+	result, err := a.client.PushStreamChunk(ctx, sessionID, pcmData)
+	if err != nil {
+		return nil, err
+	}
+
+	return &appasr.StreamChunkResponse{
+		SessionID: result.SessionID,
+		Language:  result.Language,
+		Text:      result.Text,
+	}, nil
+}
+
+func (a *batchEngineAdapter) FinishStreamSession(ctx context.Context, sessionID string) (*appasr.StreamChunkResponse, error) {
+	result, err := a.client.FinishStreamSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &appasr.StreamChunkResponse{
+		SessionID: result.SessionID,
+		Language:  result.Language,
+		Text:      result.Text,
 	}, nil
 }
 
@@ -342,7 +375,13 @@ func main() {
 	postProcessor := postprocess.NewWorkflowAwareProcessor(legacyPostProcessor, workflowExecutor, meetingRepo, transcriptRepo, summaryRepo)
 
 	asrService := appasr.NewService(taskRepo, &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, businessHub)
+	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 	meetingService := appmeeting.NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExecutor, &meetingBatchEngineAdapter{client: asrEngineClient}, businessHub)
+	speakerAnalysisURL := strings.TrimSpace(cfg.Services.SpeakerAnalysisURL)
+	if speakerAnalysisURL == "" {
+		speakerAnalysisURL = strings.TrimSpace(cfg.Services.DiarizationURL)
+	}
+	voiceprintService := appvoiceprint.NewService(diarization.NewClient(speakerAnalysisURL))
 	startBatchSyncLoop(logger, asrService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize, cfg.Services.ASRBatchSyncWarnThreshold)
 	startMeetingSyncLoop(logger, meetingService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize)
 
@@ -355,6 +394,7 @@ func main() {
 	protected := router.Group("/api", middleware.AuthRequired(cfg.JWT.Secret))
 	api.NewASRHandler(asrService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/asr"))
 	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/meetings"))
+	api.NewVoiceprintHandler(voiceprintService, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/meetings/voiceprints"))
 	router.GET("/ws/events", middleware.AuthRequired(cfg.JWT.Secret), businessHub.Handle)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.ASRAPIPort)

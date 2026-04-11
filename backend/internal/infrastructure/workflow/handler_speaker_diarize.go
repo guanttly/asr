@@ -11,7 +11,9 @@ import (
 
 // SpeakerDiarizeConfig is the configuration for the speaker diarization node.
 type SpeakerDiarizeConfig struct {
-	ServiceURL string `json:"service_url"`
+	ServiceURL            string `json:"service_url"`
+	EnableVoiceprintMatch bool   `json:"enable_voiceprint_match"`
+	FailOnError           bool   `json:"fail_on_error"`
 }
 
 // SpeakerDiarizeHandler calls an external diarization service and merges
@@ -52,18 +54,36 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 		client = diarization.NewClient(cfg.ServiceURL)
 	}
 	if client == nil {
-		return inputText, nil, fmt.Errorf("no diarization service configured")
+		if cfg.FailOnError {
+			return inputText, nil, fmt.Errorf("no diarization service configured")
+		}
+		detail, _ := json.Marshal(map[string]any{"warning": "no diarization service configured, skipping diarization"})
+		return inputText, detail, nil
 	}
 
 	var segments []diarization.Segment
 	var err error
 	if meta.AudioFilePath != "" {
-		segments, err = client.AnalyzeFile(ctx, meta.AudioFilePath)
+		segments, err = client.AnalyzeFileWithOptions(ctx, meta.AudioFilePath, diarization.AnalyzeOptions{
+			EnableVoiceprintMatch: cfg.EnableVoiceprintMatch,
+		})
 	} else {
+		if cfg.EnableVoiceprintMatch {
+			detail, _ := json.Marshal(map[string]any{"warning": "voiceprint match requires local audio file, falling back to anonymous diarization"})
+			_ = detail
+		}
 		segments, err = client.Analyze(ctx, meta.AudioURL)
 	}
 	if err != nil {
-		return inputText, nil, fmt.Errorf("diarization failed: %w", err)
+		if cfg.FailOnError {
+			return inputText, nil, fmt.Errorf("diarization failed: %w", err)
+		}
+		detail, _ := json.Marshal(map[string]any{
+			"warning":                 fmt.Sprintf("diarization skipped: %v", err),
+			"error":                   err.Error(),
+			"enable_voiceprint_match": cfg.EnableVoiceprintMatch,
+		})
+		return inputText, detail, nil
 	}
 
 	// Format segments with speaker labels
@@ -84,8 +104,10 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 	}
 
 	detail, _ := json.Marshal(map[string]interface{}{
-		"segments_count": len(segments),
-		"segments":       segments,
+		"segments_count":          len(segments),
+		"segments":                segments,
+		"enable_voiceprint_match": cfg.EnableVoiceprintMatch,
+		"diarization_service_url": strings.TrimSpace(cfg.ServiceURL),
 	})
 	return inputText, detail, nil
 }

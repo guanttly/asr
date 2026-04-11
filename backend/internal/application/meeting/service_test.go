@@ -137,11 +137,15 @@ type workflowExecServiceStub struct {
 	resp       *appwf.ExecutionResponse
 	workflowID uint64
 	inputText  string
+	audioURL   string
+	audioPath  string
 }
 
-func (s *workflowExecServiceStub) ExecuteMeetingSummaryWorkflow(_ context.Context, workflowID uint64, _ uint64, _ uint64, inputText string, _ string) (*appwf.ExecutionResponse, error) {
+func (s *workflowExecServiceStub) ExecuteMeetingSummaryWorkflow(_ context.Context, workflowID uint64, _ uint64, _ uint64, inputText, audioURL, audioFilePath string) (*appwf.ExecutionResponse, error) {
 	s.workflowID = workflowID
 	s.inputText = inputText
+	s.audioURL = audioURL
+	s.audioPath = audioFilePath
 	if s.resp == nil {
 		return nil, errors.New("missing response")
 	}
@@ -179,12 +183,13 @@ func TestRegenerateSummaryPersistsWorkflowAndSummaryNodeOutput(t *testing.T) {
 	}
 
 	meetingRepo := &meetingRepoServiceStub{meeting: &domain.Meeting{
-		ID:       8,
-		UserID:   5,
-		Title:    "周会",
-		AudioURL: "https://example.com/meeting.wav",
-		Duration: 120,
-		Status:   domain.MeetingStatusCompleted,
+		ID:            8,
+		UserID:        5,
+		Title:         "周会",
+		AudioURL:      "https://example.com/meeting.wav",
+		LocalFilePath: "/tmp/meeting.wav",
+		Duration:      120,
+		Status:        domain.MeetingStatusCompleted,
 	}}
 	transcriptRepo := &transcriptRepoServiceStub{items: []domain.Transcript{
 		{SpeakerLabel: "Speaker A", Text: "第一段内容"},
@@ -214,6 +219,12 @@ func TestRegenerateSummaryPersistsWorkflowAndSummaryNodeOutput(t *testing.T) {
 	}
 	if workflowExec.inputText != "Speaker A：第一段内容\nSpeaker B：第二段内容" {
 		t.Fatalf("unexpected workflow input text: %q", workflowExec.inputText)
+	}
+	if workflowExec.audioURL != "https://example.com/meeting.wav" {
+		t.Fatalf("expected audio url forwarded, got %q", workflowExec.audioURL)
+	}
+	if workflowExec.audioPath != "/tmp/meeting.wav" {
+		t.Fatalf("expected local audio path forwarded, got %q", workflowExec.audioPath)
 	}
 	if summaryRepo.created == nil || summaryRepo.created.Content != "会议摘要内容" {
 		t.Fatalf("expected summary to be created from meeting_summary node output, got %+v", summaryRepo.created)

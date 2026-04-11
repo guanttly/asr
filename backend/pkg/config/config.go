@@ -72,6 +72,7 @@ type ServiceConfig struct {
 	ASRBatchSyncWarnThreshold   int    `mapstructure:"asr_batch_sync_warn_threshold"`
 	DashboardRetryHistoryLimit  int    `mapstructure:"dashboard_retry_history_limit"`
 	DiarizationURL              string `mapstructure:"diarization_url"`
+	SpeakerAnalysisURL          string `mapstructure:"speaker_analysis_url"`
 	SummaryModel                string `mapstructure:"summary_model"`
 }
 
@@ -123,6 +124,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("services.asr_batch_sync_warn_threshold", 3)
 	v.SetDefault("services.dashboard_retry_history_limit", 5)
 	v.SetDefault("services.diarization_url", "http://127.0.0.1:9002")
+	v.SetDefault("services.speaker_analysis_url", "")
 	v.SetDefault("services.summary_model", "qwen3-4b")
 	v.SetDefault("upload.dir", "uploads")
 	v.SetDefault("upload.public_base_url", "")

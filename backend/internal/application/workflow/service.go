@@ -379,41 +379,45 @@ func (s *Service) GetNodeTypes() []NodeTypeInfo {
 }
 
 // ExecuteWorkflowForTask is a convenience method for batch task post-processing.
-func (s *Service) ExecuteWorkflowForTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, inputText, audioURL string) (*ExecutionResponse, error) {
+func (s *Service) ExecuteWorkflowForTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, inputText, audioURL, audioFilePath string) (*ExecutionResponse, error) {
 	meta := &engine.ExecutionMeta{
-		AudioURL: audioURL,
-		TaskID:   taskID,
-		UserID:   userID,
+		AudioURL:      audioURL,
+		AudioFilePath: audioFilePath,
+		TaskID:        taskID,
+		UserID:        userID,
 	}
 	return s.ExecuteWorkflow(ctx, workflowID, domain.TriggerBatchTask, fmt.Sprintf("%d", taskID), inputText, meta)
 }
 
 // ExecuteWorkflowForRealtimeTask executes a workflow for a realtime transcription task.
-func (s *Service) ExecuteWorkflowForRealtimeTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, inputText, audioURL string) (*ExecutionResponse, error) {
+func (s *Service) ExecuteWorkflowForRealtimeTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, inputText, audioURL, audioFilePath string) (*ExecutionResponse, error) {
 	meta := &engine.ExecutionMeta{
-		AudioURL: audioURL,
-		TaskID:   taskID,
-		UserID:   userID,
+		AudioURL:      audioURL,
+		AudioFilePath: audioFilePath,
+		TaskID:        taskID,
+		UserID:        userID,
 	}
 	return s.ExecuteWorkflow(ctx, workflowID, domain.TriggerRealtime, fmt.Sprintf("%d", taskID), inputText, meta)
 }
 
 // ResumeLatestFailedExecutionForTask continues the latest failed batch execution from its failed node.
-func (s *Service) ResumeLatestFailedExecutionForTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, audioURL string) (*ExecutionResponse, error) {
+func (s *Service) ResumeLatestFailedExecutionForTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, audioURL, audioFilePath string) (*ExecutionResponse, error) {
 	meta := &engine.ExecutionMeta{
-		AudioURL: audioURL,
-		TaskID:   taskID,
-		UserID:   userID,
+		AudioURL:      audioURL,
+		AudioFilePath: audioFilePath,
+		TaskID:        taskID,
+		UserID:        userID,
 	}
 	return s.resumeLatestFailedExecution(ctx, workflowID, domain.TriggerBatchTask, fmt.Sprintf("%d", taskID), meta)
 }
 
 // ResumeLatestFailedExecutionForRealtimeTask continues the latest failed realtime execution from its failed node.
-func (s *Service) ResumeLatestFailedExecutionForRealtimeTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, audioURL string) (*ExecutionResponse, error) {
+func (s *Service) ResumeLatestFailedExecutionForRealtimeTask(ctx context.Context, workflowID uint64, taskID uint64, userID uint64, audioURL, audioFilePath string) (*ExecutionResponse, error) {
 	meta := &engine.ExecutionMeta{
-		AudioURL: audioURL,
-		TaskID:   taskID,
-		UserID:   userID,
+		AudioURL:      audioURL,
+		AudioFilePath: audioFilePath,
+		TaskID:        taskID,
+		UserID:        userID,
 	}
 	return s.resumeLatestFailedExecution(ctx, workflowID, domain.TriggerRealtime, fmt.Sprintf("%d", taskID), meta)
 }

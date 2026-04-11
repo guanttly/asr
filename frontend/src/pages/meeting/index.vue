@@ -301,6 +301,9 @@ onBeforeUnmount(() => {
             <NButton quaternary size="small" @click="loadMeetings">
               刷新
             </NButton>
+            <NButton quaternary size="small" @click="router.push('/meetings/voiceprints')">
+              声纹库
+            </NButton>
             <NButton type="primary" size="small" color="#0f766e" @click="router.push('/meetings/upload')">
               新建会议
             </NButton>

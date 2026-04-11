@@ -6,16 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	appasr "github.com/lgt/asr/internal/application/asr"
+	appaudio "github.com/lgt/asr/internal/application/audio"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domainasr "github.com/lgt/asr/internal/domain/asr"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
@@ -28,6 +25,7 @@ import (
 // ASRHandler exposes transcription task endpoints.
 type ASRHandler struct {
 	service        *appasr.Service
+	audioService   *appaudio.Service
 	workflowSvc    *appwf.Service
 	uploadDir      string
 	publicBaseURL  string
@@ -45,6 +43,7 @@ func NewASRHandler(service *appasr.Service, workflowSvc *appwf.Service, uploadDi
 
 	return &ASRHandler{
 		service:        service,
+		audioService:   appaudio.NewService(service, nil),
 		workflowSvc:    workflowSvc,
 		uploadDir:      uploadDir,
 		publicBaseURL:  strings.TrimRight(publicBaseURL, "/"),
@@ -56,6 +55,11 @@ func NewASRHandler(service *appasr.Service, workflowSvc *appwf.Service, uploadDi
 func (h *ASRHandler) Register(group *gin.RouterGroup) {
 	group.POST("/tasks", h.CreateTask)
 	group.POST("/tasks/upload", h.UploadTaskFile)
+	group.POST("/realtime-tasks/upload", h.UploadRealtimeTaskFile)
+	group.POST("/stream-sessions", h.StartStreamSession)
+	group.POST("/stream-sessions/:id/chunks", h.PushStreamChunk)
+	group.POST("/stream-sessions/:id/commit", h.CommitStreamSession)
+	group.POST("/stream-sessions/:id/finish", h.FinishStreamSession)
 	group.POST("/realtime-segments", h.TranscribeRealtimeSegment)
 	group.GET("/tasks", h.ListTasks)
 	group.GET("/tasks/:id/executions", h.ListTaskExecutions)
@@ -65,50 +69,110 @@ func (h *ASRHandler) Register(group *gin.RouterGroup) {
 	group.POST("/tasks/:id/sync", h.SyncTask)
 }
 
-func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
-	fileHeader, err := c.FormFile("file")
+func (h *ASRHandler) CommitStreamSession(c *gin.Context) {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	if sessionID == "" {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid session id")
+		return
+	}
+
+	result, err := h.service.CommitStreamSegment(c.Request.Context(), sessionID)
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "missing audio file")
+		if errors.Is(err, appasr.ErrStreamSessionNotFound) || errors.Is(err, appasr.ErrStreamSessionExpired) {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *ASRHandler) StartStreamSession(c *gin.Context) {
+	result, err := h.service.StartStreamSession(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *ASRHandler) PushStreamChunk(c *gin.Context) {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	if sessionID == "" {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid session id")
 		return
 	}
 
 	maxBytes := h.maxAudioSizeMB * 1024 * 1024
-	if maxBytes > 0 && fileHeader.Size > maxBytes {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, fmt.Sprintf("audio file exceeds %d MB limit", h.maxAudioSizeMB))
-		return
+	if maxBytes <= 0 {
+		maxBytes = 100 * 1024 * 1024
 	}
 
-	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-	if !isSupportedAudioExtension(ext) {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "unsupported audio file type")
-		return
-	}
-
-	localPath := filepath.Join(os.TempDir(), fmt.Sprintf("asr-realtime-%d%s", time.Now().UnixNano(), ext))
-	src, err := fileHeader.Open()
+	pcmData, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to read audio file")
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "failed to read audio chunk")
 		return
 	}
-	defer src.Close()
+	if int64(len(pcmData)) > maxBytes {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, fmt.Sprintf("audio chunk exceeds %d MB limit", h.maxAudioSizeMB))
+		return
+	}
+	if len(pcmData) == 0 {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "missing audio chunk")
+		return
+	}
 
-	dst, err := os.Create(localPath)
+	result, err := h.service.PushStreamChunk(c.Request.Context(), &appasr.PushStreamChunkRequest{
+		SessionID: sessionID,
+		PCMData:   pcmData,
+	})
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to prepare audio file")
+		if errors.Is(err, appasr.ErrStreamSessionNotFound) || errors.Is(err, appasr.ErrStreamSessionExpired) {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, appasr.ErrStreamSessionClosed) {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		_ = os.Remove(localPath)
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to save audio file")
+
+	response.Success(c, result)
+}
+
+func (h *ASRHandler) FinishStreamSession(c *gin.Context) {
+	sessionID := strings.TrimSpace(c.Param("id"))
+	if sessionID == "" {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid session id")
 		return
 	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(localPath)
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to save audio file")
+
+	result, err := h.service.FinishStreamSession(c.Request.Context(), sessionID)
+	if err != nil {
+		if errors.Is(err, appasr.ErrStreamSessionNotFound) || errors.Is(err, appasr.ErrStreamSessionExpired) {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
-	defer os.Remove(localPath)
+
+	response.Success(c, result)
+}
+
+func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
+	audioFile, err := saveTemporaryUploadedAudio(c, "file", "asr-realtime", h.maxAudioSizeMB)
+	if err != nil {
+		status, messageText := resolveAudioUploadError(err)
+		response.Error(c, status, errcode.CodeBadRequest, messageText)
+		return
+	}
+	defer os.Remove(audioFile.AbsolutePath)
 
 	var dictID *uint64
 	if rawDictID := strings.TrimSpace(c.PostForm("dict_id")); rawDictID != "" {
@@ -120,9 +184,13 @@ func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
 		dictID = &parsed
 	}
 
-	result, err := h.service.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{
-		LocalFilePath: localPath,
-		DictID:        dictID,
+	result, err := h.audioService.TranscribeRealtimeSegment(c.Request.Context(), appaudio.TranscribeRealtimeSegmentRequest{
+		Audio: appaudio.PreparedAudio{
+			OriginalFilename: audioFile.OriginalFilename,
+			LocalFilePath:    audioFile.AbsolutePath,
+			Duration:         audioFile.Duration,
+		},
+		DictID: dictID,
 	})
 	if err != nil {
 		if isASRBadRequest(err) {
@@ -137,40 +205,16 @@ func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
 }
 
 func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
-	fileHeader, err := c.FormFile("file")
+	audioFile, err := savePermanentUploadedAudio(c, "file", h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "missing audio file")
+		status, messageText := resolveAudioUploadError(err)
+		response.Error(c, status, errcode.CodeBadRequest, messageText)
 		return
 	}
 
-	maxBytes := h.maxAudioSizeMB * 1024 * 1024
-	if maxBytes > 0 && fileHeader.Size > maxBytes {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, fmt.Sprintf("audio file exceeds %d MB limit", h.maxAudioSizeMB))
-		return
-	}
-
-	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-	if !isSupportedAudioExtension(ext) {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "unsupported audio file type")
-		return
-	}
-
-	storedDir := filepath.Join(h.uploadDir, "audio")
-	if err := os.MkdirAll(storedDir, 0o755); err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to prepare upload directory")
-		return
-	}
-
-	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	absPath := filepath.Join(storedDir, filename)
-	if err := c.SaveUploadedFile(fileHeader, absPath); err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "failed to save audio file")
-		return
-	}
-
-	audioURL, err := h.buildUploadedFileURL(c, path.Join("audio", filename))
+	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
 	if err != nil {
-		_ = os.Remove(absPath)
+		_ = os.Remove(audioFile.AbsolutePath)
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
@@ -179,7 +223,7 @@ func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
 	if rawDictID := strings.TrimSpace(c.PostForm("dict_id")); rawDictID != "" {
 		parsed, err := strconv.ParseUint(rawDictID, 10, 64)
 		if err != nil {
-			_ = os.Remove(absPath)
+			_ = os.Remove(audioFile.AbsolutePath)
 			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict_id")
 			return
 		}
@@ -190,28 +234,31 @@ func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
 	if rawWorkflowID := strings.TrimSpace(c.PostForm("workflow_id")); rawWorkflowID != "" {
 		parsed, err := strconv.ParseUint(rawWorkflowID, 10, 64)
 		if err != nil {
-			_ = os.Remove(absPath)
+			_ = os.Remove(audioFile.AbsolutePath)
 			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow_id")
 			return
 		}
 		workflowID = &parsed
 	}
 	if err := h.validateWorkflowBinding(c.Request.Context(), workflowID, domainasr.TaskTypeBatch); err != nil {
-		_ = os.Remove(absPath)
+		_ = os.Remove(audioFile.AbsolutePath)
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	result, err := h.service.CreateTask(c.Request.Context(), userID, &appasr.CreateTaskRequest{
-		AudioURL:      audioURL,
-		LocalFilePath: absPath,
-		Type:          domainasr.TaskTypeBatch,
-		DictID:        dictID,
-		WorkflowID:    workflowID,
+	result, err := h.audioService.CreateBatchTaskFromAudio(c.Request.Context(), userID, appaudio.CreateBatchTaskRequest{
+		Audio: appaudio.PreparedAudio{
+			OriginalFilename: audioFile.OriginalFilename,
+			AudioURL:         audioURL,
+			LocalFilePath:    audioFile.AbsolutePath,
+			Duration:         audioFile.Duration,
+		},
+		DictID:     dictID,
+		WorkflowID: workflowID,
 	})
 	if err != nil {
-		_ = os.Remove(absPath)
+		_ = os.Remove(audioFile.AbsolutePath)
 		if isASRBadRequest(err) {
 			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 			return
@@ -223,7 +270,73 @@ func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
 	response.Success(c, gin.H{
 		"task":      result,
 		"audio_url": audioURL,
-		"filename":  fileHeader.Filename,
+		"filename":  audioFile.OriginalFilename,
+	})
+}
+
+func (h *ASRHandler) UploadRealtimeTaskFile(c *gin.Context) {
+	audioFile, err := savePermanentUploadedAudio(c, "file", h.uploadDir, "audio", h.maxAudioSizeMB)
+	if err != nil {
+		status, messageText := resolveAudioUploadError(err)
+		response.Error(c, status, errcode.CodeBadRequest, messageText)
+		return
+	}
+
+	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	resultText := strings.TrimSpace(c.PostForm("result_text"))
+	if resultText == "" {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "result_text is required")
+		return
+	}
+
+	var workflowID *uint64
+	if rawWorkflowID := strings.TrimSpace(c.PostForm("workflow_id")); rawWorkflowID != "" {
+		parsed, err := strconv.ParseUint(rawWorkflowID, 10, 64)
+		if err != nil {
+			_ = os.Remove(audioFile.AbsolutePath)
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow_id")
+			return
+		}
+		workflowID = &parsed
+	}
+	if err := h.validateWorkflowBinding(c.Request.Context(), workflowID, domainasr.TaskTypeRealtime); err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	userID := middleware.UserIDFromContext(c)
+	result, err := h.audioService.CreateRealtimeTaskFromAudio(c.Request.Context(), userID, appaudio.CreateRealtimeTaskRequest{
+		Audio: appaudio.PreparedAudio{
+			OriginalFilename: audioFile.OriginalFilename,
+			AudioURL:         audioURL,
+			LocalFilePath:    audioFile.AbsolutePath,
+			Duration:         audioFile.Duration,
+		},
+		ResultText: resultText,
+		WorkflowID: workflowID,
+	})
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		if isASRBadRequest(err) {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{
+		"task":      result,
+		"audio_url": audioURL,
+		"filename":  audioFile.OriginalFilename,
 	})
 }
 
@@ -241,6 +354,14 @@ func (h *ASRHandler) CreateTask(c *gin.Context) {
 	userID := middleware.UserIDFromContext(c)
 	result, err := h.service.CreateTask(c.Request.Context(), userID, &req)
 	if err != nil {
+		if errors.Is(err, appasr.ErrStreamSessionNotFound) || errors.Is(err, appasr.ErrStreamSessionExpired) {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, appasr.ErrStreamSessionActive) || errors.Is(err, appasr.ErrStreamSessionClosed) || errors.Is(err, appasr.ErrStreamSessionEmptyAudio) {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		if isASRBadRequest(err) {
 			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 			return
@@ -390,60 +511,6 @@ func (h *ASRHandler) validateWorkflowBinding(ctx context.Context, workflowID *ui
 
 	_, err := h.workflowSvc.ValidateWorkflowBinding(ctx, *workflowID, expectedType)
 	return err
-}
-
-func (h *ASRHandler) buildUploadedFileURL(c *gin.Context, relativePath string) (string, error) {
-	baseURL := strings.TrimSpace(h.publicBaseURL)
-	if baseURL == "" {
-		baseURL = publicRequestBaseURL(c)
-	}
-	if baseURL == "" {
-		return "", fmt.Errorf("unable to determine public upload base url")
-	}
-
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return "", fmt.Errorf("invalid upload public base url")
-	}
-	parsed.Path = path.Join(parsed.Path, "/uploads", relativePath)
-	return parsed.String(), nil
-}
-
-func publicRequestBaseURL(c *gin.Context) string {
-	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
-		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {
-			return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
-		}
-	}
-
-	scheme := c.GetHeader("X-Forwarded-Proto")
-	if scheme == "" {
-		if c.Request.TLS != nil {
-			scheme = "https"
-		}
-	}
-	if scheme == "" {
-		scheme = "http"
-	}
-
-	host := strings.TrimSpace(c.GetHeader("X-Forwarded-Host"))
-	if host == "" {
-		host = c.Request.Host
-	}
-	if host == "" {
-		return ""
-	}
-
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
-
-func isSupportedAudioExtension(ext string) bool {
-	switch ext {
-	case ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".webm":
-		return true
-	default:
-		return false
-	}
 }
 
 func isASRBadRequest(err error) bool {

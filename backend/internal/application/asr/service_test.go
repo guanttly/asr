@@ -1,6 +1,7 @@
 package asr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -22,6 +23,18 @@ type completedTaskProcessorStub struct {
 	processedTask *domain.TranscriptionTask
 }
 
+type streamingBatchEngineServiceStub struct {
+	startSessionID string
+	startErr       error
+	chunkResult    *StreamChunkResponse
+	chunkErr       error
+	finishResult   *StreamChunkResponse
+	finishErr      error
+	lastSessionID  string
+	lastPCMData    []byte
+	finishSession  string
+}
+
 func (s *completedTaskProcessorStub) ProcessCompletedTask(_ context.Context, task *domain.TranscriptionTask) error {
 	s.processedTask = cloneTask(task)
 	return nil
@@ -30,6 +43,38 @@ func (s *completedTaskProcessorStub) ProcessCompletedTask(_ context.Context, tas
 func (s *completedTaskProcessorStub) ResumeCompletedTaskFromFailure(_ context.Context, task *domain.TranscriptionTask) error {
 	s.resumedTask = cloneTask(task)
 	return s.resumeErr
+}
+
+func (s *streamingBatchEngineServiceStub) SubmitBatch(_ context.Context, _ BatchSubmitRequest) (*BatchSubmitResult, error) {
+	panic("unexpected SubmitBatch call")
+}
+
+func (s *streamingBatchEngineServiceStub) QueryBatchTask(_ context.Context, _ string) (*BatchTaskStatus, error) {
+	panic("unexpected QueryBatchTask call")
+}
+
+func (s *streamingBatchEngineServiceStub) StartStreamSession(_ context.Context) (string, error) {
+	if s.startErr != nil {
+		return "", s.startErr
+	}
+	return s.startSessionID, nil
+}
+
+func (s *streamingBatchEngineServiceStub) PushStreamChunk(_ context.Context, sessionID string, pcmData []byte) (*StreamChunkResponse, error) {
+	s.lastSessionID = sessionID
+	s.lastPCMData = append([]byte(nil), pcmData...)
+	if s.chunkErr != nil {
+		return nil, s.chunkErr
+	}
+	return s.chunkResult, nil
+}
+
+func (s *streamingBatchEngineServiceStub) FinishStreamSession(_ context.Context, sessionID string) (*StreamChunkResponse, error) {
+	s.finishSession = sessionID
+	if s.finishErr != nil {
+		return nil, s.finishErr
+	}
+	return s.finishResult, nil
 }
 
 func (r *taskRepoServiceStub) Create(_ context.Context, task *domain.TranscriptionTask) error {
@@ -228,5 +273,187 @@ func TestResumeTaskPostProcessFromFailureRejectsInvalidTask(t *testing.T) {
 	_, err := service.ResumeTaskPostProcessFromFailure(context.Background(), 7, 6)
 	if !errors.Is(err, ErrTaskResumeNotAllowed) {
 		t.Fatalf("expected ErrTaskResumeNotAllowed, got %v", err)
+	}
+}
+
+func TestStartStreamSessionUsesStreamingEngine(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{startSessionID: "upstream-stream-1"}
+	service := NewService(nil, engine, nil, 5, nil)
+
+	result, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+	if result == nil || result.SessionID == "" {
+		t.Fatalf("expected non-empty managed session id, got %+v", result)
+	}
+	if result.SessionID == "upstream-stream-1" {
+		t.Fatalf("expected managed session id different from upstream id, got %+v", result)
+	}
+}
+
+func TestPushStreamChunkForwardsPCMData(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{startSessionID: "upstream-stream-1", chunkResult: &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "增量文本", Language: "zh"}}
+	service := NewService(nil, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+	payload := []byte{1, 2, 3, 4}
+
+	result, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: payload})
+	if err != nil {
+		t.Fatalf("PushStreamChunk returned error: %v", err)
+	}
+	if result == nil || result.Text != "增量文本" {
+		t.Fatalf("expected chunk text, got %+v", result)
+	}
+	if result.TextDelta != "增量文本" {
+		t.Fatalf("expected text delta 增量文本, got %+v", result)
+	}
+	if engine.lastSessionID != "upstream-stream-1" {
+		t.Fatalf("expected session id stream-1, got %s", engine.lastSessionID)
+	}
+	if !bytes.Equal(engine.lastPCMData, payload) {
+		t.Fatalf("expected pcm payload forwarded, got %v", engine.lastPCMData)
+	}
+}
+
+func TestCommitStreamSegmentReturnsCommittedDelta(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{startSessionID: "upstream-stream-1", chunkResult: &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "你好世界", Language: "zh"}}
+	service := NewService(nil, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+
+	if _, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: []byte{1, 2, 3}}); err != nil {
+		t.Fatalf("PushStreamChunk returned error: %v", err)
+	}
+
+	result, err := service.CommitStreamSegment(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("CommitStreamSegment returned error: %v", err)
+	}
+	if result == nil || result.Text != "你好世界" {
+		t.Fatalf("expected committed cumulative text, got %+v", result)
+	}
+	if result.TextDelta != "你好世界" {
+		t.Fatalf("expected committed delta 你好世界, got %+v", result)
+	}
+
+	result, err = service.CommitStreamSegment(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("second CommitStreamSegment returned error: %v", err)
+	}
+	if result.TextDelta != "" {
+		t.Fatalf("expected empty delta on repeated commit, got %+v", result)
+	}
+}
+
+func TestFinishStreamSessionUsesStreamingEngine(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{startSessionID: "upstream-stream-1", finishResult: &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "最终文本", Language: "zh"}}
+	service := NewService(nil, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+
+	result, err := service.FinishStreamSession(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("FinishStreamSession returned error: %v", err)
+	}
+	if result == nil || result.Text != "最终文本" {
+		t.Fatalf("expected final text, got %+v", result)
+	}
+	if result.TextDelta != "最终文本" {
+		t.Fatalf("expected final committed delta, got %+v", result)
+	}
+	if !result.IsFinal {
+		t.Fatalf("expected final response flag, got %+v", result)
+	}
+	if engine.finishSession != "upstream-stream-1" {
+		t.Fatalf("expected finished session stream-1, got %s", engine.finishSession)
+	}
+}
+
+func TestCreateRealtimeTaskConsumesFinalizedStreamSessionAudio(t *testing.T) {
+	repo := &taskRepoServiceStub{}
+	engine := &streamingBatchEngineServiceStub{
+		startSessionID: "upstream-stream-1",
+		chunkResult:    &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "实时文本", Language: "zh"},
+		finishResult:   &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "实时文本", Language: "zh"},
+	}
+	service := NewService(repo, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+
+	payload := bytes.Repeat([]byte{1, 2}, 16000)
+	if _, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: payload}); err != nil {
+		t.Fatalf("PushStreamChunk returned error: %v", err)
+	}
+	if _, err := service.FinishStreamSession(context.Background(), started.SessionID); err != nil {
+		t.Fatalf("FinishStreamSession returned error: %v", err)
+	}
+
+	result, err := service.CreateTask(context.Background(), 7, &CreateTaskRequest{
+		Type:            domain.TaskTypeRealtime,
+		ResultText:      "实时文本",
+		StreamSessionID: started.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask returned error: %v", err)
+	}
+	if result == nil || result.ID == 0 {
+		t.Fatalf("expected realtime task result, got %+v", result)
+	}
+
+	stored, err := repo.GetByID(context.Background(), result.ID)
+	if err != nil {
+		t.Fatalf("GetByID returned error: %v", err)
+	}
+	if stored.LocalFilePath == "" {
+		t.Fatalf("expected persisted local audio path, got %+v", stored)
+	}
+	if stored.Duration <= 0 {
+		t.Fatalf("expected positive duration, got %+v", stored)
+	}
+	if _, err := os.Stat(stored.LocalFilePath); err != nil {
+		t.Fatalf("expected materialized audio file, stat err=%v", err)
+	}
+
+	if _, err := service.CreateTask(context.Background(), 7, &CreateTaskRequest{
+		Type:            domain.TaskTypeRealtime,
+		ResultText:      "再次保存",
+		StreamSessionID: started.SessionID,
+	}); !errors.Is(err, ErrStreamSessionNotFound) {
+		t.Fatalf("expected consumed stream session to be removed, got %v", err)
+	}
+
+	if err := service.DeleteTask(context.Background(), 7, result.ID); err != nil {
+		t.Fatalf("DeleteTask returned error: %v", err)
+	}
+	if _, err := os.Stat(stored.LocalFilePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected materialized audio file removed, stat err=%v", err)
+	}
+}
+
+func TestCreateRealtimeTaskRejectsActiveStreamSession(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{startSessionID: "upstream-stream-1"}
+	service := NewService(&taskRepoServiceStub{}, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+
+	_, err = service.CreateTask(context.Background(), 7, &CreateTaskRequest{
+		Type:            domain.TaskTypeRealtime,
+		ResultText:      "实时文本",
+		StreamSessionID: started.SessionID,
+	})
+	if !errors.Is(err, ErrStreamSessionActive) {
+		t.Fatalf("expected ErrStreamSessionActive, got %v", err)
 	}
 }

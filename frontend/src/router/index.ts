@@ -81,6 +81,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/meeting/upload.vue'),
       },
       {
+        path: 'meetings/voiceprints',
+        name: 'meeting-voiceprints',
+        meta: { pageManagedScroll: true, title: '声纹库', desc: '管理会议纪要中 speaker_diarize 节点使用的已注册说话人声纹样本。' },
+        component: () => import('@/pages/meeting/voiceprints.vue'),
+      },
+      {
         path: 'meetings/:id',
         name: 'meeting-detail',
         meta: { title: '会议详情', desc: '查看逐字稿、说话人片段与会议摘要，并按应用配置重新生成。' },

@@ -129,7 +129,9 @@ func defaultWorkflowSeeds() []workflowSeed {
 			Nodes: []domain.Node{
 				seedNode(domain.NodeBatchASR, true, map[string]any{}),
 				seedNode(domain.NodeSpeakerDiarize, false, map[string]any{
-					"service_url": "",
+					"service_url":             "",
+					"enable_voiceprint_match": false,
+					"fail_on_error":           false,
 				}),
 				seedNode(domain.NodeFillerFilter, true, map[string]any{
 					"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"},

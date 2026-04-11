@@ -390,6 +390,8 @@ function normalizeConfig(type: string, raw: Record<string, unknown>) {
       return {
         ...base,
         service_url: String(raw.service_url || ''),
+        enable_voiceprint_match: ensureBoolean(raw.enable_voiceprint_match, false),
+        fail_on_error: ensureBoolean(raw.fail_on_error, false),
       }
     case 'meeting_summary':
       return {
@@ -571,7 +573,7 @@ function defaultConfigFor(type: string) {
     case 'llm_correction':
       return { endpoint: '', model: '', api_key: '', prompt_template: '', temperature: 0.3, max_tokens: 4096 }
     case 'speaker_diarize':
-      return { service_url: '' }
+      return { service_url: '', enable_voiceprint_match: false, fail_on_error: false }
     case 'meeting_summary':
       return { endpoint: '', model: '', api_key: '', prompt_template: '', output_format: 'markdown', max_tokens: 200000 }
     case 'custom_regex':
@@ -1576,11 +1578,11 @@ watch(selectedIndex, () => {
                 <template v-else-if="selectedNode.node_type === 'llm_correction'">
                   <div class="grid gap-3">
                     <div class="grid gap-3 lg:grid-cols-2">
-                      <NInput :value="selectedConfig.endpoint" placeholder="LLM Endpoint，只支持 base URL 或完整 /v1/chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.endpoint" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
                       <NInput :value="selectedConfig.model" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
                     </div>
                     <div class="text-xs leading-6 text-slate/75">
-                      示例：http://192.168.200.182:9888 或 http://192.168.200.182:9888/v1/chat/completions。
+                      示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
                     <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                     <div class="grid gap-3 lg:grid-cols-2">
@@ -1598,17 +1600,35 @@ watch(selectedIndex, () => {
                 </template>
 
                 <template v-else-if="selectedNode.node_type === 'speaker_diarize'">
-                  <NInput :value="selectedConfig.service_url" placeholder="说话人分离服务 URL" @update:value="updateSelectedConfig({ service_url: $event })" />
+                  <div class="grid gap-3">
+                    <NInput :value="selectedConfig.service_url" placeholder="说话人分离服务 URL" @update:value="updateSelectedConfig({ service_url: $event })" />
+                    <div class="text-xs leading-6 text-slate/75">
+                      默认兼容 legacy diarization 服务。若启用声纹匹配，请将服务地址指向 3D-Speaker 服务根地址或 /api/v1。
+                    </div>
+                    <div class="flex flex-wrap gap-6 rounded-2 bg-white/60 px-3 py-3">
+                      <label class="flex items-center gap-2 text-sm text-ink">
+                        <NSwitch :value="selectedConfig.enable_voiceprint_match" @update:value="updateSelectedConfig({ enable_voiceprint_match: $event })" />
+                        <span>启用声纹匹配</span>
+                      </label>
+                      <label class="flex items-center gap-2 text-sm text-ink">
+                        <NSwitch :value="selectedConfig.fail_on_error" @update:value="updateSelectedConfig({ fail_on_error: $event })" />
+                        <span>失败时中断工作流</span>
+                      </label>
+                    </div>
+                    <div class="text-xs leading-6 text-slate/75">
+                      建议默认关闭“失败时中断工作流”。这样分离服务不可用时会跳过该节点，但不会阻断后面的会议摘要生成。
+                    </div>
+                  </div>
                 </template>
 
                 <template v-else-if="selectedNode.node_type === 'meeting_summary'">
                   <div class="grid gap-3">
                     <div class="grid gap-3 lg:grid-cols-2">
-                      <NInput :value="selectedConfig.endpoint" placeholder="摘要 LLM Endpoint，可填 base URL 或完整 /v1/chat/completions；留空则使用内置摘要器" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.endpoint" placeholder="摘要 LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions；留空则使用内置摘要器" @update:value="updateSelectedConfig({ endpoint: $event })" />
                       <NInput :value="selectedConfig.model" placeholder="摘要模型名" @update:value="updateSelectedConfig({ model: $event })" />
                     </div>
                     <div class="text-xs leading-6 text-slate/75">
-                      示例：http://192.168.200.182:9888 或 http://192.168.200.182:9888/v1/chat/completions。
+                      示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
                     <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                     <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 200000 })" />

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -21,14 +22,28 @@ import (
 	"github.com/lgt/asr/internal/interfaces/middleware"
 )
 
+type responseEnvelope[T any] struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    T      `json:"data"`
+}
+
 type taskRepoHandlerStub struct {
 	tasks     map[uint64]*domainasr.TranscriptionTask
 	deletedID uint64
 	updated   *domainasr.TranscriptionTask
 }
 
-func (r *taskRepoHandlerStub) Create(_ context.Context, _ *domainasr.TranscriptionTask) error {
-	panic("unexpected Create call")
+func (r *taskRepoHandlerStub) Create(_ context.Context, task *domainasr.TranscriptionTask) error {
+	if r.tasks == nil {
+		r.tasks = map[uint64]*domainasr.TranscriptionTask{}
+	}
+	if task.ID == 0 {
+		task.ID = uint64(len(r.tasks) + 1)
+	}
+	copy := *task
+	r.tasks[task.ID] = &copy
+	return nil
 }
 
 func (r *taskRepoHandlerStub) GetByID(_ context.Context, id uint64) (*domainasr.TranscriptionTask, error) {
@@ -100,12 +115,21 @@ func (s *completedTaskProcessorHandlerStub) ResumeCompletedTaskFromFailure(_ con
 }
 
 type batchEngineHandlerStub struct {
-	submitResult *appasr.BatchSubmitResult
-	queryResult  *appasr.BatchTaskStatus
-	submitErr    error
-	queryErr     error
-	lastReq      appasr.BatchSubmitRequest
-	queryCalls   int
+	submitResult        *appasr.BatchSubmitResult
+	queryResult         *appasr.BatchTaskStatus
+	submitErr           error
+	queryErr            error
+	streamStartErr      error
+	streamSessionID     string
+	streamChunkResult   *appasr.StreamChunkResponse
+	streamChunkErr      error
+	streamFinishResult  *appasr.StreamChunkResponse
+	streamFinishErr     error
+	lastReq             appasr.BatchSubmitRequest
+	lastStreamSessionID string
+	lastStreamPCMData   []byte
+	finishedSessionID   string
+	queryCalls          int
 }
 
 func (s *batchEngineHandlerStub) SubmitBatch(_ context.Context, req appasr.BatchSubmitRequest) (*appasr.BatchSubmitResult, error) {
@@ -124,12 +148,56 @@ func (s *batchEngineHandlerStub) QueryBatchTask(_ context.Context, _ string) (*a
 	return s.queryResult, nil
 }
 
+func (s *batchEngineHandlerStub) StartStreamSession(_ context.Context) (string, error) {
+	if s.streamStartErr != nil {
+		return "", s.streamStartErr
+	}
+	return s.streamSessionID, nil
+}
+
+func (s *batchEngineHandlerStub) PushStreamChunk(_ context.Context, sessionID string, pcmData []byte) (*appasr.StreamChunkResponse, error) {
+	s.lastStreamSessionID = sessionID
+	s.lastStreamPCMData = append([]byte(nil), pcmData...)
+	if s.streamChunkErr != nil {
+		return nil, s.streamChunkErr
+	}
+	return s.streamChunkResult, nil
+}
+
+func (s *batchEngineHandlerStub) FinishStreamSession(_ context.Context, sessionID string) (*appasr.StreamChunkResponse, error) {
+	s.finishedSessionID = sessionID
+	if s.streamFinishErr != nil {
+		return nil, s.streamFinishErr
+	}
+	return s.streamFinishResult, nil
+}
+
 func cloneTaskForHandler(task *domainasr.TranscriptionTask) *domainasr.TranscriptionTask {
 	if task == nil {
 		return nil
 	}
 	copy := *task
 	return &copy
+}
+
+func startManagedStreamSession(t *testing.T, router *gin.Engine) string {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/stream-sessions", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200 when starting stream session, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var envelope responseEnvelope[appasr.StreamSessionResponse]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode stream session response: %v", err)
+	}
+	if envelope.Data.SessionID == "" {
+		t.Fatalf("expected non-empty managed session id, got %+v", envelope)
+	}
+	return envelope.Data.SessionID
 }
 
 type workflowRepoBindingStub struct {
@@ -427,5 +495,225 @@ func TestTranscribeRealtimeSegmentPollsTaskResult(t *testing.T) {
 	}
 	if !bytes.Contains(recorder.Body.Bytes(), []byte("轮询后的识别结果")) {
 		t.Fatalf("expected polled snippet text in response, got %s", recorder.Body.String())
+	}
+}
+
+func TestUploadRealtimeTaskFileCreatesCompletedTaskWithAudio(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	repo := &taskRepoHandlerStub{tasks: map[uint64]*domainasr.TranscriptionTask{}}
+	handler := NewASRHandler(appasr.NewService(repo, nil, &completedTaskProcessorHandlerStub{}, 5, nil), nil, t.TempDir(), "http://example.com", 100)
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("auth_claims", &middleware.Claims{UserID: 7, Role: "user"})
+		c.Next()
+	})
+	router.POST("/realtime-tasks/upload", handler.UploadRealtimeTaskFile)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "session.wav")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("RIFF....WAVEfmt ")); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.WriteField("result_text", "整段实时文本"); err != nil {
+		t.Fatalf("write result_text: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/realtime-tasks/upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(repo.tasks) != 1 {
+		t.Fatalf("expected one realtime task created, got %d", len(repo.tasks))
+	}
+	var created *domainasr.TranscriptionTask
+	for _, task := range repo.tasks {
+		created = task
+	}
+	if created == nil {
+		t.Fatal("expected created task")
+	}
+	if created.Type != domainasr.TaskTypeRealtime {
+		t.Fatalf("expected realtime task type, got %q", created.Type)
+	}
+	if created.ResultText != "整段实时文本" {
+		t.Fatalf("unexpected result text: %s", created.ResultText)
+	}
+	if created.LocalFilePath == "" {
+		t.Fatalf("expected local file path on created task, got %+v", created)
+	}
+	if created.AudioURL == "" {
+		t.Fatalf("expected audio url on created task, got %+v", created)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("session.wav")) {
+		t.Fatalf("expected filename in response, got %s", recorder.Body.String())
+	}
+	if _, err := os.Stat(created.LocalFilePath); err != nil {
+		t.Fatalf("expected uploaded session audio kept on disk, stat err=%v", err)
+	}
+	if err := os.Remove(created.LocalFilePath); err != nil {
+		t.Fatalf("cleanup created audio file: %v", err)
+	}
+}
+
+func TestStartStreamSessionReturnsSessionID(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	batchEngine := &batchEngineHandlerStub{streamSessionID: "upstream-stream-1"}
+	handler := NewASRHandler(appasr.NewService(nil, batchEngine, nil, 5, nil), nil, "uploads", "", 100)
+
+	router := gin.New()
+	router.POST("/stream-sessions", handler.StartStreamSession)
+
+	req := httptest.NewRequest(http.MethodPost, "/stream-sessions", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var envelope responseEnvelope[appasr.StreamSessionResponse]
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode session response: %v", err)
+	}
+	if envelope.Data.SessionID == "" {
+		t.Fatalf("expected non-empty managed session id, got %s", recorder.Body.String())
+	}
+	if envelope.Data.SessionID == "upstream-stream-1" {
+		t.Fatalf("expected managed session id different from upstream id, got %s", recorder.Body.String())
+	}
+}
+
+func TestPushStreamChunkForwardsRawPCMData(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	batchEngine := &batchEngineHandlerStub{streamSessionID: "upstream-stream-1", streamChunkResult: &appasr.StreamChunkResponse{SessionID: "upstream-stream-1", Text: "增量文本", Language: "zh"}}
+	handler := NewASRHandler(appasr.NewService(nil, batchEngine, nil, 5, nil), nil, "uploads", "", 100)
+
+	router := gin.New()
+	router.POST("/stream-sessions", handler.StartStreamSession)
+	router.POST("/stream-sessions/:id/chunks", handler.PushStreamChunk)
+	router.POST("/stream-sessions/:id/commit", handler.CommitStreamSession)
+	managedSessionID := startManagedStreamSession(t, router)
+
+	payload := []byte{1, 2, 3, 4}
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/stream-sessions/%s/chunks", managedSessionID), bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if batchEngine.lastStreamSessionID != "upstream-stream-1" {
+		t.Fatalf("expected stream session id forwarded, got %s", batchEngine.lastStreamSessionID)
+	}
+	if !bytes.Equal(batchEngine.lastStreamPCMData, payload) {
+		t.Fatalf("expected raw pcm data forwarded, got %v", batchEngine.lastStreamPCMData)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("增量文本")) {
+		t.Fatalf("expected chunk text in response, got %s", recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("text_delta")) {
+		t.Fatalf("expected chunk delta in response, got %s", recorder.Body.String())
+	}
+}
+
+func TestCommitStreamSessionReturnsCommittedDelta(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	batchEngine := &batchEngineHandlerStub{streamSessionID: "upstream-stream-1", streamChunkResult: &appasr.StreamChunkResponse{SessionID: "upstream-stream-1", Text: "你好世界", Language: "zh"}}
+	handler := NewASRHandler(appasr.NewService(nil, batchEngine, nil, 5, nil), nil, "uploads", "", 100)
+
+	router := gin.New()
+	router.POST("/stream-sessions", handler.StartStreamSession)
+	router.POST("/stream-sessions/:id/chunks", handler.PushStreamChunk)
+	router.POST("/stream-sessions/:id/commit", handler.CommitStreamSession)
+	managedSessionID := startManagedStreamSession(t, router)
+
+	chunkReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/stream-sessions/%s/chunks", managedSessionID), bytes.NewReader([]byte{1, 2, 3}))
+	chunkReq.Header.Set("Content-Type", "application/octet-stream")
+	chunkRecorder := httptest.NewRecorder()
+	router.ServeHTTP(chunkRecorder, chunkReq)
+	if chunkRecorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for chunk, got %d, body=%s", chunkRecorder.Code, chunkRecorder.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/stream-sessions/%s/commit", managedSessionID), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("你好世界")) {
+		t.Fatalf("expected committed text in response, got %s", recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("text_delta")) {
+		t.Fatalf("expected committed delta in response, got %s", recorder.Body.String())
+	}
+}
+
+func TestFinishStreamSessionReturnsFinalText(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	batchEngine := &batchEngineHandlerStub{streamSessionID: "upstream-stream-1", streamFinishResult: &appasr.StreamChunkResponse{SessionID: "upstream-stream-1", Text: "最终文本", Language: "zh"}}
+	handler := NewASRHandler(appasr.NewService(nil, batchEngine, nil, 5, nil), nil, "uploads", "", 100)
+
+	router := gin.New()
+	router.POST("/stream-sessions", handler.StartStreamSession)
+	router.POST("/stream-sessions/:id/finish", handler.FinishStreamSession)
+	managedSessionID := startManagedStreamSession(t, router)
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/stream-sessions/%s/finish", managedSessionID), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if batchEngine.finishedSessionID != "upstream-stream-1" {
+		t.Fatalf("expected finish session id forwarded, got %s", batchEngine.finishedSessionID)
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("最终文本")) {
+		t.Fatalf("expected final text in response, got %s", recorder.Body.String())
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("is_final")) {
+		t.Fatalf("expected final flag in response, got %s", recorder.Body.String())
+	}
+}
+
+func TestPushStreamChunkRejectsUnknownSession(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	handler := NewASRHandler(appasr.NewService(nil, &batchEngineHandlerStub{}, nil, 5, nil), nil, "uploads", "", 100)
+	router := gin.New()
+	router.POST("/stream-sessions/:id/chunks", handler.PushStreamChunk)
+
+	req := httptest.NewRequest(http.MethodPost, "/stream-sessions/missing/chunks", bytes.NewReader([]byte{1, 2, 3}))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 }

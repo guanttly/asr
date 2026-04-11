@@ -3,7 +3,12 @@ import { NTag, useMessage } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { createTranscriptionTask, getTranscriptionTaskExecutions, transcribeRealtimeSegment } from '@/api/asr'
+import {
+  createTranscriptionTask,
+  getTranscriptionTaskExecutions,
+  transcribeRealtimeSegment,
+  uploadRealtimeSessionTask,
+} from '@/api/asr'
 import { executeWorkflow } from '@/api/workflow'
 import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
@@ -134,6 +139,7 @@ const activeSegmentDurationMs = ref(0)
 const pendingInstantChunks: string[] = []
 let instantProcessingPromise: Promise<void> | null = null
 const pendingSegmentUploads: SegmentUploadItem[] = []
+const sessionAudioChunks: ArrayBuffer[] = []
 const leadInChunks: ArrayBuffer[] = []
 let activeSegmentChunks: ArrayBuffer[] = []
 let segmentUploadPromise: Promise<void> | null = null
@@ -160,6 +166,7 @@ const effectiveImmediateWorkflowId = computed(() => isRecording.value
 const hasImmediateWorkflow = computed(() => effectiveImmediateWorkflowId.value != null)
 const effectiveWorkflowLabel = computed(() => workflowLabel(effectiveImmediateWorkflowId.value))
 const effectiveOutputText = computed(() => store.processedTranscriptText.trim() || store.transcriptText.trim())
+const recognitionQueueSummary = computed(() => `待识别句子：${uploadQueueSize.value} · 待处理文本：${instantQueueSize.value}`)
 const realtimeConfigSummary = computed(() => {
   const workflowSummary = hasImmediateWorkflow.value ? effectiveWorkflowLabel.value : '未绑定即时工作流'
   const punctuationSummary = effectiveRealtimeSettings.value.keepPunctuation ? '保留标点' : '过滤标点'
@@ -174,9 +181,9 @@ const immediateOutputDescription = computed(() => {
 })
 const instantProcessingNotice = computed(() => {
   if (isRecording.value && hasSessionWorkflow.value)
-    return '当前场景按“说完一句再识别”工作。前端会在本地检测停顿并提交整句音频，每句识别完成后立即执行一次实时工作流；停止录音后系统还会再对整段文本做一次完整复核并保存历史任务。'
+    return '当前场景按“本地 VAD 分句 + 非实时短句识别”工作。前端会在本地检测停顿并提交整句音频，每句识别完成后立即执行一次实时工作流；停止录音后系统还会上传整段录音并保存为历史任务。'
   if (hasImmediateWorkflow.value)
-    return '当前已配置实时应用默认工作流。开始录音后，前端会在本地按停顿分句，每句识别完成后都会即时进入这条工作流；停止录音时系统还会再做一次整段复核。'
+    return '当前已配置实时应用默认工作流。开始录音后，前端会在本地按停顿分句，每句识别完成后都会即时进入这条工作流；停止录音时系统还会上传整段录音并保存历史任务。'
   if (configuredWorkflowMissing.value)
     return configuredWorkflowMessage.value
   return '当前未配置实时应用默认工作流。系统仍会按停顿逐句识别，但即时输出不会做术语纠错或文本后处理。'
@@ -194,8 +201,8 @@ const transportStateLabel = computed(() => {
 })
 const transportStateDescription = computed(() => {
   if (isRecording.value)
-    return `本地停顿检测 + HTTP 整句上传，当前能量 ${listeningLevel.value.toFixed(3)} / 触发阈值 ${speechThresholdLevel.value.toFixed(3)} / 底噪 ${noiseFloorLevel.value.toFixed(3)}`
-  return '浏览器本地切句后再调用短句识别接口，不再维持长连接流式会话。'
+    return `浏览器本地 VAD 分句 + HTTP 短句识别，当前能量 ${listeningLevel.value.toFixed(3)} / 触发阈值 ${speechThresholdLevel.value.toFixed(3)} / 底噪 ${noiseFloorLevel.value.toFixed(3)}`
+  return '浏览器本地切句后再调用短句识别接口，不维持流式会话。'
 })
 
 function clamp(value: number, min: number, max: number) {
@@ -585,7 +592,6 @@ function queueSegmentUpload(chunks: ArrayBuffer[]) {
   const file = createWavFileFromChunks(chunks, `realtime-segment-${Date.now()}.wav`)
   pendingSegmentUploads.push({ file, duration: pcm16BytesToDurationSeconds(bytes) })
   uploadQueueSize.value = pendingSegmentUploads.length
-  totalSegmentCount.value += 1
   void flushSegmentUploadQueue()
 }
 
@@ -605,6 +611,7 @@ function finalizeActiveSegment(reason: 'silence' | 'limit' | 'stop') {
     return
   }
 
+  totalSegmentCount.value += 1
   queueSegmentUpload(finalizedChunks)
   resetActiveSegment()
   updateDraftText()
@@ -612,6 +619,7 @@ function finalizeActiveSegment(reason: 'silence' | 'limit' | 'stop') {
 
 function handleRecorderChunk(chunk: ArrayBuffer) {
   const copiedChunk = cloneChunk(chunk)
+  sessionAudioChunks.push(copiedChunk)
   const rms = computePCM16Rms(copiedChunk)
   listeningLevel.value = rms
   const hasSpeech = rms >= speechThresholdLevel.value
@@ -782,12 +790,35 @@ async function persistRealtimeSession() {
 
   savingSession.value = true
   try {
-    const result = await createTranscriptionTask({
-      type: 'realtime',
-      result_text: transcript,
-      duration: currentDurationSeconds(),
-      workflow_id: sessionWorkflowId.value ?? undefined,
-    })
+    let result
+    if (sessionAudioChunks.length > 0) {
+      try {
+        const formData = new FormData()
+        formData.append('file', createWavFileFromChunks(sessionAudioChunks, `realtime-session-${Date.now()}.wav`))
+        formData.append('result_text', transcript)
+        if (sessionWorkflowId.value != null)
+          formData.append('workflow_id', String(sessionWorkflowId.value))
+        result = await uploadRealtimeSessionTask(formData)
+      }
+      catch (error) {
+        segmentUploadError.value = extractErrorMessage(error, '整段录音上传失败，已回退为仅保存文本结果。')
+        message.warning(segmentUploadError.value)
+        result = await createTranscriptionTask({
+          type: 'realtime',
+          result_text: transcript,
+          duration: currentDurationSeconds(),
+          workflow_id: sessionWorkflowId.value ?? undefined,
+        })
+      }
+    }
+    else {
+      result = await createTranscriptionTask({
+        type: 'realtime',
+        result_text: transcript,
+        duration: currentDurationSeconds(),
+        workflow_id: sessionWorkflowId.value ?? undefined,
+      })
+    }
     latestTask.value = result?.data || null
     const taskId = result?.data?.id
     latestExecutions.value = []
@@ -814,6 +845,7 @@ async function handleStart() {
     latestTask.value = null
     latestExecutions.value = []
     resetActiveSegment()
+    sessionAudioChunks.splice(0, sessionAudioChunks.length)
     leadInChunks.splice(0, leadInChunks.length)
     pendingSegmentUploads.splice(0, pendingSegmentUploads.length)
     pendingInstantChunks.splice(0, pendingInstantChunks.length)
@@ -834,9 +866,9 @@ async function handleStart() {
     if (configuredWorkflowMissing.value)
       message.warning(`${configuredWorkflowMessage.value}，本次仅输出原始识别文本。`)
     else if (!configuredWorkflowId.value)
-      message.success('录音已启动，系统会按停顿逐句识别并输出原始文本')
+      message.success('录音已启动，系统会按本地 VAD 分句逐句识别并输出原始文本')
     else
-      message.success('录音已启动，系统会按停顿逐句识别并即时处理')
+      message.success('录音已启动，系统会按本地 VAD 分句逐句识别并即时处理')
   }
   catch (error) {
     stop()
@@ -862,6 +894,7 @@ async function handleStop() {
     store.isRecording = false
     updateDraftText()
     await persistRealtimeSession()
+    sessionAudioChunks.splice(0, sessionAudioChunks.length)
     recordingStartedAt.value = null
     stoppingSession.value = false
   }
@@ -898,6 +931,7 @@ onBeforeUnmount(() => {
     stop()
     finalizeActiveSegment('stop')
   }
+  sessionAudioChunks.splice(0, sessionAudioChunks.length)
   store.isRecording = false
   recordingStartedAt.value = null
 })
@@ -1132,7 +1166,7 @@ onBeforeUnmount(() => {
               {{ instantProcessing ? '处理中' : '空闲' }}
             </div>
             <div class="mt-1 text-xs text-slate/80">
-              待识别句子：{{ uploadQueueSize }} · 待处理文本：{{ instantQueueSize }}
+              {{ recognitionQueueSummary }}
             </div>
             <div v-if="segmentUploadError" class="mt-2 text-xs leading-6 text-amber-700">
               {{ segmentUploadError }}

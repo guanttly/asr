@@ -106,13 +106,14 @@ func (p *WorkflowAwareProcessor) processWithWorkflow(ctx context.Context, task *
 	}
 
 	meeting := &meetingdomain.Meeting{
-		SourceTaskID: &task.ID,
-		WorkflowID:   task.WorkflowID,
-		UserID:       task.UserID,
-		Title:        buildWorkflowMeetingTitle(task),
-		AudioURL:     task.AudioURL,
-		Duration:     task.Duration,
-		Status:       meetingdomain.MeetingStatusCompleted,
+		SourceTaskID:  &task.ID,
+		WorkflowID:    task.WorkflowID,
+		UserID:        task.UserID,
+		Title:         buildWorkflowMeetingTitle(task),
+		AudioURL:      task.AudioURL,
+		LocalFilePath: task.LocalFilePath,
+		Duration:      task.Duration,
+		Status:        meetingdomain.MeetingStatusCompleted,
 	}
 	if err := p.meetingRepo.Create(ctx, meeting); err != nil {
 		return err

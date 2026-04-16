@@ -144,7 +144,15 @@ func main() {
 	if cfg.Services.DiarizationURL != "" {
 		diarizeClient = diarization.NewClient(cfg.Services.DiarizationURL)
 	}
-	engine.RegisterHandler(domain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient))
+	var speakerAnalysisClient *diarization.Client
+	speakerAnalysisURL := cfg.Services.SpeakerAnalysisURL
+	if speakerAnalysisURL == "" {
+		speakerAnalysisURL = cfg.Services.DiarizationURL
+	}
+	if speakerAnalysisURL != "" {
+		speakerAnalysisClient = diarization.NewClient(speakerAnalysisURL)
+	}
+	engine.RegisterHandler(domain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient, speakerAnalysisClient))
 
 	workflowService := appwf.NewService(
 		workflowRepo,

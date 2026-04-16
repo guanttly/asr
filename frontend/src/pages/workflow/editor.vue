@@ -172,6 +172,54 @@ const addableNodeOptions = computed(() => nodeTypes.value
 const selectedNode = computed(() => nodes.value[selectedIndex.value] || null)
 const selectedNodeIsFixed = computed(() => Boolean(selectedNode.value?.is_fixed))
 const hasFixedTailNode = computed(() => Boolean(nodes.value[nodes.value.length - 1]?.is_fixed))
+
+function buildMeetingSummaryChunkPreview(detail: unknown) {
+  if (!detail || typeof detail !== 'object')
+    return ''
+  const chunkOutputs = Array.isArray((detail as Record<string, unknown>).chunk_outputs)
+    ? (detail as Record<string, unknown>).chunk_outputs as Array<Record<string, unknown>>
+    : []
+  if (!chunkOutputs.length)
+    return ''
+  return chunkOutputs
+    .map((chunk, index) => {
+      const title = typeof chunk.title === 'string' && chunk.title.trim() ? chunk.title.trim() : `片段 ${index + 1}`
+      const output = typeof chunk.output === 'string' ? chunk.output.trim() : ''
+      if (!output)
+        return ''
+      return `## ${title}\n\n${output}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function buildSpeakerDiarizePreview(detail: unknown) {
+  if (!detail || typeof detail !== 'object')
+    return ''
+  const segments = Array.isArray((detail as Record<string, unknown>).segments)
+    ? (detail as Record<string, unknown>).segments as Array<Record<string, unknown>>
+    : []
+  if (!segments.length)
+    return ''
+  return segments
+    .map((segment, index) => {
+      const speaker = String(segment.speaker ?? segment.Speaker ?? segment.speaker_id ?? segment.SpeakerID ?? `speaker_${index + 1}`)
+      const start = segment.start_time ?? segment.StartTime ?? '-'
+      const end = segment.end_time ?? segment.EndTime ?? '-'
+      return `[${speaker} ${start}s-${end}s]`
+    })
+    .join('\n')
+}
+
+function buildNodeTestOutputPreview(nodeType: string | undefined, outputText: string | undefined, detail: unknown) {
+  if (outputText && outputText.trim())
+    return outputText
+  if (nodeType === 'meeting_summary')
+    return buildMeetingSummaryChunkPreview(detail)
+  if (nodeType === 'speaker_diarize')
+    return buildSpeakerDiarizePreview(detail)
+  return ''
+}
 const templateComparison = computed(() => {
   const currentCounts = countNodeTypes(nodes.value)
   const templateCounts = countNodeTypes(templatePreviewNodes.value)
@@ -431,26 +479,6 @@ const workflowNeedsAudio = computed(() => isAudioDrivenNodeType(firstEnabledNode
 const nodeTestInputPreview = computed(() => selectedNodeNeedsAudio.value
   ? (nodeTestAudioFile.value ? `已上传音频：${nodeTestAudioFile.value.name}` : '尚未选择音频文件')
   : nodeTestInput.value)
-
-function buildMeetingSummaryChunkPreview(detail: unknown) {
-  if (!detail || typeof detail !== 'object')
-    return ''
-  const chunkOutputs = Array.isArray((detail as Record<string, unknown>).chunk_outputs)
-    ? (detail as Record<string, unknown>).chunk_outputs as Array<Record<string, unknown>>
-    : []
-  if (!chunkOutputs.length)
-    return ''
-  return chunkOutputs
-    .map((chunk, index) => {
-      const title = typeof chunk.title === 'string' && chunk.title.trim() ? chunk.title.trim() : `片段 ${index + 1}`
-      const output = typeof chunk.output === 'string' ? chunk.output.trim() : ''
-      if (!output)
-        return ''
-      return `## ${title}\n\n${output}`
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
 
 const nodeTestHint = computed(() => {
   if (!selectedNode.value)
@@ -1158,11 +1186,9 @@ async function handleTestNode() {
             message: event.message || '节点执行中',
           }
           nodeTestDetail.value = nextDetail
-          if (selectedNode.value?.node_type === 'meeting_summary') {
-            const preview = buildMeetingSummaryChunkPreview(nextDetail)
-            if (preview)
-              nodeTestOutput.value = preview
-          }
+          const preview = buildNodeTestOutputPreview(selectedNode.value?.node_type, nodeTestOutput.value, nextDetail)
+          if (preview)
+            nodeTestOutput.value = preview
           return
         }
         if (event.type === 'delta') {
@@ -1180,8 +1206,8 @@ async function handleTestNode() {
           return
         }
         finished = true
-        nodeTestOutput.value = event.output_text || ''
-        nodeTestDetail.value = event.detail ?? event.error ?? null
+        nodeTestDetail.value = event.detail ?? event.error ?? nodeTestDetail.value
+        nodeTestOutput.value = buildNodeTestOutputPreview(selectedNode.value?.node_type, event.output_text, nodeTestDetail.value)
       },
     })
     if (!finished)
@@ -1730,9 +1756,8 @@ watch(selectedIndex, () => {
 
                 <template v-else-if="selectedNode.node_type === 'speaker_diarize'">
                   <div class="grid gap-3">
-                    <NInput :value="selectedConfig.service_url" placeholder="说话人分离服务 URL" @update:value="updateSelectedConfig({ service_url: $event })" />
                     <div class="text-xs leading-6 text-slate/75">
-                      默认兼容 legacy diarization 服务。若启用声纹匹配，请将服务地址指向 3D-Speaker 服务根地址或 /api/v1。
+                      当前默认复用系统已配置的 Speaker Analysis Service。启用声纹匹配时，也会直接复用同一服务中的声纹库。
                     </div>
                     <div class="flex flex-wrap gap-6 rounded-2 bg-white/60 px-3 py-3">
                       <label class="flex items-center gap-2 text-sm text-ink">

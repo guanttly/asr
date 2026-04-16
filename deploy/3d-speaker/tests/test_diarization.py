@@ -2,7 +2,7 @@
 说话人分离引擎测试
 """
 
-from src.engine import DiarizationEngine
+from src.engine import DiarizationEngine, _clean_subprocess_output, _summarize_subprocess_output
 from src.utils import segments_to_rttm
 
 
@@ -82,6 +82,39 @@ class TestMergeSegments:
         """空列表"""
         merged = DiarizationEngine._merge_adjacent_segments([])
         assert merged == []
+
+
+class TestSubprocessOutputCleaning:
+    """子进程输出清洗测试"""
+
+    def test_clean_subprocess_output_strips_ansi_and_blank_lines(self):
+        raw = "\u001b[A\u001b[0mDownloading model.bin: 100%\r\n\r\nTraceback line\n"
+        cleaned = _clean_subprocess_output(raw)
+        assert "\u001b" not in cleaned
+        assert cleaned == "Downloading model.bin: 100%\nTraceback line"
+
+    def test_summarize_subprocess_output_keeps_tail_lines(self):
+        raw = "\n".join([f"line-{index}" for index in range(30)])
+        summary = _summarize_subprocess_output(raw, max_lines=5)
+        assert summary == "line-25\nline-26\nline-27\nline-28\nline-29"
+
+
+class TestNativeModelCache:
+    """原生 diarization 模型缓存测试"""
+
+    def test_native_model_cache_ready_returns_false_when_checkpoint_missing(self, tmp_path):
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine.native_model_cache_dir = str(tmp_path)
+        assert engine._native_model_cache_ready() is False
+
+    def test_native_model_cache_ready_returns_true_when_checkpoint_exists(self, tmp_path):
+        checkpoint = tmp_path / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(b"ok")
+
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine.native_model_cache_dir = str(tmp_path)
+        assert engine._native_model_cache_ready() is True
 
 
 # 需要 pytest

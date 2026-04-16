@@ -5,7 +5,9 @@ PIP_BIN="${1:-pip}"
 PYTHON_BIN="${2:-${PYTHON_BIN:-}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SPEAKERLAB_REPO_MIRROR="${SPEAKERLAB_REPO_MIRROR:-https://gitcode.com/mirrors/modelscope/3D-Speaker.git}"
 SPEAKERLAB_REPO="${SPEAKERLAB_REPO:-https://github.com/modelscope/3D-Speaker.git}"
+SPEAKERLAB_REPO_LIST="${SPEAKERLAB_REPO_LIST:-}"
 SPEAKERLAB_REF="${SPEAKERLAB_REF:-main}"
 GIT_CLONE_RETRIES="${GIT_CLONE_RETRIES:-3}"
 PIP_INSTALL_ARGS=(--retries 5)
@@ -85,6 +87,15 @@ find_local_source_tree() {
     return 1
 }
 
+speakerlab_repo_candidates() {
+    if [ -n "${SPEAKERLAB_REPO_LIST}" ]; then
+        printf '%s\n' "${SPEAKERLAB_REPO_LIST}" | tr ', ' '\n\n' | awk 'NF && !seen[$0]++'
+        return
+    fi
+
+    printf '%s\n' "${SPEAKERLAB_REPO_MIRROR}" "${SPEAKERLAB_REPO}" | awk 'NF && !seen[$0]++'
+}
+
 install_runtime_deps() {
     info "安装 speakerlab 运行依赖..."
     "${PIP_BIN}" install "${PIP_INSTALL_ARGS[@]}" \
@@ -115,6 +126,7 @@ ensure_source_tree() {
     local source_dir="$1"
     local existing_source_dir
     local attempt=1
+    local repo
 
     if [ -d "${source_dir}/speakerlab" ]; then
         echo "${source_dir}"
@@ -134,11 +146,15 @@ ensure_source_tree() {
 
     mkdir -p "$(dirname "${source_dir}")"
     while [ "${attempt}" -le "${GIT_CLONE_RETRIES}" ]; do
-        rm -rf "${source_dir}"
-        info "拉取 3D-Speaker 源码: ${SPEAKERLAB_REPO} (${SPEAKERLAB_REF}) [${attempt}/${GIT_CLONE_RETRIES}]" >&2
-        if GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${SPEAKERLAB_REF}" "${SPEAKERLAB_REPO}" "${source_dir}"; then
-            break
-        fi
+        while IFS= read -r repo; do
+            [ -n "${repo}" ] || continue
+            rm -rf "${source_dir}"
+            info "拉取 3D-Speaker 源码: ${repo} (${SPEAKERLAB_REF}) [${attempt}/${GIT_CLONE_RETRIES}]" >&2
+            if GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${SPEAKERLAB_REF}" "${repo}" "${source_dir}"; then
+                break 2
+            fi
+            warn "源码地址拉取失败: ${repo}" >&2
+        done < <(speakerlab_repo_candidates)
         if [ "${attempt}" -lt "${GIT_CLONE_RETRIES}" ]; then
             warn "源码拉取失败，2 秒后重试" >&2
             sleep 2

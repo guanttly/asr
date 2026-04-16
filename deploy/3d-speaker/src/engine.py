@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 import os
+import re
+import subprocess
+import sys
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -24,6 +28,74 @@ from src.voiceprint import VoiceprintManager
 
 if TYPE_CHECKING:
     from src.vad import VoiceActivityDetector
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _clean_subprocess_output(text: str) -> str:
+    cleaned = _ANSI_ESCAPE_RE.sub("", text or "")
+    cleaned = cleaned.replace("\r", "\n")
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    return "\n".join(lines)
+
+
+def _summarize_subprocess_output(text: str, max_lines: int = 20, max_chars: int = 4000) -> str:
+    cleaned = _clean_subprocess_output(text)
+    if not cleaned:
+        return ""
+
+    lines = cleaned.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    summary = "\n".join(lines)
+    if len(summary) > max_chars:
+        summary = summary[-max_chars:]
+    return summary
+
+
+def _stream_subprocess_logs(
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    timeout: int = 600,
+    env_overrides: Optional[dict[str, str]] = None,
+) -> tuple[int, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    env.setdefault("TQDM_DISABLE", "1")
+    if env_overrides:
+        env.update({key: value for key, value in env_overrides.items() if value})
+
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    output_lines: list[str] = []
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            output_lines.append(line)
+            cleaned = _clean_subprocess_output(line)
+            if cleaned:
+                logger.info(f"[speakerlab] {cleaned}")
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise RuntimeError(f"speakerlab 执行超时（>{timeout}s）")
+
+    return return_code, "".join(output_lines)
 
 
 class DiarizationEngine:
@@ -53,6 +125,8 @@ class DiarizationEngine:
         target_sr: int = 16000,
         segment_duration: float = 1.5,
         segment_step: float = 0.75,
+        native_model_cache_dir: Optional[str] = None,
+        native_python_bin: Optional[str] = None,
     ):
         self.extractor = extractor
         self.vad = vad
@@ -62,8 +136,36 @@ class DiarizationEngine:
         self.target_sr = target_sr
         self.segment_duration = segment_duration
         self.segment_step = segment_step
+        self.native_model_cache_dir = native_model_cache_dir
+        self.native_python_bin = native_python_bin
 
         self._native_available = self._check_native()
+
+    def _resolve_native_model_cache_dir(self) -> Optional[str]:
+        if not self.native_model_cache_dir:
+            return None
+        cache_dir = os.path.abspath(self.native_model_cache_dir)
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    def _native_model_cache_ready(self) -> bool:
+        cache_dir = self._resolve_native_model_cache_dir()
+        if not cache_dir:
+            return True
+
+        required_files = ("campplus_cn_en_common.pt",)
+        missing_files = [
+            file_name for file_name in required_files
+            if not any(Path(cache_dir).rglob(file_name))
+        ]
+        if missing_files:
+            logger.warning(
+                "native diarization 模型缓存不完整，跳过原生流水线并回退兼容模式: {} (cache_dir={})",
+                ", ".join(missing_files),
+                cache_dir,
+            )
+            return False
+        return True
 
     def _check_native(self) -> bool:
         """检查 3D-Speaker 原生分离流水线是否可用"""
@@ -73,10 +175,11 @@ class DiarizationEngine:
             if can_run_native_pipeline():
                 return True
         except Exception:
-            pass
-
             logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
             return False
+
+        logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
+        return False
 
     def diarize(
         self,
@@ -110,7 +213,8 @@ class DiarizationEngine:
         audio_duration = len(waveform) / sr
 
         # 执行分离
-        if self._native_available:
+        use_native_pipeline = self._native_available and self._native_model_cache_ready()
+        if use_native_pipeline:
             raw_segments, cluster_embeddings = self._diarize_native(
                 audio_path, min_speakers, max_speakers, method
             )
@@ -203,21 +307,33 @@ class DiarizationEngine:
         method: str,
     ) -> tuple[list[dict], dict[str, np.ndarray]]:
         """使用 3D-Speaker 原生流水线"""
-        import subprocess
         import tempfile
 
         out_dir = tempfile.mkdtemp(prefix="diar_")
 
         cmd = [
-            "python", "-m", "src.speakerlab_entry",
+            self.native_python_bin or sys.executable or "python3", "-m", "src.speakerlab_entry",
             "--wav", audio_path,
             "--out_dir", out_dir,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            logger.error(f"3D-Speaker 分离失败: {result.stderr}")
-            raise RuntimeError(f"分离失败: {result.stderr}")
+        native_cache_dir = self._resolve_native_model_cache_dir()
+        env_overrides = {}
+        if native_cache_dir:
+            env_overrides["MODELSCOPE_CACHE"] = native_cache_dir
+
+        logger.info("启动 speakerlab 原生分离流水线")
+        return_code, combined_output = _stream_subprocess_logs(
+            cmd,
+            timeout=600,
+            env_overrides=env_overrides,
+        )
+        if return_code != 0:
+            error_summary = _summarize_subprocess_output(combined_output)
+            if not error_summary:
+                error_summary = f"speakerlab 进程退出码 {return_code}"
+            logger.error(f"3D-Speaker 分离失败: {error_summary}")
+            raise RuntimeError(f"分离失败: {error_summary}")
 
         # 解析 RTTM 输出
         rttm_files = list(

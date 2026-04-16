@@ -27,12 +27,17 @@ MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
 DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-mirrors.aliyun.com}"
+APT_MIRROR="${APT_MIRROR:-https://mirrors.aliyun.com/debian}"
+APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.aliyun.com/debian-security}"
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPEAKERLAB_VENDOR_DIR="${WORKSPACE_DIR}/vendor/3D-Speaker"
+SPEAKERLAB_REPO_MIRROR="${SPEAKERLAB_REPO_MIRROR:-https://gitcode.com/mirrors/modelscope/3D-Speaker.git}"
 SPEAKERLAB_REPO="${SPEAKERLAB_REPO:-https://github.com/modelscope/3D-Speaker.git}"
+SPEAKERLAB_REPO_LIST="${SPEAKERLAB_REPO_LIST:-}"
 SPEAKERLAB_REF="${SPEAKERLAB_REF:-main}"
 SPEAKERLAB_CLONE_IMAGE="${SPEAKERLAB_CLONE_IMAGE:-alpine/git:latest}"
 SPEAKERLAB_CLONE_RETRIES="${SPEAKERLAB_CLONE_RETRIES:-3}"
+SPEAKERLAB_CLONE_IMAGE_READY=0
 
 # 终端输出颜色。
 GREEN='\033[0;32m'
@@ -59,19 +64,57 @@ speakerlab_source_ready() {
     [ -d "${SPEAKERLAB_VENDOR_DIR}/speakerlab" ]
 }
 
+speakerlab_repo_candidates() {
+    if [ -n "${SPEAKERLAB_REPO_LIST}" ]; then
+        printf '%s\n' "${SPEAKERLAB_REPO_LIST}" | tr ', ' '\n\n' | awk 'NF && !seen[$0]++'
+        return
+    fi
+
+    printf '%s\n' "${SPEAKERLAB_REPO_MIRROR}" "${SPEAKERLAB_REPO}" | awk 'NF && !seen[$0]++'
+}
+
 clone_speakerlab_with_git() {
-    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${SPEAKERLAB_REF}" "${SPEAKERLAB_REPO}" "${SPEAKERLAB_VENDOR_DIR}"
+    local repo="$1"
+
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${SPEAKERLAB_REF}" "${repo}" "${SPEAKERLAB_VENDOR_DIR}"
 }
 
 clone_speakerlab_with_docker() {
+    local repo="$1"
+
     require_docker
-    info "宿主机未检测到 git，使用容器拉取源码: ${SPEAKERLAB_CLONE_IMAGE}"
-    docker pull "${SPEAKERLAB_CLONE_IMAGE}"
+    if [ "${SPEAKERLAB_CLONE_IMAGE_READY}" -ne 1 ]; then
+        info "宿主机未检测到 git，使用容器拉取源码: ${SPEAKERLAB_CLONE_IMAGE}"
+        docker pull "${SPEAKERLAB_CLONE_IMAGE}"
+        SPEAKERLAB_CLONE_IMAGE_READY=1
+    fi
     docker run --rm \
         -v "${WORKSPACE_DIR}:/workspace" \
         -w /workspace \
         "${SPEAKERLAB_CLONE_IMAGE}" \
-        clone --depth 1 --branch "${SPEAKERLAB_REF}" "${SPEAKERLAB_REPO}" "vendor/3D-Speaker"
+        clone --depth 1 --branch "${SPEAKERLAB_REF}" "${repo}" "vendor/3D-Speaker"
+}
+
+clone_speakerlab_once() {
+    local repo
+
+    while IFS= read -r repo; do
+        [ -n "${repo}" ] || continue
+        info "尝试拉取 3D-Speaker 源码: ${repo} (${SPEAKERLAB_REF})"
+        if command -v git >/dev/null 2>&1; then
+            if clone_speakerlab_with_git "${repo}"; then
+                return 0
+            fi
+        else
+            if clone_speakerlab_with_docker "${repo}"; then
+                return 0
+            fi
+        fi
+        warn "3D-Speaker 源码地址不可达: ${repo}"
+        rm -rf "${SPEAKERLAB_VENDOR_DIR}"
+    done < <(speakerlab_repo_candidates)
+
+    return 1
 }
 
 ensure_speakerlab_source() {
@@ -92,14 +135,8 @@ ensure_speakerlab_source() {
         info "预拉取 3D-Speaker 源码到本地缓存 [${attempt}/${SPEAKERLAB_CLONE_RETRIES}]"
         rm -rf "${SPEAKERLAB_VENDOR_DIR}"
 
-        if command -v git >/dev/null 2>&1; then
-            if clone_speakerlab_with_git; then
-                break
-            fi
-        else
-            if clone_speakerlab_with_docker; then
-                break
-            fi
+        if clone_speakerlab_once; then
+            break
         fi
 
         if [ "${attempt}" -lt "${SPEAKERLAB_CLONE_RETRIES}" ]; then
@@ -110,7 +147,7 @@ ensure_speakerlab_source() {
     done
 
     if ! speakerlab_source_ready; then
-        error "3D-Speaker 源码预拉取失败，请检查网络，或提前将源码放到 ${SPEAKERLAB_VENDOR_DIR}"
+        error "3D-Speaker 源码预拉取失败，请检查网络或镜像配置，或提前将源码放到 ${SPEAKERLAB_VENDOR_DIR}"
         exit 1
     fi
 
@@ -327,7 +364,12 @@ build)
     check_models
     ensure_speakerlab_source
     info "开始构建 Docker 镜像: ${FULL_IMAGE}"
-    DOCKER_BUILDKIT=1 docker build -t "${FULL_IMAGE}" .
+    DOCKER_BUILDKIT=1 docker build \
+        --build-arg PIP_INDEX="${PIP_INDEX_URL}" \
+        --build-arg PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+        --build-arg APT_MIRROR="${APT_MIRROR}" \
+        --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
+        -t "${FULL_IMAGE}" .
     docker tag "${FULL_IMAGE}" "${IMAGE_NAME}:latest"
     info "镜像构建完成: ${FULL_IMAGE}"
     docker images | grep "${IMAGE_NAME}"

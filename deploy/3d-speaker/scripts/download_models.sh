@@ -38,7 +38,7 @@ install_modelscope() {
 }
 
 echo ""
-echo "[0/3] 检查 ModelScope 依赖..."
+echo "[0/5] 检查 ModelScope 依赖..."
 if ! "${PYTHON_BIN}" -c "import modelscope" >/dev/null 2>&1; then
 	echo "未检测到 modelscope，开始安装..."
 	if ! "${PYTHON_BIN}" -m pip --version >/dev/null 2>&1; then
@@ -72,11 +72,27 @@ print('CAM++ 下载完成')
 
 # FSMN-VAD
 echo ""
-echo "[3/3] 下载 FSMN-VAD 语音活动检测模型..."
+echo "[3/5] 下载 FSMN-VAD 语音活动检测模型..."
 "${PYTHON_BIN}" -c "
 from modelscope.hub.snapshot_download import snapshot_download
 snapshot_download('iic/speech_fsmn_vad_zh-cn-16k-common-pytorch', cache_dir='${MODEL_DIR}/fsmn_vad')
 print('FSMN-VAD 下载完成')
+"
+
+echo ""
+echo "[4/5] 下载原生 diarization CAM++ 模型缓存..."
+"${PYTHON_BIN}" -c "
+from modelscope.hub.snapshot_download import snapshot_download
+snapshot_download('iic/speech_campplus_sv_zh_en_16k-common_advanced', cache_dir='${MODEL_DIR}/native_cache')
+print('native diarization CAM++ 下载完成')
+"
+
+echo ""
+echo "[5/5] 下载原生 diarization VAD 模型缓存..."
+"${PYTHON_BIN}" -c "
+from modelscope.hub.snapshot_download import snapshot_download
+snapshot_download('iic/speech_fsmn_vad_zh-cn-16k-common-pytorch', cache_dir='${MODEL_DIR}/native_cache')
+print('native diarization VAD 下载完成')
 "
 
 echo ""

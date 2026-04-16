@@ -103,8 +103,7 @@ func (e *Engine) TestNodeStream(ctx context.Context, nodeType domain.NodeType, c
 	)
 	if streamingHandler, ok := handler.(StreamingNodeHandler); ok {
 		outputText, detail, err = streamingHandler.ExecuteStream(ctx, config, inputText, meta, emit)
-	}
-	if !ok {
+	} else {
 		outputText, detail, err = handler.Execute(ctx, config, inputText, meta)
 	}
 	durationMs := int(time.Since(start).Milliseconds())

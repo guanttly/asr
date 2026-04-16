@@ -19,11 +19,15 @@ type SpeakerDiarizeConfig struct {
 // SpeakerDiarizeHandler calls an external diarization service and merges
 // speaker labels into the text. This node requires audio context from ExecutionMeta.
 type SpeakerDiarizeHandler struct {
-	defaultClient *diarization.Client
+	defaultClient           *diarization.Client
+	voiceprintDefaultClient *diarization.Client
 }
 
-func NewSpeakerDiarizeHandler(defaultClient *diarization.Client) *SpeakerDiarizeHandler {
-	return &SpeakerDiarizeHandler{defaultClient: defaultClient}
+func NewSpeakerDiarizeHandler(defaultClient, voiceprintDefaultClient *diarization.Client) *SpeakerDiarizeHandler {
+	return &SpeakerDiarizeHandler{
+		defaultClient:           defaultClient,
+		voiceprintDefaultClient: voiceprintDefaultClient,
+	}
 }
 
 func (h *SpeakerDiarizeHandler) Validate(config json.RawMessage) error {
@@ -50,8 +54,15 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 	}
 
 	client := h.defaultClient
+	if cfg.EnableVoiceprintMatch && h.voiceprintDefaultClient != nil {
+		client = h.voiceprintDefaultClient
+	}
 	if cfg.ServiceURL != "" {
 		client = diarization.NewClient(cfg.ServiceURL)
+	}
+	effectiveServiceURL := ""
+	if client != nil {
+		effectiveServiceURL = strings.TrimSpace(client.BaseURL())
 	}
 	if client == nil {
 		if cfg.FailOnError {
@@ -107,7 +118,7 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 		"segments_count":          len(segments),
 		"segments":                segments,
 		"enable_voiceprint_match": cfg.EnableVoiceprintMatch,
-		"diarization_service_url": strings.TrimSpace(cfg.ServiceURL),
+		"diarization_service_url": effectiveServiceURL,
 	})
 	return inputText, detail, nil
 }

@@ -828,7 +828,7 @@ function clearSelectedFile() {
     fileInput.value.value = ''
 }
 
-function handleDownloadAudio(task: TaskItem) {
+async function handleDownloadAudio(task: TaskItem) {
   if (!task.audio_url) {
     message.warning('该任务没有原音频地址')
     return
@@ -840,13 +840,38 @@ function handleDownloadAudio(task: TaskItem) {
     return
   }
 
+  if (isUploadedAudioURL(task.audio_url)) {
+    try {
+      const response = await fetch(downloadURL, {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      })
+      if (!response.ok)
+        throw new Error(`download failed with status ${response.status}`)
+
+      const blob = await response.blob()
+      const objectURL = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectURL
+      anchor.download = inferAudioFileName(task.audio_url, task.id)
+      anchor.rel = 'noopener noreferrer'
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      window.setTimeout(() => URL.revokeObjectURL(objectURL), 0)
+      return
+    }
+    catch (error) {
+      message.error(extractErrorMessage(error, '音频下载失败'))
+      return
+    }
+  }
+
   const anchor = document.createElement('a')
   anchor.href = downloadURL
   anchor.rel = 'noopener noreferrer'
-  if (isUploadedAudioURL(task.audio_url))
-    anchor.download = inferAudioFileName(task.audio_url, task.id)
-  else
-    anchor.target = '_blank'
+  anchor.target = '_blank'
   document.body.appendChild(anchor)
   anchor.click()
   document.body.removeChild(anchor)

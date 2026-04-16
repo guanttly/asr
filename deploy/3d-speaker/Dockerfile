@@ -5,18 +5,22 @@
 
 ARG PIP_INDEX=https://mirrors.aliyun.com/pypi/simple/
 ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+ARG APT_MIRROR=https://mirrors.aliyun.com/debian
+ARG APT_SECURITY_MIRROR=https://mirrors.aliyun.com/debian-security
 
 FROM python:3.10-slim
 
 ARG VERSION=1.1.0
 ARG PIP_INDEX
 ARG PIP_TRUSTED_HOST
+ARG APT_MIRROR
+ARG APT_SECURITY_MIRROR
 
 ENV APP_VERSION=${VERSION} \
 	PYTHONUNBUFFERED=1 \
 	PYTHONDONTWRITEBYTECODE=1 \
 	PIP_DEFAULT_TIMEOUT=1200 \
-	MODELSCOPE_CACHE=/app/models \
+	MODELSCOPE_CACHE=/app/models/native_cache \
 	HF_HUB_OFFLINE=1 \
 	TRANSFORMERS_OFFLINE=1 \
 	DEVICE=cpu \
@@ -26,7 +30,20 @@ ENV APP_VERSION=${VERSION} \
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+	if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+		sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+		sed -i "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+		sed -i "s|https://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+		sed -i "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+	fi; \
+	if [ -f /etc/apt/sources.list ]; then \
+		sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list; \
+		sed -i "s|http://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+		sed -i "s|https://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list; \
+		sed -i "s|https://security.debian.org/debian-security|${APT_SECURITY_MIRROR}|g" /etc/apt/sources.list; \
+	fi; \
+	apt-get update && apt-get install -y --no-install-recommends \
 	curl \
 	ffmpeg \
 	git \

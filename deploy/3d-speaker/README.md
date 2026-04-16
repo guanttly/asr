@@ -71,6 +71,10 @@ speaker-diarization-service/
 ├── wheels/                     # 可选：speakerlab 离线 wheel
 │   └── .gitkeep
 └── models/                     # 模型权重存放目录（构建时填充）
+    ├── eres2netv2/             # 业务层嵌入模型
+    ├── campplus/               # 业务层轻量嵌入模型
+    ├── fsmn_vad/               # 业务层 VAD 模型
+    ├── native_cache/           # speakerlab 原生 diarization 额外缓存
     └── .gitkeep
 ```
 
@@ -98,7 +102,11 @@ make serve
 
 `make init` 会优先安装 `wheels/` 下的 `speakerlab-*.whl`；如果没有 wheel，则自动拉取 3D-Speaker 源码并通过 `.pth` 注册到当前 Python 环境。
 
+源码拉取默认优先走国内镜像 `https://gitcode.com/mirrors/modelscope/3D-Speaker.git`，失败后再回退到 GitHub。若客户内网只允许特定镜像，可通过 `SPEAKERLAB_REPO_LIST` 覆盖候选地址，例如：`SPEAKERLAB_REPO_LIST="https://your-mirror/3D-Speaker.git https://gitcode.com/mirrors/modelscope/3D-Speaker.git" ./build.sh download-models`。
+
 基础 `requirements.txt` 还会一并安装 ModelScope pipeline 所需依赖，因此 FSMN-VAD 和 speakerlab 原生推理不再依赖运行时临时补包。
+
+注意：原生 diarization 除了 `models/eres2netv2`、`models/campplus`、`models/fsmn_vad` 这三类业务层模型外，还会额外依赖 `models/native_cache`。其中至少需要包含 `campplus_cn_en_common.pt`，否则服务会自动回退到兼容模式，不再在请求过程中临时下载模型。
 
 完全离线的裸机场景如果没有 wheel，需要先准备一份 3D-Speaker 源码目录，然后执行：
 
@@ -113,6 +121,9 @@ SPEAKERLAB_SOURCE=/path/to/3D-Speaker make init
 | ERes2NetV2 | iic/speech_eres2netv2_sv_zh-cn_16k-common | 说话人嵌入（默认） | ~70MB |
 | CAM++ | iic/speech_campplus_sv_zh-cn_16k-common | 说话人嵌入（轻量） | ~30MB |
 | FSMN-VAD | iic/speech_fsmn_vad_zh-cn-16k-common-pytorch | 语音活动检测 | ~40MB |
+| Native diarization cache | iic/speech_campplus_sv_zh_en_16k-common_advanced | speakerlab 原生分离额外依赖 | ~30MB |
+
+如果部署环境与打包环境分离，建议把服务器上的 `./models` 整体挂载到容器内的 `/app/models`。当前默认配置会把原生 diarization 的 `MODELSCOPE_CACHE` 固定到 `/app/models/native_cache`。
 
 ## 服务命名
 

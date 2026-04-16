@@ -104,6 +104,34 @@ function buildMeetingSummaryChunkPreview(detail: unknown) {
     .join('\n\n')
 }
 
+function buildSpeakerDiarizePreview(detail: unknown) {
+  if (!detail || typeof detail !== 'object')
+    return ''
+  const segments = Array.isArray((detail as Record<string, unknown>).segments)
+    ? (detail as Record<string, unknown>).segments as Array<Record<string, unknown>>
+    : []
+  if (!segments.length)
+    return ''
+  return segments
+    .map((segment, index) => {
+      const speaker = String(segment.speaker ?? segment.Speaker ?? segment.speaker_id ?? segment.SpeakerID ?? `speaker_${index + 1}`)
+      const start = segment.start_time ?? segment.StartTime ?? '-'
+      const end = segment.end_time ?? segment.EndTime ?? '-'
+      return `[${speaker} ${start}s-${end}s]`
+    })
+    .join('\n')
+}
+
+function buildNodeTestOutputPreview(nodeType: string | undefined, outputText: string | undefined, detail: unknown) {
+  if (outputText && outputText.trim())
+    return outputText
+  if (nodeType === 'meeting_summary')
+    return buildMeetingSummaryChunkPreview(detail)
+  if (nodeType === 'speaker_diarize')
+    return buildSpeakerDiarizePreview(detail)
+  return ''
+}
+
 function nodeTypeAlias(type: string) {
   const aliases: Record<string, string> = {
     legacy_text: '文本输入节点',
@@ -352,11 +380,9 @@ async function handleTestNode() {
             message: event.message || '节点执行中',
           }
           nodeTestDetail.value = nextDetail
-          if (selectedNode.value?.type === 'meeting_summary') {
-            const preview = buildMeetingSummaryChunkPreview(nextDetail)
-            if (preview)
-              nodeTestOutput.value = preview
-          }
+          const preview = buildNodeTestOutputPreview(selectedNode.value?.type, nodeTestOutput.value, nextDetail)
+          if (preview)
+            nodeTestOutput.value = preview
           return
         }
         if (event.type === 'delta') {
@@ -374,8 +400,8 @@ async function handleTestNode() {
           return
         }
         finished = true
-        nodeTestOutput.value = event.output_text || ''
-        nodeTestDetail.value = event.detail ?? event.error ?? null
+        nodeTestDetail.value = event.detail ?? event.error ?? nodeTestDetail.value
+        nodeTestOutput.value = buildNodeTestOutputPreview(selectedNode.value?.type, event.output_text, nodeTestDetail.value)
       },
     })
     if (!finished)
@@ -678,7 +704,9 @@ onMounted(async () => {
 
               <template v-else-if="selectedNode.type === 'speaker_diarize'">
                 <div class="grid gap-3">
-                  <NInput :value="selectedConfig.service_url" placeholder="默认说话人分离服务 URL" @update:value="updateSelectedConfig({ service_url: $event })" />
+                  <div class="rounded-2 bg-white px-3 py-3 text-xs leading-6 text-slate/80">
+                    该节点默认复用系统里已配置的 Speaker Analysis Service，无需单独填写服务地址。
+                  </div>
                   <div class="flex flex-wrap gap-6 rounded-2 bg-white/70 px-3 py-3">
                     <label class="flex items-center gap-2 text-sm text-ink">
                       <NSwitch :value="selectedConfig.enable_voiceprint_match" @update:value="updateSelectedConfig({ enable_voiceprint_match: $event })" />

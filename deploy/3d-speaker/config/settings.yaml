@@ -35,6 +35,11 @@ models:
 diarization:
   # 聚类算法: "spectral" (< 30min, < 6人) 或 "umap_hdbscan" (长音频, 多人)
   clustering_method: "spectral"
+  # 3D-Speaker 原生 diarization 的独立 ModelScope 缓存目录。
+  # 这里缓存的是 speakerlab 原生分离额外依赖的模型，不等同于 embedding.local_dir。
+  native_model_cache_dir: "./models/native_cache"
+  # 原生分离子进程使用的 Python，可按服务器环境覆盖。
+  native_python_bin: "python3"
   # 最小/最大说话人数（可选，不设则自动检测）
   min_speakers: null
   max_speakers: null

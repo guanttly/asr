@@ -54,6 +54,8 @@ curl http://localhost:8100/api/v1/health
 
 说明：`./build.sh export` 只导出 Docker 镜像 tar.gz；因此离线部署时仍需要把当前目录下的 `build.sh`、`docker-compose.yml`、`config/` 等文件一并带到目标服务器。
 
+说明：如果部署环境与打包环境分离，服务器侧需要准备完整的 `./models` 目录，并通过 Compose 挂载到容器内 `/app/models`。除了 `eres2netv2`、`campplus`、`fsmn_vad` 外，还必须包含 `native_cache`，否则 speakerlab 原生 diarization 会因为缺少 `campplus_cn_en_common.pt` 而回退兼容模式。
+
 ### 方式二：裸机部署
 
 ```bash
@@ -66,7 +68,24 @@ make serve
 
 说明：`make init` 会优先使用 `wheels/` 下的离线 wheel；若 wheel 不存在，则自动拉取 3D-Speaker 源码并注册到当前 Python 环境。完全离线且不使用 wheel 时，可先准备源码目录，再执行 `SPEAKERLAB_SOURCE=/path/to/3D-Speaker make init`。
 
+说明：脚本默认先尝试国内镜像 `https://gitcode.com/mirrors/modelscope/3D-Speaker.git`，再回退 GitHub。如果部署机必须使用指定镜像，可在执行前设置 `SPEAKERLAB_REPO_LIST`，例如 `SPEAKERLAB_REPO_LIST="https://your-mirror/3D-Speaker.git https://gitcode.com/mirrors/modelscope/3D-Speaker.git" make init`。
+
 说明：基础依赖里已包含 ModelScope pipeline 的运行时依赖，FSMN-VAD 与 speakerlab 原生音频分离无需在首次请求时再动态补装 Python 包。
+
+如果需要为完全离线服务器准备模型，请在联网环境执行一次：
+
+```bash
+./build.sh download-models
+```
+
+该命令会同时下载：
+
+- `models/eres2netv2`
+- `models/campplus`
+- `models/fsmn_vad`
+- `models/native_cache`
+
+然后将整个 `models/` 目录同步到目标服务器。
 
 ### 方式三：GPU 加速
 
@@ -81,6 +100,20 @@ models:
 Docker 方式默认读取根目录 `docker-compose.yml`。如需 GPU，请设置 `DEVICE=cuda:0 ./build.sh start`。
 
 如果希望宿主机只分配第 2 张 GPU 给容器使用，应在 Compose 中把可见 GPU 限制为宿主机 GPU 2，例如 `NVIDIA_VISIBLE_DEVICES=2` 或 `device_ids: ["2"]`。此时容器内通常只会看到 1 张卡，因此服务内部仍应使用 `cuda:0`，而不是 `cuda:2`。
+
+## 3.1 模型目录检查
+
+部署前建议在服务器上确认以下目录结构：
+
+```bash
+models/
+├── eres2netv2/
+├── campplus/
+├── fsmn_vad/
+└── native_cache/
+```
+
+其中 `native_cache/` 下面至少应包含 `campplus_cn_en_common.pt`。如果缺少这个文件，原生 diarization 不会再请求时临时下载，而是直接回退到兼容模式。
 
 ## 4. API 使用示例
 

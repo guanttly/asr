@@ -1,2 +1,3 @@
 # 模型权重存放目录
-# 使用 scripts/download_models.sh 或 build.sh --download-models 下载
+# 使用 scripts/download_models.sh 或 ./build.sh download-models 下载
+# 目录中除了业务层模型外，还需要保留 native_cache 供 speakerlab 原生 diarization 使用

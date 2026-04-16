@@ -368,10 +368,19 @@ func main() {
 	engine.RegisterHandler(wfdomain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
 	engine.RegisterHandler(wfdomain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	engine.RegisterHandler(wfdomain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
+	var diarizeClient *diarization.Client
 	if cfg.Services.DiarizationURL != "" {
-		diaClient := diarization.NewClient(cfg.Services.DiarizationURL)
-		engine.RegisterHandler(wfdomain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diaClient))
+		diarizeClient = diarization.NewClient(cfg.Services.DiarizationURL)
 	}
+	speakerAnalysisURL := strings.TrimSpace(cfg.Services.SpeakerAnalysisURL)
+	if speakerAnalysisURL == "" {
+		speakerAnalysisURL = strings.TrimSpace(cfg.Services.DiarizationURL)
+	}
+	var speakerAnalysisClient *diarization.Client
+	if speakerAnalysisURL != "" {
+		speakerAnalysisClient = diarization.NewClient(speakerAnalysisURL)
+	}
+	engine.RegisterHandler(wfdomain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient, speakerAnalysisClient))
 
 	workflowService := appwf.NewService(workflowRepo, workflowNodeRepo, persistence.NewWorkflowNodeDefaultRepo(db), workflowExecRepo, workflowResultRepo, engine)
 	workflowExecutor := &workflowExecutorAdapter{svc: workflowService}
@@ -380,10 +389,6 @@ func main() {
 	asrService := appasr.NewService(taskRepo, &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, businessHub)
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 	meetingService := appmeeting.NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExecutor, &meetingBatchEngineAdapter{client: asrEngineClient}, businessHub)
-	speakerAnalysisURL := strings.TrimSpace(cfg.Services.SpeakerAnalysisURL)
-	if speakerAnalysisURL == "" {
-		speakerAnalysisURL = strings.TrimSpace(cfg.Services.DiarizationURL)
-	}
 	voiceprintService := appvoiceprint.NewService(diarization.NewClient(speakerAnalysisURL))
 	startBatchSyncLoop(logger, asrService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize, cfg.Services.ASRBatchSyncWarnThreshold)
 	startMeetingSyncLoop(logger, meetingService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize)

@@ -1,0 +1,2 @@
+# speakerlab 原生 diarization 使用的离线缓存目录
+# 至少需要包含 campplus_cn_en_common.pt 等通过 scripts/download_models.sh 下载的模型文件

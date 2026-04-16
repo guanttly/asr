@@ -189,6 +189,8 @@ async def lifespan(app: FastAPI):
         target_sr=diar_cfg.get("target_sample_rate", 16000),
         segment_duration=diar_cfg.get("segment_duration", 1.5),
         segment_step=diar_cfg.get("segment_step", 0.75),
+        native_model_cache_dir=diar_cfg.get("native_model_cache_dir", "./models/native_cache"),
+        native_python_bin=diar_cfg.get("native_python_bin") or os.getenv("PYTHON_BIN") or "python3",
     )
 
     logger.info(f"服务初始化完成 (声纹库: {_voiceprint_mgr.count} 条记录)")

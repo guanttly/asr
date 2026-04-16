@@ -21,7 +21,7 @@ services:
       - PORT=8100
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
-      - MODELSCOPE_CACHE=/app/models
+      - MODELSCOPE_CACHE=/app/models/native_cache
       # 如需分开指定设备，可自行追加以下环境变量
       # - EMBEDDING_DEVICE=${SA_EMBEDDING_DEVICE:-cuda:0}
       # - VAD_DEVICE=${SA_VAD_DEVICE:-cuda:0}
@@ -29,8 +29,8 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
-      # 如果需要从外部挂载模型（替代镜像内置模型）
-      # - ./models:/app/models:ro
+      # 默认挂载宿主机模型目录，适配打包环境与部署环境分离。
+      - ./models:/app/models:ro
       # 如果需要从外部挂载配置
       # - ./config/settings.yaml:/app/config/settings.yaml:ro
 

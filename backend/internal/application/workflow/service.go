@@ -2,8 +2,10 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	domain "github.com/lgt/asr/internal/domain/workflow"
@@ -12,27 +14,30 @@ import (
 
 // Service provides workflow management and execution operations.
 type Service struct {
-	workflowRepo   domain.WorkflowRepository
-	nodeRepo       domain.NodeRepository
-	executionRepo  domain.ExecutionRepository
-	nodeResultRepo domain.NodeResultRepository
-	engine         *engine.Engine
+	workflowRepo    domain.WorkflowRepository
+	nodeRepo        domain.NodeRepository
+	nodeDefaultRepo domain.NodeDefaultRepository
+	executionRepo   domain.ExecutionRepository
+	nodeResultRepo  domain.NodeResultRepository
+	engine          *engine.Engine
 }
 
 // NewService creates a new workflow application service.
 func NewService(
 	workflowRepo domain.WorkflowRepository,
 	nodeRepo domain.NodeRepository,
+	nodeDefaultRepo domain.NodeDefaultRepository,
 	executionRepo domain.ExecutionRepository,
 	nodeResultRepo domain.NodeResultRepository,
 	eng *engine.Engine,
 ) *Service {
 	return &Service{
-		workflowRepo:   workflowRepo,
-		nodeRepo:       nodeRepo,
-		executionRepo:  executionRepo,
-		nodeResultRepo: nodeResultRepo,
-		engine:         eng,
+		workflowRepo:    workflowRepo,
+		nodeRepo:        nodeRepo,
+		nodeDefaultRepo: nodeDefaultRepo,
+		executionRepo:   executionRepo,
+		nodeResultRepo:  nodeResultRepo,
+		engine:          eng,
 	}
 }
 
@@ -40,13 +45,17 @@ func NewService(
 
 // CreateWorkflow creates a new workflow.
 func (s *Service) CreateWorkflow(ctx context.Context, ownerType domain.OwnerType, ownerID uint64, req *CreateWorkflowRequest) (*WorkflowResponse, error) {
+	profile, initialNodes, err := buildInitialWorkflow(req.WorkflowType)
+	if err != nil {
+		return nil, err
+	}
 	wf := &domain.Workflow{
 		Name:         req.Name,
 		Description:  req.Description,
-		WorkflowType: domain.WorkflowTypeLegacy,
-		SourceKind:   domain.SourceKindLegacyText,
-		TargetKind:   domain.TargetKindTranscript,
-		IsLegacy:     true,
+		WorkflowType: profile.WorkflowType,
+		SourceKind:   profile.SourceKind,
+		TargetKind:   profile.TargetKind,
+		IsLegacy:     profile.IsLegacy,
 		OwnerType:    ownerType,
 		OwnerID:      ownerID,
 		SourceID:     req.SourceID,
@@ -54,6 +63,22 @@ func (s *Service) CreateWorkflow(ctx context.Context, ownerType domain.OwnerType
 	if err := s.workflowRepo.Create(ctx, wf); err != nil {
 		return nil, err
 	}
+	if len(initialNodes) == 0 {
+		return ToWorkflowResponse(wf), nil
+	}
+	if len(initialNodes) > 0 {
+		if s.nodeRepo == nil {
+			return nil, fmt.Errorf("node repository is not configured")
+		}
+		for i := range initialNodes {
+			initialNodes[i].WorkflowID = wf.ID
+			initialNodes[i].Position = i + 1
+		}
+		if err := s.nodeRepo.BatchSave(ctx, wf.ID, initialNodes); err != nil {
+			return nil, err
+		}
+	}
+	wf.Nodes = initialNodes
 	return ToWorkflowResponse(wf), nil
 }
 
@@ -178,6 +203,14 @@ func (s *Service) BatchUpdateNodes(ctx context.Context, workflowID uint64, req *
 	if err != nil {
 		return nil, err
 	}
+	currentNodes, err := s.nodeRepo.ListByWorkflow(ctx, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	expectedProfile, err := profileForExistingWorkflow(wf, currentNodes)
+	if err != nil {
+		return nil, err
+	}
 
 	nodes := make([]domain.Node, len(req.Nodes))
 	for i, nr := range req.Nodes {
@@ -202,8 +235,14 @@ func (s *Service) BatchUpdateNodes(ctx context.Context, workflowID uint64, req *
 		}
 	}
 
+	if err := validateFixedWorkflowBoundary(expectedProfile, nodes); err != nil {
+		return nil, err
+	}
 	profile, err := deriveWorkflowProfile(nodes)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureWorkflowProfileLocked(expectedProfile, profile); err != nil {
 		return nil, err
 	}
 	wf.WorkflowType = profile.WorkflowType
@@ -230,6 +269,10 @@ func (s *Service) ExecuteWorkflow(ctx context.Context, workflowID uint64, trigge
 	if err != nil {
 		return nil, err
 	}
+	resolvedNodes, err := s.resolveWorkflowNodes(ctx, nodes)
+	if err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	exec := &domain.Execution{
@@ -245,7 +288,7 @@ func (s *Service) ExecuteWorkflow(ctx context.Context, workflowID uint64, trigge
 	}
 
 	// Run the engine
-	result, execErr := s.engine.Execute(ctx, nodes, inputText, meta)
+	result, execErr := s.engine.Execute(ctx, resolvedNodes, inputText, meta)
 
 	// Record results
 	completedAt := time.Now()
@@ -285,13 +328,56 @@ func (s *Service) TestNode(ctx context.Context, req *TestNodeRequest) (*TestNode
 			Error: "源节点仅用于声明输入来源，不能做文本级单节点测试。请测试后续处理节点，或执行整条工作流。",
 		}, nil
 	}
+	resolvedConfig, err := s.resolveNodeConfig(ctx, nodeType, req.Config)
+	if err != nil {
+		return nil, err
+	}
 
-	result, err := s.engine.TestNode(ctx, nodeType, req.Config, req.InputText, &engine.ExecutionMeta{
+	result, err := s.engine.TestNode(ctx, nodeType, resolvedConfig, req.InputText, &engine.ExecutionMeta{
 		AudioURL:      req.AudioURL,
 		AudioFilePath: req.AudioFilePath,
 	})
 	if err != nil {
 		return &TestNodeResponse{Error: err.Error()}, nil
+	}
+
+	return &TestNodeResponse{
+		OutputText: result.OutputText,
+		Detail:     result.Detail,
+		DurationMs: result.DurationMs,
+		Error:      result.Error,
+	}, nil
+}
+
+func (s *Service) TestNodeStream(ctx context.Context, req *TestNodeRequest, emit TestNodeStreamEmitter) (*TestNodeResponse, error) {
+	nodeType := domain.NodeType(req.NodeType)
+	if !nodeType.Valid() {
+		return nil, fmt.Errorf("invalid node_type: %s", req.NodeType)
+	}
+	resolvedConfig, err := s.resolveNodeConfig(ctx, nodeType, req.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.engine.TestNodeStream(ctx, nodeType, resolvedConfig, req.InputText, &engine.ExecutionMeta{
+		AudioURL:      req.AudioURL,
+		AudioFilePath: req.AudioFilePath,
+	}, func(event *engine.NodeStreamEvent) error {
+		if emit == nil || event == nil {
+			return nil
+		}
+		return emit(&TestNodeStreamEvent{
+			Type:       string(event.Type),
+			Message:    event.Message,
+			Delta:      event.Delta,
+			OutputText: event.OutputText,
+			Detail:     event.Detail,
+			DurationMs: event.DurationMs,
+			Error:      event.Error,
+		})
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return &TestNodeResponse{
@@ -364,18 +450,82 @@ func (s *Service) ListExecutionsByTask(ctx context.Context, taskID uint64, offse
 }
 
 // GetNodeTypes returns all registered node types.
-func (s *Service) GetNodeTypes() []NodeTypeInfo {
+func (s *Service) GetNodeTypes(ctx context.Context) ([]NodeTypeInfo, error) {
 	types := domain.AllNodeTypes()
 	infos := make([]NodeTypeInfo, len(types))
 	for i, t := range types {
+		defaultConfig, err := s.resolveGlobalNodeDefault(ctx, t)
+		if err != nil {
+			return nil, err
+		}
 		infos[i] = NodeTypeInfo{
-			Type:        t,
-			Label:       t.Label(),
-			Role:        t.Role(),
-			Description: t.Description(),
+			Type:          t,
+			Label:         t.Label(),
+			Role:          t.Role(),
+			Description:   t.Description(),
+			DefaultConfig: defaultConfig,
 		}
 	}
-	return infos
+	return infos, nil
+}
+
+// UpdateNodeDefault updates the persisted default configuration for a node type.
+func (s *Service) UpdateNodeDefault(ctx context.Context, nodeType domain.NodeType, req *UpdateNodeDefaultRequest) (*NodeTypeInfo, error) {
+	if !nodeType.Valid() {
+		return nil, fmt.Errorf("invalid node_type: %s", nodeType)
+	}
+	if s.nodeDefaultRepo == nil {
+		return nil, fmt.Errorf("node default repository is not configured")
+	}
+
+	resolvedConfig, err := s.resolveNodeConfig(ctx, nodeType, req.Config)
+	if err != nil {
+		return nil, err
+	}
+	if nodeType.IsSource() {
+		resolvedConfig = mustMarshalNodeConfig(builtinNodeDefaultConfig(nodeType))
+	}
+	if !nodeType.IsSource() && s.engine != nil {
+		if err := s.engine.ValidateNodeConfig(nodeType, resolvedConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	item := &domain.NodeDefault{
+		NodeType: nodeType,
+		Config:   string(req.Config),
+	}
+	if strings.TrimSpace(item.Config) == "" {
+		item.Config = "{}"
+	}
+	if err := s.nodeDefaultRepo.Upsert(ctx, item); err != nil {
+		return nil, err
+	}
+
+	defaultConfig, err := s.resolveGlobalNodeDefault(ctx, nodeType)
+	if err != nil {
+		return nil, err
+	}
+	return &NodeTypeInfo{
+		Type:          nodeType,
+		Label:         nodeType.Label(),
+		Role:          nodeType.Role(),
+		Description:   nodeType.Description(),
+		DefaultConfig: defaultConfig,
+	}, nil
+}
+
+func (s *Service) resolveWorkflowNodes(ctx context.Context, nodes []domain.Node) ([]domain.Node, error) {
+	resolved := make([]domain.Node, len(nodes))
+	for i := range nodes {
+		resolved[i] = nodes[i]
+		config, err := s.resolveNodeConfig(ctx, nodes[i].NodeType, json.RawMessage(nodes[i].Config))
+		if err != nil {
+			return nil, fmt.Errorf("resolve config for node %s (#%d): %w", nodes[i].NodeType, nodes[i].Position, err)
+		}
+		resolved[i].Config = string(config)
+	}
+	return resolved, nil
 }
 
 // ExecuteWorkflowForTask is a convenience method for batch task post-processing.
@@ -908,4 +1058,122 @@ func deriveTargetKind(nodes []domain.Node) domain.WorkflowTargetKind {
 		}
 	}
 	return domain.TargetKindTranscript
+}
+
+func buildInitialWorkflow(workflowType *domain.WorkflowType) (*workflowProfile, []domain.Node, error) {
+	if workflowType == nil || *workflowType == "" || *workflowType == domain.WorkflowTypeLegacy {
+		return &workflowProfile{
+			WorkflowType: domain.WorkflowTypeLegacy,
+			SourceKind:   domain.SourceKindLegacyText,
+			TargetKind:   domain.TargetKindTranscript,
+			IsLegacy:     true,
+		}, nil, nil
+	}
+
+	profile := &workflowProfile{WorkflowType: *workflowType}
+	switch *workflowType {
+	case domain.WorkflowTypeBatch:
+		profile.SourceKind = domain.SourceKindBatchASR
+		profile.TargetKind = domain.TargetKindTranscript
+	case domain.WorkflowTypeRealtime:
+		profile.SourceKind = domain.SourceKindRealtimeASR
+		profile.TargetKind = domain.TargetKindTranscript
+	case domain.WorkflowTypeMeeting:
+		profile.SourceKind = domain.SourceKindBatchASR
+		profile.TargetKind = domain.TargetKindMeetingSummary
+	default:
+		return nil, nil, fmt.Errorf("invalid workflow_type: %s", *workflowType)
+	}
+
+	nodes := make([]domain.Node, 0, 2)
+	if sourceType, ok := profile.SourceKind.NodeType(); ok {
+		nodes = append(nodes, domain.Node{
+			NodeType: sourceType,
+			Enabled:  true,
+			Config:   "{}",
+		})
+	}
+	if sinkType, ok := profile.TargetKind.FixedSinkNodeType(); ok {
+		nodes = append(nodes, domain.Node{
+			NodeType: sinkType,
+			Enabled:  true,
+			Config:   "{}",
+		})
+	}
+	return profile, nodes, nil
+}
+
+func profileForExistingWorkflow(wf *domain.Workflow, nodes []domain.Node) (*workflowProfile, error) {
+	if len(nodes) > 0 {
+		return deriveWorkflowProfile(nodes)
+	}
+	return &workflowProfile{
+		WorkflowType: wf.WorkflowType,
+		SourceKind:   wf.SourceKind,
+		TargetKind:   wf.TargetKind,
+		IsLegacy:     wf.IsLegacy,
+	}, nil
+}
+
+func ensureWorkflowProfileLocked(expected, actual *workflowProfile) error {
+	if expected == nil || actual == nil {
+		return nil
+	}
+	if expected.WorkflowType != actual.WorkflowType || expected.SourceKind != actual.SourceKind || expected.TargetKind != actual.TargetKind || expected.IsLegacy != actual.IsLegacy {
+		return fmt.Errorf("工作流类型在创建时已确定，当前仅允许编辑节点配置和中间处理链路，不能改变入口/出口场景")
+	}
+	return nil
+}
+
+func validateFixedWorkflowBoundary(profile *workflowProfile, nodes []domain.Node) error {
+	if profile == nil || len(nodes) == 0 {
+		return nil
+	}
+
+	ordered := append([]domain.Node(nil), nodes...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Position == ordered[j].Position {
+			return string(ordered[i].NodeType) < string(ordered[j].NodeType)
+		}
+		return ordered[i].Position < ordered[j].Position
+	})
+
+	if sourceType, ok := profile.SourceKind.NodeType(); ok {
+		sourceCount := 0
+		for _, node := range ordered {
+			if node.NodeType.IsSource() {
+				sourceCount++
+			}
+		}
+		if sourceCount != 1 {
+			return fmt.Errorf("固化源节点必须保留且只能保留一个")
+		}
+		if ordered[0].NodeType != sourceType {
+			return fmt.Errorf("固化源节点必须保持在第一位")
+		}
+		if !ordered[0].Enabled {
+			return fmt.Errorf("固化源节点不能被禁用")
+		}
+	}
+
+	if sinkType, ok := profile.TargetKind.FixedSinkNodeType(); ok {
+		sinkCount := 0
+		for _, node := range ordered {
+			if node.NodeType == sinkType {
+				sinkCount++
+			}
+		}
+		if sinkCount != 1 {
+			return fmt.Errorf("固化输出节点必须保留且只能保留一个")
+		}
+		last := ordered[len(ordered)-1]
+		if last.NodeType != sinkType {
+			return fmt.Errorf("固化输出节点必须保持在最后一位")
+		}
+		if !last.Enabled {
+			return fmt.Errorf("固化输出节点不能被禁用")
+		}
+	}
+
+	return nil
 }

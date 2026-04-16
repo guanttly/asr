@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DataTableColumns } from 'naive-ui'
+import type { ActiveWorkflowType } from '@/types/workflow'
 
 import { NButton, NTag, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref, watch } from 'vue'
@@ -23,7 +24,7 @@ interface WorkflowItem {
   owner_id: number
   source_id?: number
   is_published: boolean
-  nodes?: Array<{ id: number, label?: string, node_type?: string, enabled?: boolean }>
+  nodes?: Array<{ id: number, label?: string, node_type?: string, enabled?: boolean, is_fixed?: boolean }>
   created_at?: string
   updated_at?: string
 }
@@ -40,6 +41,7 @@ const deletingId = ref<number | null>(null)
 const createVisible = ref(false)
 const scope = ref<'all' | 'system' | 'user'>('all')
 const lineage = ref<'all' | 'derived'>('all')
+const scenario = ref<'all' | ActiveWorkflowType | 'legacy'>('all')
 const keyword = ref('')
 const items = ref<WorkflowItem[]>([])
 const systemTemplates = ref<WorkflowItem[]>([])
@@ -48,7 +50,34 @@ const form = reactive({
   name: '',
   description: '',
   owner_type: 'user' as 'system' | 'user',
+  workflow_type: 'batch_transcription' as ActiveWorkflowType,
 })
+
+const workflowScenarioOptions: Array<{ value: ActiveWorkflowType, label: string, description: string }> = [
+  {
+    value: 'batch_transcription',
+    label: '批量转写整理',
+    description: '自动固化非实时 ASR 源节点，后续只编辑中间处理链路。',
+  },
+  {
+    value: 'realtime_transcription',
+    label: '实时转写整理',
+    description: '自动固化实时 ASR 源节点，适合实时识别后的整理链路。',
+  },
+  {
+    value: 'meeting',
+    label: '会议纪要',
+    description: '自动固化首个 ASR 节点和末尾会议纪要节点。',
+  },
+]
+
+const workflowFilterOptions: Array<{ value: 'all' | ActiveWorkflowType | 'legacy', label: string }> = [
+  { value: 'all', label: '全部场景' },
+  { value: 'batch_transcription', label: '批量转写' },
+  { value: 'realtime_transcription', label: '实时转写' },
+  { value: 'meeting', label: '会议纪要' },
+  { value: 'legacy', label: 'Legacy' },
+]
 
 const isAdmin = computed(() => userStore.profile?.role === 'admin')
 const workflowLookup = computed(() => {
@@ -119,6 +148,10 @@ function workflowProfileLabel(row: WorkflowItem) {
   return `${sourceMap[row.source_kind] || row.source_kind} -> ${targetMap[row.target_kind] || row.target_kind}`
 }
 
+function countFixedNodes(row: WorkflowItem) {
+  return (row.nodes || []).filter(node => node.is_fixed).length
+}
+
 function publishStatusMeta(item: WorkflowItem) {
   if (item.owner_type === 'system') {
     return item.is_published
@@ -135,6 +168,7 @@ function resetCreateForm() {
   form.name = ''
   form.description = ''
   form.owner_type = 'user'
+  form.workflow_type = 'batch_transcription'
 }
 
 async function loadWorkflows() {
@@ -175,6 +209,7 @@ async function handleCreate() {
       name: form.name.trim(),
       description: form.description.trim(),
       owner_type: ownerType,
+      workflow_type: form.workflow_type,
     })
     createVisible.value = false
     resetCreateForm()
@@ -270,9 +305,17 @@ function handleScopeChange(nextScope: 'all' | 'system' | 'user') {
 }
 
 const filteredItems = computed(() => {
-  const baseItems = lineage.value === 'derived'
+  let baseItems = lineage.value === 'derived'
     ? items.value.filter(item => !!item.source_id)
     : items.value
+
+  if (scenario.value !== 'all') {
+    baseItems = baseItems.filter((item) => {
+      if (scenario.value === 'legacy')
+        return item.is_legacy
+      return item.workflow_type === scenario.value
+    })
+  }
 
   const value = keyword.value.trim().toLowerCase()
   if (!value)
@@ -284,7 +327,9 @@ const filteredItems = computed(() => {
   )
 })
 
-const derivedCount = computed(() => items.value.filter(item => !!item.source_id).length)
+const derivedCount = computed(() => filteredItems.value.filter(item => !!item.source_id).length)
+const scenarioWorkflowCount = computed(() => filteredItems.value.filter(item => !item.is_legacy).length)
+const fixedNodeCount = computed(() => filteredItems.value.reduce((sum, item) => sum + countFixedNodes(item), 0))
 
 const columns: DataTableColumns<WorkflowItem> = [
   {
@@ -317,6 +362,15 @@ const columns: DataTableColumns<WorkflowItem> = [
     key: 'nodes',
     width: 90,
     render: row => String(row.nodes?.length || 0),
+  },
+  {
+    title: '固化',
+    key: 'fixed_nodes',
+    width: 90,
+    render: row => {
+      const count = countFixedNodes(row)
+      return count > 0 ? `${count} 个` : '-'
+    },
   },
   {
     title: '画像',
@@ -400,6 +454,9 @@ onMounted(loadWorkflows)
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">工作流列表</span>
           <div class="flex flex-wrap items-center gap-2">
+            <NButton size="small" @click="router.push('/workflows/nodes')">
+              节点管理
+            </NButton>
             <div class="flex items-center gap-1 rounded-full bg-mist/80 p-1">
               <NButton size="small" :type="scope === 'all' ? 'primary' : 'default'" :quaternary="scope !== 'all'" color="#0f766e" @click="handleScopeChange('all')">
                 全部
@@ -421,7 +478,7 @@ onMounted(loadWorkflows)
           </div>
         </div>
       </template>
-      <div class="grid gap-3 text-sm text-slate md:grid-cols-3">
+      <div class="grid gap-3 text-sm text-slate md:grid-cols-3 xl:grid-cols-5">
         <div class="subtle-panel m-0">
           <div class="text-xs text-slate/70">
             系统模板
@@ -448,10 +505,18 @@ onMounted(loadWorkflows)
         </div>
         <div class="subtle-panel m-0">
           <div class="text-xs text-slate/70">
-            Legacy
+            当前场景流
           </div>
           <div class="mt-1 text-lg font-700 text-ink">
-            {{ items.filter(item => item.is_legacy).length }}
+            {{ scenarioWorkflowCount }}
+          </div>
+        </div>
+        <div class="subtle-panel m-0">
+          <div class="text-xs text-slate/70">
+            当前固化节点
+          </div>
+          <div class="mt-1 text-lg font-700 text-ink">
+            {{ fixedNodeCount }}
           </div>
         </div>
       </div>
@@ -468,13 +533,28 @@ onMounted(loadWorkflows)
               当前显示 {{ filteredItems.length }} 条，其中派生工作流 {{ derivedCount }} 条。
             </div>
           </div>
-          <div class="flex items-center gap-1 rounded-full bg-mist/80 p-1">
-            <NButton size="small" :type="lineage === 'all' ? 'primary' : 'default'" :quaternary="lineage !== 'all'" color="#0f766e" @click="lineage = 'all'">
-              全部来源
-            </NButton>
-            <NButton size="small" :type="lineage === 'derived' ? 'primary' : 'default'" :quaternary="lineage !== 'derived'" color="#0f766e" @click="lineage = 'derived'">
-              仅看派生
-            </NButton>
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <div class="flex items-center gap-1 rounded-full bg-mist/80 p-1">
+              <NButton size="small" :type="lineage === 'all' ? 'primary' : 'default'" :quaternary="lineage !== 'all'" color="#0f766e" @click="lineage = 'all'">
+                全部来源
+              </NButton>
+              <NButton size="small" :type="lineage === 'derived' ? 'primary' : 'default'" :quaternary="lineage !== 'derived'" color="#0f766e" @click="lineage = 'derived'">
+                仅看派生
+              </NButton>
+            </div>
+            <div class="flex flex-wrap items-center gap-1 rounded-2xl bg-[#fbfdff] p-1">
+              <NButton
+                v-for="option in workflowFilterOptions"
+                :key="option.value"
+                size="small"
+                :type="scenario === option.value ? 'primary' : 'default'"
+                :quaternary="scenario !== option.value"
+                color="#0f766e"
+                @click="scenario = option.value"
+              >
+                {{ option.label }}
+              </NButton>
+            </div>
           </div>
         </div>
       </template>
@@ -512,6 +592,31 @@ onMounted(loadWorkflows)
         </div>
         <NInput v-model:value="form.name" placeholder="例如：医疗转写纠错模板" />
         <NInput v-model:value="form.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述这条工作流的用途、目标场景和关键节点。" />
+        <div class="rounded-3 border border-black/6 bg-[#fbfdff] p-3">
+          <div class="text-xs font-600 text-ink">
+            选择工作流场景
+          </div>
+          <div class="mt-3 grid gap-2 md:grid-cols-3">
+            <button
+              v-for="option in workflowScenarioOptions"
+              :key="option.value"
+              type="button"
+              class="rounded-2 border px-3 py-3 text-left transition-all duration-150"
+              :class="form.workflow_type === option.value ? 'border-teal bg-teal/[0.08] shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300'"
+              @click="form.workflow_type = option.value"
+            >
+              <div class="text-sm font-600 text-ink">
+                {{ option.label }}
+              </div>
+              <div class="mt-1 text-xs leading-5 text-slate">
+                {{ option.description }}
+              </div>
+            </button>
+          </div>
+          <div class="mt-2 text-xs text-slate">
+            创建后会按场景自动固化必要节点，编辑时不能删除、移动或关闭这些边界节点。
+          </div>
+        </div>
         <div class="flex justify-end gap-2">
           <NButton @click="createVisible = false">
             取消

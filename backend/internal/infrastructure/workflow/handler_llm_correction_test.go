@@ -130,6 +130,60 @@ func TestLLMCorrectionHandlerRetriesWithReducedMaxTokensOnContextOverflow(t *tes
 	}
 }
 
+func TestLLMCorrectionHandlerRetriesWithProviderMaxTokenRange(t *testing.T) {
+	var callCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callNumber := callCount.Add(1)
+		var payload struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		if callNumber == 1 {
+			if payload.MaxTokens != 200000 {
+				t.Fatalf("expected first request max_tokens=200000, got %d", payload.MaxTokens)
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Range of max_tokens should be [1, 65536]","type":"invalid_request_error","code":"invalid_parameter_error"}}`))
+			return
+		}
+
+		if payload.MaxTokens != 65536 {
+			t.Fatalf("expected retried request max_tokens=65536, got %d", payload.MaxTokens)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"整理后的纪要"}}],"model":"qwen3-4b","usage":{"prompt_tokens":3000,"completion_tokens":1200}}`))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"prompt_template": "请整理以下文本：\n{{TEXT}}",
+		"temperature": 0.3,
+		"max_tokens": 200000,
+		"allow_markdown": true
+	}`)
+
+	output, detail, err := handler.Execute(context.Background(), configBytes, strings.Repeat("会议内容", 100), nil)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if output != "整理后的纪要" {
+		t.Fatalf("expected summarized text, got %q", output)
+	}
+	var parsedDetail map[string]any
+	if err := json.Unmarshal(detail, &parsedDetail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if parsedDetail["max_tokens"] != float64(65536) {
+		t.Fatalf("expected detail max_tokens=65536, got %+v", parsedDetail["max_tokens"])
+	}
+}
+
 func TestLLMCorrectionHandlerNormalizesMarkdownOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -164,5 +218,53 @@ func TestLLMCorrectionHandlerNormalizesMarkdownOutput(t *testing.T) {
 	}
 	if parsedDetail["normalized_markdown"] != true {
 		t.Fatalf("expected normalized_markdown=true, got %+v", parsedDetail["normalized_markdown"])
+	}
+}
+
+func TestLLMCorrectionHandlerStreamsDeltaOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"第一段\"}}],\"model\":\"qwen3-4b\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"第二段\"}}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"prompt_template": "请整理以下文本：\n{{TEXT}}",
+		"temperature": 0.3,
+		"max_tokens": 512,
+		"allow_markdown": true
+	}`)
+
+	var deltas []string
+	output, detail, err := handler.ExecuteStream(context.Background(), configBytes, "原始文本", nil, func(event *NodeStreamEvent) error {
+		if event != nil && event.Type == NodeStreamEventDelta {
+			deltas = append(deltas, event.Delta)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream returned error: %v", err)
+	}
+	if output != "第一段第二段" {
+		t.Fatalf("expected streamed output, got %q", output)
+	}
+	if len(deltas) != 2 || deltas[0] != "第一段" || deltas[1] != "第二段" {
+		t.Fatalf("unexpected deltas: %+v", deltas)
+	}
+
+	var parsedDetail map[string]any
+	if err := json.Unmarshal(detail, &parsedDetail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if parsedDetail["streamed"] != true {
+		t.Fatalf("expected streamed=true, got %+v", parsedDetail["streamed"])
+	}
+	if parsedDetail["completion_tokens"] != float64(8) {
+		t.Fatalf("expected completion_tokens=8, got %+v", parsedDetail["completion_tokens"])
 	}
 }

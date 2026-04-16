@@ -26,6 +26,13 @@ type NodeRepository interface {
 	DeleteByWorkflow(ctx context.Context, workflowID uint64) error
 }
 
+// NodeDefaultRepository manages node-type level default configurations.
+type NodeDefaultRepository interface {
+	List(ctx context.Context) ([]NodeDefault, error)
+	GetByType(ctx context.Context, nodeType NodeType) (*NodeDefault, error)
+	Upsert(ctx context.Context, item *NodeDefault) error
+}
+
 // ExecutionRepository manages workflow execution records.
 type ExecutionRepository interface {
 	Create(ctx context.Context, exec *Execution) error

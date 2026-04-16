@@ -41,6 +41,64 @@ SERVICE_NAME = "speaker-analysis-service"
 VERSION = "1.1.0"
 
 
+def normalize_runtime_device(device: str | None) -> str:
+    value = (device or "cpu").strip() or "cpu"
+    if not value.startswith("cuda"):
+        return value
+
+    requested_index = 0
+    if ":" in value:
+        try:
+            requested_index = int(value.split(":", 1)[1])
+        except ValueError:
+            logger.warning(f"无法解析 CUDA 设备编号，改用 cuda:0: {value}")
+            requested_index = 0
+
+    visible_spec = os.getenv("CUDA_VISIBLE_DEVICES") or os.getenv("NVIDIA_VISIBLE_DEVICES") or ""
+    visible_devices = [
+        item.strip()
+        for item in visible_spec.split(",")
+        if item.strip() and item.strip().lower() not in {"all", "none", "void"}
+    ]
+
+    requested_host_id = str(requested_index)
+    if visible_devices and requested_host_id in visible_devices:
+        mapped_index = visible_devices.index(requested_host_id)
+        mapped_device = f"cuda:{mapped_index}"
+        if mapped_device != value:
+            logger.warning(
+                "检测到容器 GPU 可见列表重编号，运行设备从 {} 自动映射为 {} (visible={})",
+                value,
+                mapped_device,
+                visible_devices,
+            )
+        return mapped_device
+
+    try:
+        import torch
+
+        device_count = torch.cuda.device_count()
+    except Exception as exc:
+        logger.warning(f"获取 CUDA 设备数量失败，保留原始设备配置 {value}: {exc}")
+        return value
+
+    if device_count <= 0:
+        logger.warning(f"未检测到可用 CUDA 设备，运行设备从 {value} 回退为 cpu")
+        return "cpu"
+
+    if requested_index >= device_count:
+        mapped_device = "cuda:0"
+        logger.warning(
+            "请求的 CUDA 设备 {} 超出当前容器可见范围 (count={})，自动改用 {}",
+            value,
+            device_count,
+            mapped_device,
+        )
+        return mapped_device
+
+    return value
+
+
 def load_config(config_path: str = "config/settings.yaml") -> dict:
     """加载配置文件"""
     if os.path.exists(config_path):
@@ -62,8 +120,12 @@ def apply_env_overrides(config: dict) -> dict:
     vad_cfg = models_cfg.setdefault("vad", {})
 
     default_device = os.getenv("DEVICE")
-    embedding_device = os.getenv("EMBEDDING_DEVICE", default_device or embedding_cfg.get("device", "cpu"))
-    vad_device = os.getenv("VAD_DEVICE", default_device or vad_cfg.get("device", "cpu"))
+    embedding_device = normalize_runtime_device(
+        os.getenv("EMBEDDING_DEVICE", default_device or embedding_cfg.get("device", "cpu"))
+    )
+    vad_device = normalize_runtime_device(
+        os.getenv("VAD_DEVICE", default_device or vad_cfg.get("device", "cpu"))
+    )
     embedding_cfg["device"] = embedding_device
     vad_cfg["device"] = vad_device
 

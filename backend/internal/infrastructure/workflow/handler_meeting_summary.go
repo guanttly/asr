@@ -30,7 +30,7 @@ type MeetingSummaryHandler struct {
 const (
 	meetingSummaryChunkMaxRunes    = 2400
 	meetingSummaryChunkMaxTokens   = 1024
-	meetingSummaryDefaultMaxTokens = 200000
+	meetingSummaryDefaultMaxTokens = 65536
 	meetingSummaryBuiltinSource    = "builtin_summarizer"
 	meetingSummaryChunkedLLMSource = "chunked_llm_summary"
 	meetingSummaryDirectLLMSource  = "llm_summary"
@@ -111,6 +111,13 @@ const defaultChunkSummaryPrompt = `# 角色
 
 {{TEXT}}`
 
+type meetingSummaryChunkDebug struct {
+	Title      string `json:"title"`
+	Output     string `json:"output"`
+	Prompt     string `json:"prompt,omitempty"`
+	InputRunes int    `json:"input_runes,omitempty"`
+}
+
 func (h *MeetingSummaryHandler) Validate(config json.RawMessage) error {
 	if len(config) == 0 || string(config) == "null" || string(config) == "{}" {
 		return nil // Will use fallback summarizer
@@ -146,6 +153,87 @@ func (h *MeetingSummaryHandler) Execute(ctx context.Context, config json.RawMess
 	return inputText, nil, fmt.Errorf("no summarizer configured")
 }
 
+func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta, emit StreamEmitter) (string, json.RawMessage, error) {
+	var cfg MeetingSummaryConfig
+	if len(config) > 0 && string(config) != "null" {
+		_ = json.Unmarshal(config, &cfg)
+	}
+
+	trimmed := strings.TrimSpace(inputText)
+	if trimmed == "" {
+		return inputText, nil, fmt.Errorf("meeting summary input is empty")
+	}
+
+	if cfg.Endpoint == "" || cfg.Model == "" {
+		return h.Execute(ctx, config, inputText, nil)
+	}
+
+	finalPrompt := cfg.PromptTemplate
+	if finalPrompt == "" {
+		finalPrompt = defaultSummaryPrompt
+	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = meetingSummaryDefaultMaxTokens
+	}
+
+	if utf8.RuneCountInString(trimmed) <= meetingSummaryChunkMaxRunes {
+		if emit != nil {
+			if err := emit(&NodeStreamEvent{Type: NodeStreamEventStatus, Message: "正在生成会议纪要..."}); err != nil {
+				return inputText, nil, err
+			}
+		}
+		return h.executeSummaryPromptStream(ctx, cfg, finalPrompt, trimmed, maxTokens, meetingSummaryDirectLLMSource, 1, emit)
+	}
+
+	chunks := splitMeetingSummaryChunks(trimmed, meetingSummaryChunkMaxRunes)
+	partialSummaries := make([]string, 0, len(chunks))
+	chunkOutputs := make([]meetingSummaryChunkDebug, 0, len(chunks))
+	for index, chunk := range chunks {
+		if emit != nil {
+			message := fmt.Sprintf("正在提炼片段 %d/%d...", index+1, len(chunks))
+			if err := emit(&NodeStreamEvent{
+				Type:    NodeStreamEventStatus,
+				Message: message,
+				Detail:  buildMeetingSummaryStreamDetail(message, len(chunks), index+1, chunkOutputs),
+			}); err != nil {
+				return inputText, nil, err
+			}
+		}
+		partial, _, err := h.executeSummaryPrompt(ctx, cfg, defaultChunkSummaryPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+		if err != nil {
+			return inputText, nil, err
+		}
+		trimmedPartial := strings.TrimSpace(partial)
+		partialSummaries = append(partialSummaries, trimmedPartial)
+		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
+			Title:      fmt.Sprintf("片段 %d", index+1),
+			Output:     trimmedPartial,
+			Prompt:     strings.ReplaceAll(defaultChunkSummaryPrompt, "{{TEXT}}", chunk),
+			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
+		})
+	}
+
+	if emit != nil {
+		message := "正在合并片段并生成最终纪要..."
+		if err := emit(&NodeStreamEvent{
+			Type:    NodeStreamEventStatus,
+			Message: message,
+			Detail:  buildMeetingSummaryStreamDetail(message, len(chunks), 0, chunkOutputs),
+		}); err != nil {
+			return inputText, nil, err
+		}
+	}
+	mergedInput := mergeChunkSummaries(partialSummaries)
+	output, detail, err := h.executeSummaryPromptStream(ctx, cfg, finalPrompt, mergedInput, maxTokens, meetingSummaryChunkedLLMSource, len(chunks), emit)
+	if err != nil {
+		return formatMeetingSummaryChunkPreview(chunkOutputs), detail, err
+	}
+	return output, mergeMeetingSummaryDetail(detail, map[string]any{
+		"chunk_outputs": chunkOutputs,
+	}), nil
+}
+
 // AppendSummaryToText appends the summary as a section at the bottom.
 // This is a helper for post-processing workflows that want both text + summary.
 func AppendSummaryToText(originalText, summary string) string {
@@ -176,16 +264,49 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 
 	chunks := splitMeetingSummaryChunks(trimmed, meetingSummaryChunkMaxRunes)
 	partialSummaries := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
+	chunkOutputs := make([]meetingSummaryChunkDebug, 0, len(chunks))
+	for index, chunk := range chunks {
 		partial, _, err := h.executeSummaryPrompt(ctx, cfg, defaultChunkSummaryPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
 		if err != nil {
 			return inputText, nil, err
 		}
-		partialSummaries = append(partialSummaries, strings.TrimSpace(partial))
+		trimmedPartial := strings.TrimSpace(partial)
+		partialSummaries = append(partialSummaries, trimmedPartial)
+		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
+			Title:      fmt.Sprintf("片段 %d", index+1),
+			Output:     trimmedPartial,
+			Prompt:     strings.ReplaceAll(defaultChunkSummaryPrompt, "{{TEXT}}", chunk),
+			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
+		})
 	}
 
 	mergedInput := mergeChunkSummaries(partialSummaries)
-	return h.executeSummaryPrompt(ctx, cfg, finalPrompt, mergedInput, maxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+	output, detail, err := h.executeSummaryPrompt(ctx, cfg, finalPrompt, mergedInput, maxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+	if err != nil {
+		return formatMeetingSummaryChunkPreview(chunkOutputs), detail, err
+	}
+	return output, mergeMeetingSummaryDetail(detail, map[string]any{
+		"chunk_outputs": chunkOutputs,
+	}), nil
+}
+
+func formatMeetingSummaryChunkPreview(chunks []meetingSummaryChunkDebug) string {
+	if len(chunks) == 0 {
+		return ""
+	}
+	sections := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		title := strings.TrimSpace(chunk.Title)
+		if title == "" {
+			title = "片段"
+		}
+		body := strings.TrimSpace(chunk.Output)
+		if body == "" {
+			continue
+		}
+		sections = append(sections, fmt.Sprintf("## %s\n\n%s", title, body))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func (h *MeetingSummaryHandler) executeSummaryPrompt(ctx context.Context, cfg MeetingSummaryConfig, prompt, inputText string, maxTokens int, source string, chunkCount int) (string, json.RawMessage, error) {
@@ -204,6 +325,53 @@ func (h *MeetingSummaryHandler) executeSummaryPrompt(ctx context.Context, cfg Me
 		return inputText, detail, err
 	}
 
+	return output, mergeMeetingSummaryDetail(detail, map[string]any{
+		"source":      source,
+		"chunk_count": chunkCount,
+		"input_runes": utf8.RuneCountInString(strings.TrimSpace(inputText)),
+	}), nil
+}
+
+func (h *MeetingSummaryHandler) executeSummaryPromptStream(ctx context.Context, cfg MeetingSummaryConfig, prompt, inputText string, maxTokens int, source string, chunkCount int, emit StreamEmitter) (string, json.RawMessage, error) {
+	llmCfg := LLMCorrectionConfig{
+		Endpoint:       cfg.Endpoint,
+		Model:          cfg.Model,
+		APIKey:         cfg.APIKey,
+		PromptTemplate: prompt,
+		Temperature:    0.3,
+		MaxTokens:      maxTokens,
+		AllowMarkdown:  true,
+	}
+	llmConfigBytes, _ := json.Marshal(llmCfg)
+	output, detail, err := h.llmHandler.ExecuteStream(ctx, llmConfigBytes, inputText, nil, emit)
+	if err != nil {
+		return inputText, detail, err
+	}
+
+	return output, mergeMeetingSummaryDetail(detail, map[string]any{
+		"source":      source,
+		"chunk_count": chunkCount,
+		"input_runes": utf8.RuneCountInString(strings.TrimSpace(inputText)),
+	}), nil
+}
+
+func buildMeetingSummaryStreamDetail(message string, chunkCount int, activeChunkIndex int, chunkOutputs []meetingSummaryChunkDebug) json.RawMessage {
+	payload := map[string]any{
+		"status":      "streaming",
+		"message":     message,
+		"chunk_count": chunkCount,
+	}
+	if activeChunkIndex > 0 {
+		payload["active_chunk_index"] = activeChunkIndex
+	}
+	if len(chunkOutputs) > 0 {
+		payload["chunk_outputs"] = chunkOutputs
+	}
+	mergedDetail, _ := json.Marshal(payload)
+	return mergedDetail
+}
+
+func mergeMeetingSummaryDetail(detail json.RawMessage, extras map[string]any) json.RawMessage {
 	var detailPayload map[string]any
 	if len(detail) > 0 {
 		_ = json.Unmarshal(detail, &detailPayload)
@@ -211,11 +379,11 @@ func (h *MeetingSummaryHandler) executeSummaryPrompt(ctx context.Context, cfg Me
 	if detailPayload == nil {
 		detailPayload = map[string]any{}
 	}
-	detailPayload["source"] = source
-	detailPayload["chunk_count"] = chunkCount
-	detailPayload["input_runes"] = utf8.RuneCountInString(strings.TrimSpace(inputText))
+	for key, value := range extras {
+		detailPayload[key] = value
+	}
 	mergedDetail, _ := json.Marshal(detailPayload)
-	return output, mergedDetail, nil
+	return mergedDetail
 }
 
 func splitMeetingSummaryChunks(text string, maxRunes int) []string {

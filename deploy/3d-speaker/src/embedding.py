@@ -41,6 +41,23 @@ class EmbeddingExtractor:
         self._model = None
         self._loaded = False
 
+    def _normalize_feature_tensor(self, feat: torch.Tensor) -> torch.Tensor:
+        """将 FBank 输出统一整理为模型所需的 [B, T, F] 形状。"""
+        if feat.dim() == 1:
+            feat = feat.unsqueeze(0).unsqueeze(0)
+        elif feat.dim() == 2:
+            feat = feat.unsqueeze(0)
+        elif feat.dim() != 3:
+            raise RuntimeError(f"不支持的特征张量维度: {tuple(feat.shape)}")
+
+        if feat.shape[2] == 80:
+            return feat.contiguous()
+
+        if feat.shape[1] == 80:
+            return feat.transpose(1, 2).contiguous()
+
+        raise RuntimeError(f"无法识别的 FBank 特征形状: {tuple(feat.shape)}")
+
     def load(self) -> None:
         """加载模型（延迟加载，首次调用 extract 时自动触发）"""
         if self._loaded:
@@ -187,6 +204,7 @@ class EmbeddingExtractor:
         # 原生模型方式: 提取 FBank 特征 → 模型推理
         wav_tensor = torch.from_numpy(waveform).float().unsqueeze(0).to(self.device)
         feat = self._feature_extractor(wav_tensor)
+        feat = self._normalize_feature_tensor(feat)
         emb = self._model(feat)
 
         emb = emb.cpu().numpy().flatten().astype(np.float32)
@@ -208,14 +226,14 @@ class EmbeddingExtractor:
         """导出为 ONNX 格式（用于 Triton 等推理服务器）"""
         self.load()
         if isinstance(self._model, torch.nn.Module):
-            dummy_input = torch.randn(1, 80, 200).to(self.device)
+            dummy_input = torch.randn(1, 200, 80).to(self.device)
             torch.onnx.export(
                 self._model,
                 dummy_input,
                 output_path,
                 input_names=["features"],
                 output_names=["embedding"],
-                dynamic_axes={"features": {2: "time"}, "embedding": {0: "batch"}},
+                dynamic_axes={"features": {1: "time"}, "embedding": {0: "batch"}},
             )
             logger.info(f"ONNX 导出完成: {output_path}")
         else:

@@ -135,6 +135,66 @@ function extractErrorMessage(error: unknown, fallback: string) {
   return fallback
 }
 
+function isLoopbackHost(hostname: string) {
+  const normalized = hostname.trim().toLowerCase()
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
+function uploadedAudioBaseURL() {
+  const configuredBase = String(import.meta.env.VITE_API_BASE_URL || '').trim()
+  if (import.meta.env.DEV || !configuredBase)
+    return `${window.location.origin}/`
+
+  const configuredURL = new URL(configuredBase, `${window.location.origin}/`)
+  if (isLoopbackHost(configuredURL.hostname) && !isLoopbackHost(window.location.hostname))
+    return `${window.location.origin}/`
+
+  const normalizedPath = configuredURL.pathname.replace(/\/+$/, '')
+  const apiIndex = normalizedPath.lastIndexOf('/api')
+  const basePath = apiIndex >= 0 ? normalizedPath.slice(0, apiIndex) : normalizedPath
+
+  configuredURL.pathname = `${basePath.replace(/\/+$/, '')}/`
+  configuredURL.search = ''
+  configuredURL.hash = ''
+  return configuredURL.toString()
+}
+
+function resolveAudioDownloadURL(audioURL: string) {
+  const trimmed = audioURL.trim()
+  if (!trimmed)
+    return ''
+
+  const parsed = new URL(trimmed, `${window.location.origin}/`)
+  const uploadPathMatch = parsed.pathname.match(/\/uploads\/.+$/)
+  if (!uploadPathMatch)
+    return parsed.toString()
+
+  return new URL(`${uploadPathMatch[0]}${parsed.search}`, uploadedAudioBaseURL()).toString()
+}
+
+function inferAudioFileName(audioURL: string, taskId: number) {
+  try {
+    const parsed = new URL(audioURL, `${window.location.origin}/`)
+    const name = parsed.pathname.split('/').pop()?.trim()
+    if (name)
+      return name
+  }
+  catch {
+    // Ignore invalid URL and fall back to a stable filename.
+  }
+  return `task-${taskId}-audio`
+}
+
+function isUploadedAudioURL(audioURL: string) {
+  try {
+    const parsed = new URL(audioURL, `${window.location.origin}/`)
+    return /\/uploads\/.+/.test(parsed.pathname)
+  }
+  catch {
+    return false
+  }
+}
+
 function sanitizeTranscriptionText(value?: string) {
   if (!value)
     return ''
@@ -773,7 +833,23 @@ function handleDownloadAudio(task: TaskItem) {
     message.warning('该任务没有原音频地址')
     return
   }
-  window.open(task.audio_url, '_blank', 'noopener,noreferrer')
+
+  const downloadURL = resolveAudioDownloadURL(task.audio_url)
+  if (!downloadURL) {
+    message.warning('该任务没有可用的音频地址')
+    return
+  }
+
+  const anchor = document.createElement('a')
+  anchor.href = downloadURL
+  anchor.rel = 'noopener noreferrer'
+  if (isUploadedAudioURL(task.audio_url))
+    anchor.download = inferAudioFileName(task.audio_url, task.id)
+  else
+    anchor.target = '_blank'
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
 }
 
 async function handleShowDetail(taskId: number) {

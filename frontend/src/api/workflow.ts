@@ -1,4 +1,4 @@
-import type { WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
+import type { ActiveWorkflowType, WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
 
 import request from './request'
 
@@ -8,6 +8,15 @@ export interface WorkflowNodePayload {
   position: number
   config: Record<string, unknown>
   enabled: boolean
+  is_fixed?: boolean
+}
+
+export interface WorkflowNodeTypeInfo {
+  type: string
+  label: string
+  role?: 'source' | 'transform' | 'sink'
+  description?: string
+  default_config?: Record<string, unknown>
 }
 
 export interface GetWorkflowsParams {
@@ -26,7 +35,7 @@ export function getWorkflows(params?: GetWorkflowsParams) {
   return request.get('/api/admin/workflows', { params })
 }
 
-export function createWorkflow(payload: { name: string, description?: string, source_id?: number, owner_type?: 'system' | 'user' }) {
+export function createWorkflow(payload: { name: string, description?: string, source_id?: number, owner_type?: 'system' | 'user', workflow_type?: ActiveWorkflowType }) {
   return request.post('/api/admin/workflows', payload)
 }
 
@@ -76,8 +85,93 @@ export function testNode(payload: { node_type: string, config: Record<string, un
     : undefined)
 }
 
+export interface TestNodeStreamEvent {
+  type: 'status' | 'delta' | 'done'
+  message?: string
+  delta?: string
+  output_text?: string
+  detail?: Record<string, unknown> | string | null
+  duration_ms?: number
+  error?: string
+}
+
+function workflowAPIBaseURL() {
+  return import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE_URL || '')
+}
+
+function parseWorkflowErrorMessage(raw: string) {
+  try {
+    const payload = JSON.parse(raw) as { message?: string }
+    if (typeof payload.message === 'string' && payload.message.trim())
+      return payload.message
+  }
+  catch {
+    // ignore invalid JSON body
+  }
+  return raw.trim() || '节点测试失败'
+}
+
+export async function testNodeStream(
+  payload: { node_type: string, config: Record<string, unknown>, input_text?: string, audio_url?: string } | FormData,
+  options: { onEvent?: (event: TestNodeStreamEvent) => void } = {},
+) {
+  const headers: Record<string, string> = {
+    Accept: 'application/x-ndjson',
+  }
+  const token = localStorage.getItem('asr_token')
+  if (token)
+    headers.Authorization = `Bearer ${token}`
+
+  let body: BodyInit
+  if (payload instanceof FormData) {
+    body = payload
+  }
+  else {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(payload)
+  }
+
+  const response = await fetch(`${workflowAPIBaseURL()}/api/admin/workflows/test-node?stream=1`, {
+    method: 'POST',
+    headers,
+    body,
+  })
+  if (!response.ok) {
+    throw new Error(parseWorkflowErrorMessage(await response.text()))
+  }
+  if (!response.body)
+    throw new Error('节点测试流为空')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed)
+        continue
+      options.onEvent?.(JSON.parse(trimmed) as TestNodeStreamEvent)
+    }
+    if (done)
+      break
+  }
+
+  const tail = buffer.trim()
+  if (tail)
+    options.onEvent?.(JSON.parse(tail) as TestNodeStreamEvent)
+}
+
 export function getNodeTypes() {
   return request.get('/api/admin/workflows/node-types')
+}
+
+export function updateNodeDefault(nodeType: string, payload: { config: Record<string, unknown> }) {
+  return request.put(`/api/admin/workflows/node-defaults/${nodeType}`, payload)
 }
 
 /* ── 执行记录 ── */

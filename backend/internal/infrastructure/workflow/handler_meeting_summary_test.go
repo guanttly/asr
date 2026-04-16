@@ -83,4 +83,16 @@ func TestMeetingSummaryHandlerChunksLongInputBeforeFinalSummary(t *testing.T) {
 	if detailPayload["chunk_count"].(float64) < 2 {
 		t.Fatalf("expected chunk_count >= 2, got %+v", detailPayload["chunk_count"])
 	}
+	chunkOutputs, ok := detailPayload["chunk_outputs"].([]any)
+	if !ok || len(chunkOutputs) == 0 {
+		t.Fatalf("expected chunk_outputs to be present, got %+v", detailPayload["chunk_outputs"])
+	}
+	firstChunk, ok := chunkOutputs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first chunk output payload, got %+v", chunkOutputs[0])
+	}
+	prompt, _ := firstChunk["prompt"].(string)
+	if !strings.Contains(prompt, "以下是需要提炼的会议片段") {
+		t.Fatalf("expected chunk prompt in detail payload, got %q", prompt)
+	}
 }

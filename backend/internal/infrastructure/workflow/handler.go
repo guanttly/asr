@@ -5,6 +5,26 @@ import (
 	"encoding/json"
 )
 
+type NodeStreamEventType string
+
+const (
+	NodeStreamEventStatus NodeStreamEventType = "status"
+	NodeStreamEventDelta  NodeStreamEventType = "delta"
+	NodeStreamEventDone   NodeStreamEventType = "done"
+)
+
+type NodeStreamEvent struct {
+	Type       NodeStreamEventType `json:"type"`
+	Message    string              `json:"message,omitempty"`
+	Delta      string              `json:"delta,omitempty"`
+	OutputText string              `json:"output_text,omitempty"`
+	Detail     json.RawMessage     `json:"detail,omitempty"`
+	DurationMs int                 `json:"duration_ms,omitempty"`
+	Error      string              `json:"error,omitempty"`
+}
+
+type StreamEmitter func(event *NodeStreamEvent) error
+
 // NodeHandler is the interface that every workflow node processor must implement.
 type NodeHandler interface {
 	// Execute processes input text and returns output text with optional detail JSON.
@@ -12,6 +32,12 @@ type NodeHandler interface {
 
 	// Validate checks whether the given config is valid for this node type.
 	Validate(config json.RawMessage) error
+}
+
+// StreamingNodeHandler can emit incremental node output while executing.
+type StreamingNodeHandler interface {
+	NodeHandler
+	ExecuteStream(ctx context.Context, config json.RawMessage, inputText string, meta *ExecutionMeta, emit StreamEmitter) (outputText string, detail json.RawMessage, err error)
 }
 
 // ExecutionMeta carries contextual information about the current workflow execution.

@@ -4,14 +4,15 @@ package workflow
 type NodeType string
 
 const (
-	NodeBatchASR       NodeType = "batch_asr"
-	NodeRealtimeASR    NodeType = "realtime_asr"
-	NodeTermCorrection NodeType = "term_correction"
-	NodeFillerFilter   NodeType = "filler_filter"
-	NodeLLMCorrection  NodeType = "llm_correction"
-	NodeSpeakerDiarize NodeType = "speaker_diarize"
-	NodeMeetingSummary NodeType = "meeting_summary"
-	NodeCustomRegex    NodeType = "custom_regex"
+	NodeBatchASR        NodeType = "batch_asr"
+	NodeRealtimeASR     NodeType = "realtime_asr"
+	NodeTermCorrection  NodeType = "term_correction"
+	NodeFillerFilter    NodeType = "filler_filter"
+	NodeSensitiveFilter NodeType = "sensitive_filter"
+	NodeLLMCorrection   NodeType = "llm_correction"
+	NodeSpeakerDiarize  NodeType = "speaker_diarize"
+	NodeMeetingSummary  NodeType = "meeting_summary"
+	NodeCustomRegex     NodeType = "custom_regex"
 )
 
 // AllNodeTypes returns all valid node types.
@@ -21,6 +22,7 @@ func AllNodeTypes() []NodeType {
 		NodeRealtimeASR,
 		NodeTermCorrection,
 		NodeFillerFilter,
+		NodeSensitiveFilter,
 		NodeLLMCorrection,
 		NodeSpeakerDiarize,
 		NodeMeetingSummary,
@@ -47,6 +49,8 @@ func (n NodeType) Label() string {
 		return "术语纠正"
 	case NodeFillerFilter:
 		return "语气词过滤"
+	case NodeSensitiveFilter:
+		return "敏感词过滤"
 	case NodeLLMCorrection:
 		return "LLM 纠错"
 	case NodeSpeakerDiarize:
@@ -70,6 +74,8 @@ func (n NodeType) Description() string {
 		return "对转写文本应用术语词库纠正。"
 	case NodeFillerFilter:
 		return "过滤口语化语气词与停顿词。"
+	case NodeSensitiveFilter:
+		return "按敏感词列表做替换或掩码处理。"
 	case NodeLLMCorrection:
 		return "调用 OpenAI 兼容接口对文本做进一步纠错。"
 	case NodeSpeakerDiarize:
@@ -133,6 +139,17 @@ const (
 	SourceKindRealtimeASR WorkflowSourceKind = "realtime_asr"
 )
 
+func (k WorkflowSourceKind) NodeType() (NodeType, bool) {
+	switch k {
+	case SourceKindBatchASR:
+		return NodeBatchASR, true
+	case SourceKindRealtimeASR:
+		return NodeRealtimeASR, true
+	default:
+		return "", false
+	}
+}
+
 func (k WorkflowSourceKind) Label() string {
 	switch k {
 	case SourceKindBatchASR:
@@ -152,6 +169,15 @@ const (
 	TargetKindTranscript     WorkflowTargetKind = "transcript"
 	TargetKindMeetingSummary WorkflowTargetKind = "meeting_summary"
 )
+
+func (k WorkflowTargetKind) FixedSinkNodeType() (NodeType, bool) {
+	switch k {
+	case TargetKindMeetingSummary:
+		return NodeMeetingSummary, true
+	default:
+		return "", false
+	}
+}
 
 func (k WorkflowTargetKind) Label() string {
 	switch k {

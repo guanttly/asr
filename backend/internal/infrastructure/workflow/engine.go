@@ -71,6 +71,81 @@ func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config 
 	return result, nil
 }
 
+// TestNodeStream executes a single node and emits incremental events when supported.
+func (e *Engine) TestNodeStream(ctx context.Context, nodeType domain.NodeType, config json.RawMessage, inputText string, meta *ExecutionMeta, emit StreamEmitter) (*NodeTestResult, error) {
+	if nodeType.IsSource() {
+		result := &NodeTestResult{
+			DurationMs: 0,
+			Error:      "源节点仅用于声明输入来源，不能做文本级单节点测试。请测试后续处理节点，或执行整条工作流。",
+		}
+		if emit != nil {
+			if err := emit(&NodeStreamEvent{Type: NodeStreamEventDone, DurationMs: result.DurationMs, Error: result.Error}); err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
+	}
+
+	handler, ok := e.handlers[nodeType]
+	if !ok {
+		return nil, fmt.Errorf("unsupported node type: %s", nodeType)
+	}
+
+	if err := handler.Validate(config); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	start := time.Now()
+	var (
+		outputText string
+		detail     json.RawMessage
+		err        error
+	)
+	if streamingHandler, ok := handler.(StreamingNodeHandler); ok {
+		outputText, detail, err = streamingHandler.ExecuteStream(ctx, config, inputText, meta, emit)
+	}
+	if !ok {
+		outputText, detail, err = handler.Execute(ctx, config, inputText, meta)
+	}
+	durationMs := int(time.Since(start).Milliseconds())
+
+	result := &NodeTestResult{
+		OutputText: outputText,
+		Detail:     detail,
+		DurationMs: durationMs,
+	}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	if emit != nil {
+		if emitErr := emit(&NodeStreamEvent{
+			Type:       NodeStreamEventDone,
+			OutputText: result.OutputText,
+			Detail:     result.Detail,
+			DurationMs: result.DurationMs,
+			Error:      result.Error,
+		}); emitErr != nil {
+			return nil, emitErr
+		}
+	}
+	return result, nil
+}
+
+// ValidateNodeConfig validates a node config without executing the node.
+func (e *Engine) ValidateNodeConfig(nodeType domain.NodeType, config json.RawMessage) error {
+	if nodeType.IsSource() {
+		return nil
+	}
+	handler, ok := e.handlers[nodeType]
+	if !ok {
+		return fmt.Errorf("unsupported node type: %s", nodeType)
+	}
+	if err := handler.Validate(config); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	return nil
+}
+
 // ExecuteResult is the result of executing an entire workflow.
 type ExecuteResult struct {
 	FinalText   string              `json:"final_text"`

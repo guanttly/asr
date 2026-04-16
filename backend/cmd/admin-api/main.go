@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appasr "github.com/lgt/asr/internal/application/asr"
+	appsensitive "github.com/lgt/asr/internal/application/sensitive"
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	appuser "github.com/lgt/asr/internal/application/user"
 	appwf "github.com/lgt/asr/internal/application/workflow"
@@ -107,6 +108,18 @@ func main() {
 	}
 	logger.Info("terminology seed data ensured")
 
+	sensitiveDictRepo := persistence.NewSensitiveDictRepo(db)
+	sensitiveEntryRepo := persistence.NewSensitiveEntryRepo(db)
+	sensitiveService := appsensitive.NewService(
+		sensitiveDictRepo,
+		sensitiveEntryRepo,
+		persistence.NewSeedStateRepo(db),
+	)
+	if err := sensitiveService.EnsureSeedData(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("sensitive seed data ensured")
+
 	meetingRepo := persistence.NewMeetingRepo(db)
 	transcriptRepo := persistence.NewTranscriptRepo(db)
 	summaryRepo := persistence.NewSummaryRepo(db)
@@ -123,6 +136,7 @@ func main() {
 	engine := wfengine.NewEngine(logger)
 	engine.RegisterHandler(domain.NodeTermCorrection, wfengine.NewTermCorrectionHandler(corrector))
 	engine.RegisterHandler(domain.NodeFillerFilter, wfengine.NewFillerFilterHandler())
+	engine.RegisterHandler(domain.NodeSensitiveFilter, wfengine.NewSensitiveFilterHandler(sensitiveDictRepo, sensitiveEntryRepo))
 	engine.RegisterHandler(domain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
 	engine.RegisterHandler(domain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
 	engine.RegisterHandler(domain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
@@ -135,6 +149,7 @@ func main() {
 	workflowService := appwf.NewService(
 		workflowRepo,
 		persistence.NewWorkflowNodeRepo(db),
+		persistence.NewWorkflowNodeDefaultRepo(db),
 		persistence.NewWorkflowExecutionRepo(db),
 		persistence.NewWorkflowNodeResultRepo(db),
 		engine,
@@ -151,6 +166,7 @@ func main() {
 	protected := router.Group("/api/admin", middleware.AuthRequired(cfg.JWT.Secret))
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
+	api.NewSensitiveHandler(sensitiveService).Register(protected)
 	api.NewDashboardHandler(asrService, cfg.Services.ASRBatchSyncWarnThreshold, 6).Register(protected)
 	api.NewWorkflowHandler(workflowService, asrService).Register(protected)
 

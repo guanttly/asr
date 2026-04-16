@@ -33,6 +33,14 @@ type Node struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// NodeDefault stores the default configuration for a node type.
+type NodeDefault struct {
+	NodeType  NodeType  `json:"node_type"`
+	Config    string    `json:"config"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // Execution records a single run of a workflow.
 type Execution struct {
 	ID           uint64          `json:"id"`

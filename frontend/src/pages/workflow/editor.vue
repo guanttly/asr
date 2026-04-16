@@ -5,8 +5,9 @@ import { useMessage } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { getSensitiveDicts } from '@/api/sensitive'
 import { getTermDicts } from '@/api/terminology'
-import { createWorkflow, deleteWorkflow, executeWorkflow, getNodeTypes, getWorkflow, getWorkflows, testNode, updateWorkflow, updateWorkflowNodes } from '@/api/workflow'
+import { createWorkflow, deleteWorkflow, executeWorkflow, getNodeTypes, getWorkflow, getWorkflows, testNodeStream, updateWorkflow, updateWorkflowNodes } from '@/api/workflow'
 import iconArrowRight from '@/assets/icons/icon-arrow-right.svg?raw'
 import iconChevronDown from '@/assets/icons/icon-chevron-down.svg?raw'
 import iconChevronUp from '@/assets/icons/icon-chevron-up.svg?raw'
@@ -20,6 +21,7 @@ import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
 import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { buildNodeConfigOverrides, formatConfigText, getNodeDefaultConfig, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 import { getWorkflowTemplateMeta } from '@/utils/workflowTemplateMeta'
 
 interface NodeTypeOption {
@@ -27,6 +29,7 @@ interface NodeTypeOption {
   label: string
   role?: 'source' | 'transform' | 'sink'
   description?: string
+  default_config?: Record<string, unknown>
 }
 
 interface DictOption {
@@ -38,6 +41,10 @@ interface TemplateOption {
   label: string
   value: number
   description?: string
+  workflow_type?: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting'
+  source_kind?: 'legacy_text' | 'batch_asr' | 'realtime_asr'
+  target_kind?: 'transcript' | 'meeting_summary'
+  is_legacy?: boolean
 }
 
 interface RegexRule {
@@ -72,6 +79,7 @@ interface EditableNode {
   enabled: boolean
   position: number
   configText: string
+  is_fixed?: boolean
 }
 
 interface EditableNodeDraft {
@@ -104,6 +112,7 @@ const showChangedPreviewOnly = ref(false)
 const highlightedNodeIndex = ref<number | null>(null)
 const nodeTypes = ref<NodeTypeOption[]>([])
 const termDictOptions = ref<DictOption[]>([])
+const sensitiveDictOptions = ref<DictOption[]>([])
 const templateOptions = ref<TemplateOption[]>([])
 const selectedTemplateId = ref<number | null>(null)
 const templatePreviewNodes = ref<EditableNode[]>([])
@@ -157,6 +166,12 @@ const filteredTemplatePreviewEntries = computed(() => showChangedPreviewOnly.val
   : templatePreviewEntries.value)
 const visibleCurrentPreviewEntries = computed(() => showAllPreviewNodes.value ? filteredCurrentPreviewEntries.value : filteredCurrentPreviewEntries.value.slice(0, 6))
 const visibleTemplatePreviewEntries = computed(() => showAllPreviewNodes.value ? filteredTemplatePreviewEntries.value : filteredTemplatePreviewEntries.value.slice(0, 6))
+const addableNodeOptions = computed(() => nodeTypes.value
+  .filter(item => item.role === 'transform')
+  .map(item => ({ label: item.label, value: item.type })))
+const selectedNode = computed(() => nodes.value[selectedIndex.value] || null)
+const selectedNodeIsFixed = computed(() => Boolean(selectedNode.value?.is_fixed))
+const hasFixedTailNode = computed(() => Boolean(nodes.value[nodes.value.length - 1]?.is_fixed))
 const templateComparison = computed(() => {
   const currentCounts = countNodeTypes(nodes.value)
   const templateCounts = countNodeTypes(templatePreviewNodes.value)
@@ -200,14 +215,12 @@ const templateComparison = computed(() => {
     changed: added + removed + reordered + toggled + configChanged,
   }
 })
-
-const selectedNode = computed(() => nodes.value[selectedIndex.value] || null)
 const selectedConfig = computed<Record<string, any>>(() => {
   if (!selectedNode.value)
     return {}
 
   const current = parseConfigSafe(nodeDraft.configText)
-  return normalizeConfig(selectedNode.value.node_type, current)
+  return normalizeNodeConfig(selectedNode.value.node_type, current, getNodeDefaultConfig(selectedNode.value.node_type, nodeTypes.value))
 })
 const selectedRegexRules = computed<RegexRule[]>(() => Array.isArray(selectedConfig.value.rules) ? selectedConfig.value.rules as RegexRule[] : [])
 const selectedNodeHasDraftChanges = computed(() => {
@@ -347,82 +360,11 @@ function setNodeRowRef(index: number, element: Element | ComponentPublicInstance
   nodeRowRefs.value[index] = null
 }
 
-function ensureStringArray(value: unknown, fallback: string[] = []) {
-  if (!Array.isArray(value))
-    return [...fallback]
-  return value.map(item => String(item).trim()).filter(Boolean)
-}
-
-function ensureBoolean(value: unknown, fallback = false) {
-  return typeof value === 'boolean' ? value : fallback
-}
-
-function ensureNumber(value: unknown, fallback = 0) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-function normalizeConfig(type: string, raw: Record<string, unknown>) {
-  const base = defaultConfigFor(type) as Record<string, unknown>
-  switch (type) {
-    case 'term_correction':
-      return {
-        ...base,
-        dict_id: ensureNumber(raw.dict_id, 0),
-      }
-    case 'filler_filter':
-      return {
-        ...base,
-        filter_words: ensureStringArray(raw.filter_words, ensureStringArray(base.filter_words)),
-        custom_words: ensureStringArray(raw.custom_words),
-      }
-    case 'llm_correction':
-      return {
-        ...base,
-        endpoint: String(raw.endpoint || ''),
-        model: String(raw.model || ''),
-        api_key: String(raw.api_key || ''),
-        prompt_template: String(raw.prompt_template || ''),
-        temperature: ensureNumber(raw.temperature, 0.3),
-        max_tokens: ensureNumber(raw.max_tokens, 4096),
-      }
-    case 'speaker_diarize':
-      return {
-        ...base,
-        service_url: String(raw.service_url || ''),
-        enable_voiceprint_match: ensureBoolean(raw.enable_voiceprint_match, false),
-        fail_on_error: ensureBoolean(raw.fail_on_error, false),
-      }
-    case 'meeting_summary':
-      return {
-        ...base,
-        endpoint: String(raw.endpoint || ''),
-        model: String(raw.model || ''),
-        api_key: String(raw.api_key || ''),
-        prompt_template: String(raw.prompt_template || ''),
-        output_format: String(raw.output_format || 'markdown'),
-        max_tokens: ensureNumber(raw.max_tokens, 200000),
-      }
-    case 'custom_regex':
-      return {
-        ...base,
-        rules: Array.isArray(raw.rules)
-          ? raw.rules.map((item): RegexRule => ({
-              pattern: String((item as Record<string, unknown>)?.pattern || ''),
-              replacement: String((item as Record<string, unknown>)?.replacement || ''),
-              enabled: ensureBoolean((item as Record<string, unknown>)?.enabled, true),
-            }))
-          : [{ pattern: '', replacement: '', enabled: true }],
-      }
-    default:
-      return { ...base, ...raw }
-  }
-}
-
 function replaceSelectedConfig(nextConfig: Record<string, unknown>) {
   if (!selectedNode.value)
     return
-  nodeDraft.configText = prettyJSON(nextConfig)
+  const overrides = buildNodeConfigOverrides(selectedNode.value.node_type, nextConfig, getNodeDefaultConfig(selectedNode.value.node_type, nodeTypes.value))
+  nodeDraft.configText = formatConfigText(overrides)
 }
 
 function updateSelectedConfig(patch: Record<string, unknown>) {
@@ -435,7 +377,9 @@ function updateSelectedConfig(patch: Record<string, unknown>) {
 }
 
 function listToText(value: unknown) {
-  return ensureStringArray(value).join('\n')
+  if (!Array.isArray(value))
+    return ''
+  return value.map(item => String(item).trim()).filter(Boolean).join('\n')
 }
 
 function sanitizeText(value?: string) {
@@ -465,6 +409,12 @@ function isAudioDrivenNodeType(type?: string | null) {
   return type === 'batch_asr' || type === 'realtime_asr' || type === 'speaker_diarize'
 }
 
+function previewModeForNodeType(type?: string | null): 'diff' | 'plain' | 'markdown' {
+  if (type === 'meeting_summary')
+    return 'markdown'
+  return isAudioDrivenNodeType(type) ? 'plain' : 'diff'
+}
+
 function formatFileSize(size?: number) {
   if (!size)
     return '0 B'
@@ -481,6 +431,27 @@ const workflowNeedsAudio = computed(() => isAudioDrivenNodeType(firstEnabledNode
 const nodeTestInputPreview = computed(() => selectedNodeNeedsAudio.value
   ? (nodeTestAudioFile.value ? `已上传音频：${nodeTestAudioFile.value.name}` : '尚未选择音频文件')
   : nodeTestInput.value)
+
+function buildMeetingSummaryChunkPreview(detail: unknown) {
+  if (!detail || typeof detail !== 'object')
+    return ''
+  const chunkOutputs = Array.isArray((detail as Record<string, unknown>).chunk_outputs)
+    ? (detail as Record<string, unknown>).chunk_outputs as Array<Record<string, unknown>>
+    : []
+  if (!chunkOutputs.length)
+    return ''
+  return chunkOutputs
+    .map((chunk, index) => {
+      const title = typeof chunk.title === 'string' && chunk.title.trim() ? chunk.title.trim() : `片段 ${index + 1}`
+      const output = typeof chunk.output === 'string' ? chunk.output.trim() : ''
+      if (!output)
+        return ''
+      return `## ${title}\n\n${output}`
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 const nodeTestHint = computed(() => {
   if (!selectedNode.value)
     return ''
@@ -564,25 +535,6 @@ function removeRegexRule(index: number) {
   updateSelectedConfig({ rules: rules.length > 0 ? rules : [{ pattern: '', replacement: '', enabled: true }] })
 }
 
-function defaultConfigFor(type: string) {
-  switch (type) {
-    case 'term_correction':
-      return { dict_id: 0 }
-    case 'filler_filter':
-      return { filter_words: ['嗯', '啊', '那个'], custom_words: [] }
-    case 'llm_correction':
-      return { endpoint: '', model: '', api_key: '', prompt_template: '', temperature: 0.3, max_tokens: 4096 }
-    case 'speaker_diarize':
-      return { service_url: '', enable_voiceprint_match: false, fail_on_error: false }
-    case 'meeting_summary':
-      return { endpoint: '', model: '', api_key: '', prompt_template: '', output_format: 'markdown', max_tokens: 200000 }
-    case 'custom_regex':
-      return { rules: [{ pattern: '', replacement: '', enabled: true }] }
-    default:
-      return {}
-  }
-}
-
 function syncPositions() {
   nodes.value = nodes.value.map((item, index) => ({
     ...item,
@@ -596,18 +548,43 @@ function mapWorkflowNodes(items: any[] = []): EditableNode[] {
     node_type: item.node_type,
     enabled: item.enabled,
     position: item.position || index + 1,
-    configText: prettyJSON(item.config || {}),
+    configText: formatConfigText(item.config || {}),
+    is_fixed: Boolean(item.is_fixed),
   }))
+}
+
+function isTemplateCompatible(option: TemplateOption) {
+  return option.workflow_type === workflow.workflow_type
+    && option.source_kind === workflow.source_kind
+    && option.target_kind === workflow.target_kind
+    && Boolean(option.is_legacy) === workflow.is_legacy
+}
+
+function addNodeInsertIndex() {
+  if (hasFixedTailNode.value)
+    return Math.max(nodes.value.length - 1, 0)
+  return nodes.value.length
+}
+
+function canMoveNode(index: number, delta: number) {
+  const current = nodes.value[index]
+  if (!current || current.is_fixed)
+    return false
+  const target = index + delta
+  if (target < 0 || target >= nodes.value.length)
+    return false
+  return !nodes.value[target]?.is_fixed
 }
 
 function buildNodePayload() {
   const payload = []
   for (const item of nodes.value) {
+    const rawConfig = parseConfig(item.configText)
     payload.push({
       node_type: item.node_type,
       position: item.position,
       enabled: item.enabled,
-      config: parseConfig(item.configText),
+      config: buildNodeConfigOverrides(item.node_type, rawConfig, getNodeDefaultConfig(item.node_type, nodeTypes.value)),
     })
   }
   return payload
@@ -618,14 +595,38 @@ function buildNodePayloadWithCurrentDraft() {
     const isSelected = index === selectedIndex.value && selectedNode.value
     const enabled = isSelected ? nodeDraft.enabled : item.enabled
     const configText = isSelected ? nodeDraft.configText : item.configText
+    const rawConfig = parseConfig(configText)
 
     return {
       node_type: item.node_type,
       position: item.position,
       enabled,
-      config: parseConfig(configText),
+      config: buildNodeConfigOverrides(item.node_type, rawConfig, getNodeDefaultConfig(item.node_type, nodeTypes.value)),
     }
   })
+}
+
+function applySavedWorkflowState(saved: any) {
+  applySavedWorkflowProfile(saved)
+  if (Array.isArray(saved?.nodes)) {
+    const currentSelected = selectedNode.value
+    const nextNodes = mapWorkflowNodes(saved.nodes)
+    nodes.value = nextNodes
+    if (!nextNodes.length) {
+      selectedIndex.value = 0
+      resetSelectedNodeDraft()
+      return
+    }
+
+    if (currentSelected) {
+      const nextIndex = nextNodes.findIndex(item => item.position === currentSelected.position && item.node_type === currentSelected.node_type)
+      selectedIndex.value = nextIndex >= 0 ? nextIndex : Math.min(selectedIndex.value, nextNodes.length - 1)
+    }
+    else {
+      selectedIndex.value = Math.min(selectedIndex.value, nextNodes.length - 1)
+    }
+  }
+  resetSelectedNodeDraft()
 }
 
 function applySavedWorkflowProfile(saved: any) {
@@ -686,20 +687,25 @@ function handleAddNode() {
     message.warning('请选择节点类型')
     return
   }
-  nodes.value.push({
+  const insertIndex = addNodeInsertIndex()
+  nodes.value.splice(insertIndex, 0, {
     node_type: nodeType.value,
     enabled: true,
-    position: nodes.value.length + 1,
-    configText: prettyJSON(defaultConfigFor(nodeType.value)),
+    position: insertIndex + 1,
+    configText: '{}',
   })
   syncPositions()
-  selectedIndex.value = nodes.value.length - 1
+  selectedIndex.value = insertIndex
   resetSelectedNodeDraft()
 }
 
 function handleRemoveNode(index: number) {
   if (!ensureNoPendingNodeChanges('删除节点'))
     return
+  if (nodes.value[index]?.is_fixed) {
+    message.warning('固化节点不能删除')
+    return
+  }
   nodes.value.splice(index, 1)
   syncPositions()
   selectedIndex.value = Math.max(0, Math.min(selectedIndex.value, nodes.value.length - 1))
@@ -709,9 +715,11 @@ function handleRemoveNode(index: number) {
 function moveNode(index: number, delta: number) {
   if (!ensureNoPendingNodeChanges('调整节点顺序'))
     return
-  const target = index + delta
-  if (target < 0 || target >= nodes.value.length)
+  if (!canMoveNode(index, delta)) {
+    message.warning('固化节点不能移动，普通节点也不能跨过固化边界')
     return
+  }
+  const target = index + delta
   const next = [...nodes.value]
   const current = next[index]
   next[index] = next[target]
@@ -774,15 +782,38 @@ async function loadTermDictOptions() {
   }
 }
 
+async function loadSensitiveDictOptions() {
+  try {
+    const result = await getSensitiveDicts({ offset: 0, limit: 100 })
+    sensitiveDictOptions.value = (result.data.items || [])
+      .filter((item: { id: number, name: string, scene: string, is_base: boolean }) => !item.is_base)
+      .map((item: { id: number, name: string, scene: string }) => ({
+        label: `${item.name} / ${item.scene}`,
+        value: item.id,
+      }))
+  }
+  catch {
+    message.warning('敏感词库加载失败，敏感词节点仍可手动填写 JSON 配置')
+  }
+}
+
 async function loadTemplateOptions() {
   templateLoading.value = true
   try {
     const result = await getWorkflows({ offset: 0, limit: 100, scope: 'system' })
-    templateOptions.value = (result.data.items || []).map((item: any) => ({
-      label: item.name,
-      value: item.id,
-      description: item.description || '',
-    }))
+    templateOptions.value = (result.data.items || [])
+      .map((item: any) => ({
+        label: item.name,
+        value: item.id,
+        description: item.description || '',
+        workflow_type: item.workflow_type,
+        source_kind: item.source_kind,
+        target_kind: item.target_kind,
+        is_legacy: Boolean(item.is_legacy),
+      }))
+      .filter((item: TemplateOption) => isTemplateCompatible(item))
+    if (!templateOptions.value.some(item => item.value === selectedTemplateId.value))
+      selectedTemplateId.value = null
     if (!selectedTemplateId.value && templateOptions.value.length > 0)
       selectedTemplateId.value = templateOptions.value[0].value
   }
@@ -868,6 +899,7 @@ async function confirmImportTemplate() {
       enabled: item.enabled,
       position: item.position,
       configText: item.configText,
+      is_fixed: item.is_fixed,
     }))
     syncPositions()
     selectedIndex.value = 0
@@ -912,7 +944,7 @@ async function handleSave(showToast = true) {
       is_published: workflow.is_published,
     })
     const saved = await updateWorkflowNodes(workflowId.value, payload)
-    applySavedWorkflowProfile(saved.data)
+    applySavedWorkflowState(saved.data)
     if (showToast)
       message.success('工作流已保存')
     return true
@@ -949,6 +981,7 @@ async function handleSaveAsNewWorkflow() {
       name: saveAsForm.name.trim(),
       description: saveAsForm.description.trim(),
       source_id: workflowId.value,
+      workflow_type: workflow.workflow_type === 'legacy' ? undefined : workflow.workflow_type,
     })
     const nextId = created.data?.id
     if (!nextId)
@@ -1043,10 +1076,7 @@ async function handleSaveCurrentNode() {
   savingCurrentNode.value = true
   try {
     const saved = await updateWorkflowNodes(workflowId.value, payload)
-    selectedNode.value.enabled = nodeDraft.enabled
-    selectedNode.value.configText = prettyJSON(parseConfig(nodeDraft.configText))
-    applySavedWorkflowProfile(saved.data)
-    resetSelectedNodeDraft()
+    applySavedWorkflowState(saved.data)
     message.success('当前节点已保存')
   }
   catch (error) {
@@ -1104,6 +1134,8 @@ async function handleTestNode() {
   }
   testingNode.value = true
   try {
+    nodeTestOutput.value = ''
+    nodeTestDetail.value = { status: 'starting', message: '节点测试已开始' }
     const payload = selectedNodeNeedsAudio.value
       ? (() => {
           const formData = new FormData()
@@ -1117,9 +1149,43 @@ async function handleTestNode() {
           config: parseConfig(nodeDraft.configText),
           input_text: nodeTestInput.value,
         }
-    const result = await testNode(payload)
-    nodeTestOutput.value = result.data.output_text || ''
-    nodeTestDetail.value = result.data.detail ?? result.data.error ?? null
+    let finished = false
+    await testNodeStream(payload, {
+      onEvent(event) {
+        if (event.type === 'status') {
+          const nextDetail = event.detail ?? {
+            status: 'streaming',
+            message: event.message || '节点执行中',
+          }
+          nodeTestDetail.value = nextDetail
+          if (selectedNode.value?.node_type === 'meeting_summary') {
+            const preview = buildMeetingSummaryChunkPreview(nextDetail)
+            if (preview)
+              nodeTestOutput.value = preview
+          }
+          return
+        }
+        if (event.type === 'delta') {
+          nodeTestOutput.value = event.output_text || `${nodeTestOutput.value}${event.delta || ''}`
+          nodeTestDetail.value = typeof nodeTestDetail.value === 'object' && nodeTestDetail.value
+            ? {
+                ...nodeTestDetail.value,
+                status: 'streaming',
+                message: 'LLM 正在生成输出',
+              }
+            : {
+                status: 'streaming',
+                message: 'LLM 正在生成输出',
+              }
+          return
+        }
+        finished = true
+        nodeTestOutput.value = event.output_text || ''
+        nodeTestDetail.value = event.detail ?? event.error ?? null
+      },
+    })
+    if (!finished)
+      nodeTestDetail.value = null
   }
   catch (error) {
     nodeTestOutput.value = ''
@@ -1168,7 +1234,8 @@ async function handleExecuteWorkflow() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadPage(), loadTermDictOptions(), loadTemplateOptions()])
+  await loadPage()
+  await Promise.all([loadTermDictOptions(), loadSensitiveDictOptions(), loadTemplateOptions()])
 })
 
 onBeforeUnmount(() => {
@@ -1182,6 +1249,10 @@ watch(selectedTemplateId, () => {
 
 watch(() => workflow.source_id, () => {
   void loadSourceWorkflowInfo()
+})
+
+watch(() => [workflow.workflow_type, workflow.source_kind, workflow.target_kind, workflow.is_legacy], () => {
+  void loadTemplateOptions()
 })
 
 watch(selectedIndex, () => {
@@ -1284,42 +1355,40 @@ watch(selectedIndex, () => {
 
           <!-- 导入预览 -->
           <div v-if="selectedTemplateId" class="mt-3 rounded-2.5 border border-gray-200/50 bg-[#fbfdff] p-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div class="flex items-center gap-2">
-                <span class="text-xs font-600 text-ink">导入前预览</span>
-                <span class="text-[11px] text-slate/60">{{ templatePreviewName }}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="text-[11px] text-slate/60">
-                  {{ templatePreviewLoading ? '加载中...' : `${templatePreviewNodes.length} 个模板节点` }}
-                </span>
-                <template v-if="!templatePreviewLoading">
-                  <NButton text size="tiny" @click="showChangedPreviewOnly = !showChangedPreviewOnly">
-                    {{ showChangedPreviewOnly ? '全部' : '仅变化' }}
-                  </NButton>
-                  <NButton text size="tiny" @click="showAllPreviewNodes = !showAllPreviewNodes">
-                    {{ showAllPreviewNodes ? '收起' : '展开' }}
-                  </NButton>
-                </template>
-              </div>
+            <div v-if="templatePreviewLoading" class="text-[11px] text-slate/60">
+              加载中...
             </div>
 
-            <div v-if="!templatePreviewLoading" class="mt-2.5 flex flex-wrap gap-1.5">
-              <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
-                <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconPlus" /> {{ templateComparison.added }}
-              </span>
-              <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
-                <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconMinus" /> {{ templateComparison.removed }}
-              </span>
-              <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
-                <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconSort" /> {{ templateComparison.reordered }}
-              </span>
-              <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
-                <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconCircleDot" /> {{ templateComparison.toggled }}
-              </span>
-              <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
-                <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconPencil" /> {{ templateComparison.configChanged }}
-              </span>
+            <div v-else class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span v-if="templatePreviewName" class="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate/70">
+                  {{ templatePreviewName }}
+                </span>
+                <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
+                  <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconPlus" /> {{ templateComparison.added }}
+                </span>
+                <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
+                  <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconMinus" /> {{ templateComparison.removed }}
+                </span>
+                <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
+                  <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconSort" /> {{ templateComparison.reordered }}
+                </span>
+                <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
+                  <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconCircleDot" /> {{ templateComparison.toggled }}
+                </span>
+                <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-slate">
+                  <span class="inline-flex h-2.5 w-2.5 text-slate/60" v-html="iconPencil" /> {{ templateComparison.configChanged }}
+                </span>
+              </div>
+              <div class="flex items-center gap-2 text-[11px] text-slate/60">
+                <span>{{ templatePreviewNodes.length }} 个模板节点</span>
+                <NButton text size="tiny" @click="showChangedPreviewOnly = !showChangedPreviewOnly">
+                  {{ showChangedPreviewOnly ? '全部' : '仅变化' }}
+                </NButton>
+                <NButton text size="tiny" @click="showAllPreviewNodes = !showAllPreviewNodes">
+                  {{ showAllPreviewNodes ? '收起' : '展开' }}
+                </NButton>
+              </div>
             </div>
 
             <div v-if="selectedTemplateId" class="mt-3 grid gap-4 xl:grid-cols-[1fr_32px_1fr]">
@@ -1435,7 +1504,10 @@ watch(selectedIndex, () => {
               <span class="text-sm font-600">添加节点</span>
             </template>
             <div class="grid gap-3">
-              <NSelect v-model:value="nodeType" :options="nodeTypes.map(item => ({ label: item.label, value: item.type }))" placeholder="选择节点类型" />
+              <NSelect v-model:value="nodeType" :options="addableNodeOptions" placeholder="选择节点类型" />
+              <div class="text-xs leading-5 text-slate">
+                当前场景的首尾节点已固化，这里只允许添加中间处理节点。
+              </div>
               <NButton type="primary" color="#0f766e" @click="handleAddNode">
                 添加到流程
               </NButton>
@@ -1473,19 +1545,22 @@ watch(selectedIndex, () => {
                     <div class="truncate text-[13px] font-600 leading-tight text-ink">
                       {{ labelFor(item.node_type) }}
                     </div>
-                    <div class="mt-0.5 flex items-center gap-1.5 text-[11px] leading-tight" :class="item.enabled ? 'text-teal-600/70' : 'text-slate/50'">
+                    <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-tight" :class="item.enabled ? 'text-teal-600/70' : 'text-slate/50'">
                       <span class="inline-block h-1.5 w-1.5 rounded-full" :class="item.enabled ? 'bg-teal-500' : 'bg-gray-300'" />
                       {{ item.enabled ? '已启用' : '已禁用' }}
+                      <span v-if="item.is_fixed" class="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
+                        固化节点
+                      </span>
                     </div>
                   </div>
                   <div class="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100" :class="selectedIndex === index ? '!opacity-100' : ''" @click.stop>
-                    <NButton text size="tiny" :disabled="index === 0" class="!px-1" @click="moveNode(index, -1)">
+                    <NButton text size="tiny" :disabled="!canMoveNode(index, -1)" class="!px-1" @click="moveNode(index, -1)">
                       <span class="inline-flex h-3.5 w-3.5" v-html="iconChevronUp" />
                     </NButton>
-                    <NButton text size="tiny" :disabled="index === nodes.length - 1" class="!px-1" @click="moveNode(index, 1)">
+                    <NButton text size="tiny" :disabled="!canMoveNode(index, 1)" class="!px-1" @click="moveNode(index, 1)">
                       <span class="inline-flex h-3.5 w-3.5" v-html="iconChevronDown" />
                     </NButton>
-                    <NButton text size="tiny" type="error" class="!px-1" @click="handleRemoveNode(index)">
+                    <NButton text size="tiny" type="error" :disabled="item.is_fixed" class="!px-1" @click="handleRemoveNode(index)">
                       <span class="inline-flex h-3.5 w-3.5" v-html="iconX" />
                     </NButton>
                   </div>
@@ -1503,6 +1578,9 @@ watch(selectedIndex, () => {
                 <div>
                   <div class="flex items-center gap-2 text-sm font-700 text-ink">
                     {{ labelFor(selectedNode.node_type) }}
+                    <NTag v-if="selectedNodeIsFixed" size="small" round :bordered="false" type="warning">
+                      固化节点
+                    </NTag>
                     <NTag v-if="selectedNodeHasDraftChanges" size="small" round :bordered="false" type="warning">
                       未保存
                     </NTag>
@@ -1510,8 +1588,11 @@ watch(selectedIndex, () => {
                   <div class="text-xs text-slate">
                     第 {{ selectedNode.position }} 步
                   </div>
+                  <div v-if="selectedNodeIsFixed" class="mt-1 text-xs text-amber-700">
+                    该节点用于固定工作流的入口或出口场景，不能删除、移动或禁用，但仍可调整配置。
+                  </div>
                 </div>
-                <NSwitch v-model:value="nodeDraft.enabled" />
+                <NSwitch v-model:value="nodeDraft.enabled" :disabled="selectedNodeIsFixed" />
               </div>
               <div class="grid gap-3 rounded-2.5 bg-[#fbfdff] p-4">
                 <div class="flex items-center justify-between gap-3">
@@ -1529,6 +1610,12 @@ watch(selectedIndex, () => {
                       保存当前节点
                     </NButton>
                   </div>
+                </div>
+                <div class="text-xs leading-6 text-slate/70">
+                  当前节点只需要填写局部覆写项。未填写的字段会自动继承节点管理里的默认配置。
+                  <NButton text size="small" type="primary" class="ml-1" @click="router.push('/workflows/nodes')">
+                    去节点管理
+                  </NButton>
                 </div>
 
                 <template v-if="selectedNode.node_type === 'term_correction'">
@@ -1570,6 +1657,48 @@ watch(selectedIndex, () => {
                         :autosize="{ minRows: 3, maxRows: 6 }"
                         placeholder="补充业务口语词，例如：然后呢、是这样的"
                         @update:value="updateSelectedConfig({ custom_words: textToList($event) })"
+                      />
+                    </div>
+                  </div>
+                </template>
+
+                <template v-else-if="selectedNode.node_type === 'sensitive_filter'">
+                  <div class="grid gap-3">
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        场景敏感词库
+                      </div>
+                      <NSelect
+                        :value="selectedConfig.dict_id || null"
+                        clearable
+                        :options="sensitiveDictOptions"
+                        placeholder="不选则仅使用基础敏感词库"
+                        @update:value="updateSelectedConfig({ dict_id: $event || 0 })"
+                      />
+                      <div class="mt-2 text-[11px] leading-5 text-slate/65">
+                        基础敏感词库会自动参与过滤，这里只选择当前工作流节点额外叠加的场景词库。
+                      </div>
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        自定义补充词
+                      </div>
+                      <NInput
+                        :value="listToText(selectedConfig.custom_words)"
+                        type="textarea"
+                        :autosize="{ minRows: 3, maxRows: 6 }"
+                        placeholder="每行一个，补充当前节点专用的敏感词"
+                        @update:value="updateSelectedConfig({ custom_words: textToList($event) })"
+                      />
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        替换文本
+                      </div>
+                      <NInput
+                        :value="selectedConfig.replacement"
+                        placeholder="例如：[已过滤]"
+                        @update:value="updateSelectedConfig({ replacement: $event || '[已过滤]' })"
                       />
                     </div>
                   </div>
@@ -1631,7 +1760,7 @@ watch(selectedIndex, () => {
                       示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
                     <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 200000 })" />
+                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 65536 })" />
                     <NSelect
                       :value="selectedConfig.output_format || 'markdown'"
                       :options="[
@@ -1722,10 +1851,10 @@ watch(selectedIndex, () => {
                   </NButton>
                 </div>
                 <div class="grid gap-3 lg:grid-cols-2">
-                  <TextDiffPreview :mode="selectedNodeNeedsAudio ? 'plain' : 'diff'" :before-text="nodeTestInputPreview" :after-text="nodeTestOutput" :before-label="selectedNodeNeedsAudio ? '上传音频' : '测试输入'" after-label="节点输出" />
+                  <TextDiffPreview :mode="previewModeForNodeType(selectedNode?.node_type)" :before-text="nodeTestInputPreview" :after-text="nodeTestOutput" :before-label="selectedNodeNeedsAudio ? '上传音频' : '测试输入'" after-label="节点输出" />
                   <div class="rounded-2 bg-white p-3">
                     <div class="text-xs text-slate/70">
-                      Detail
+                      详细信息
                     </div>
                     <div class="mt-2">
                       <NodeDetailPanel :detail="nodeTestDetail" empty-label="节点执行细节会显示在这里。" />
@@ -1801,7 +1930,7 @@ watch(selectedIndex, () => {
                       </div>
                     </div>
                     <div class="mt-3 grid gap-3 xl:grid-cols-2">
-                      <TextDiffPreview :mode="isAudioDrivenNodeType(node.node_type) ? 'plain' : 'diff'" :before-text="sanitizeText(node.input_text)" :after-text="sanitizeText(node.output_text)" />
+                      <TextDiffPreview :mode="previewModeForNodeType(node.node_type)" :before-text="sanitizeText(node.input_text)" :after-text="sanitizeText(node.output_text)" />
                     </div>
                     <div class="mt-3">
                       <NodeDetailPanel :detail="node.detail" empty-label="当前节点没有 detail 信息。" />

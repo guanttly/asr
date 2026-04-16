@@ -28,10 +28,6 @@ services:
   asr: http://qwen-asr-batch:8000
   # OpenAI-compatible ASR may reject files over this size via audio_filesize_mb.
   asr_max_audio_size_mb: 25
-  # Realtime streaming endpoint. Point this to qwen-asr-demo-streaming.
-  asr_stream: http://qwen-asr:8000
-  # Long realtime sessions are rotated periodically to avoid a single upstream session growing without bound.
-  asr_stream_session_rollover_sec: 900
   asr_batch_sync_interval_sec: 20
   asr_batch_sync_batch_size: 20
   asr_batch_sync_warn_threshold: 3

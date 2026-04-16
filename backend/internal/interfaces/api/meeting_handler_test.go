@@ -100,6 +100,7 @@ func TestCreateMeetingRejectsNonMeetingWorkflow(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	handler := NewMeetingHandler(nil, workflowSvc, "uploads", "", 100)
 
@@ -139,6 +140,7 @@ func TestRegenerateSummaryRejectsNonMeetingWorkflow(t *testing.T) {
 	workflowSvc := appwf.NewService(
 		&workflowRepoBindingStub{wf: &wfdomain.Workflow{ID: 13, Name: "批量工作流"}},
 		&workflowNodeBindingStub{nodes: []wfdomain.Node{{NodeType: wfdomain.NodeBatchASR, Position: 1, Enabled: true}}},
+		nil,
 		nil,
 		nil,
 		nil,

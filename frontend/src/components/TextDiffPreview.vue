@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MarkdownIt from 'markdown-it'
 import { computed } from 'vue'
 
 import { buildTextDiff } from '@/utils/textDiff'
@@ -9,7 +10,7 @@ const props = withDefaults(defineProps<{
   beforeLabel?: string
   afterLabel?: string
   emptyLabel?: string
-  mode?: 'diff' | 'plain'
+  mode?: 'diff' | 'plain' | 'markdown'
 }>(), {
   beforeText: '',
   afterText: '',
@@ -19,8 +20,16 @@ const props = withDefaults(defineProps<{
   mode: 'diff',
 })
 
+const markdownRenderer = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+})
 const diff = computed(() => buildTextDiff(props.beforeText || '', props.afterText || ''))
 const showDiffMeta = computed(() => props.mode === 'diff')
+const showMarkdown = computed(() => props.mode === 'markdown')
+const renderedBeforeHtml = computed(() => props.beforeText ? markdownRenderer.render(props.beforeText) : '')
+const renderedAfterHtml = computed(() => props.afterText ? markdownRenderer.render(props.afterText) : '')
 </script>
 
 <template>
@@ -38,6 +47,7 @@ const showDiffMeta = computed(() => props.mode === 'diff')
         <div v-if="!beforeText" class="diff-empty">
           {{ emptyLabel }}
         </div>
+        <div v-else-if="showMarkdown" class="diff-markdown" v-html="renderedBeforeHtml" />
         <div v-else-if="showDiffMeta" class="diff-body">
           <span
             v-for="(segment, index) in diff.beforeSegments"
@@ -58,6 +68,7 @@ const showDiffMeta = computed(() => props.mode === 'diff')
         <div v-if="!afterText" class="diff-empty">
           {{ emptyLabel }}
         </div>
+        <div v-else-if="showMarkdown" class="diff-markdown" v-html="renderedAfterHtml" />
         <div v-else-if="showDiffMeta" class="diff-body">
           <span
             v-for="(segment, index) in diff.afterSegments"
@@ -122,6 +133,104 @@ const showDiffMeta = computed(() => props.mode === 'diff')
 
 .diff-empty {
   color: #748395;
+}
+
+.diff-markdown {
+  color: #16202c;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.diff-markdown :deep(h1),
+.diff-markdown :deep(h2),
+.diff-markdown :deep(h3),
+.diff-markdown :deep(h4) {
+  margin: 0 0 10px;
+  color: #16202c;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.diff-markdown :deep(h1) {
+  font-size: 20px;
+}
+
+.diff-markdown :deep(h2) {
+  font-size: 17px;
+}
+
+.diff-markdown :deep(h3),
+.diff-markdown :deep(h4) {
+  font-size: 15px;
+}
+
+.diff-markdown :deep(p),
+.diff-markdown :deep(ul),
+.diff-markdown :deep(ol),
+.diff-markdown :deep(blockquote),
+.diff-markdown :deep(pre),
+.diff-markdown :deep(table) {
+  margin: 0 0 10px;
+}
+
+.diff-markdown :deep(ul),
+.diff-markdown :deep(ol) {
+  padding-left: 18px;
+}
+
+.diff-markdown :deep(li) {
+  margin-bottom: 4px;
+}
+
+.diff-markdown :deep(blockquote) {
+  border-left: 3px solid rgba(15, 118, 110, 0.22);
+  margin-left: 0;
+  padding-left: 12px;
+  color: #4c5b6c;
+}
+
+.diff-markdown :deep(code) {
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.06);
+  padding: 2px 5px;
+  font-size: 12px;
+}
+
+.diff-markdown :deep(pre) {
+  overflow-x: auto;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.92);
+  padding: 12px;
+  color: #e2e8f0;
+}
+
+.diff-markdown :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.diff-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.diff-markdown :deep(th),
+.diff-markdown :deep(td) {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.diff-markdown :deep(th) {
+  background: rgba(248, 250, 252, 0.95);
+}
+
+.diff-markdown :deep(hr) {
+  border: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  margin: 14px 0;
 }
 
 .diff-segment--added {

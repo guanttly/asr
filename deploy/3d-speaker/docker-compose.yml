@@ -10,10 +10,12 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${SA_PORT:-8100}:8100"
+      - "${SA_PORT:-10002}:8100"
 
     environment:
-      - DEVICE=cuda:2
+      # 仅暴露宿主机的指定 GPU 给容器；容器内可见设备会重新编号为 cuda:0
+      - NVIDIA_VISIBLE_DEVICES=${SA_GPU_ID:-2}
+      - DEVICE=${SA_DEVICE:-cuda:0}
       - WORKERS=${WORKERS:-1}
       - HOST=0.0.0.0
       - PORT=8100
@@ -21,8 +23,8 @@ services:
       - TRANSFORMERS_OFFLINE=1
       - MODELSCOPE_CACHE=/app/models
       # 如需分开指定设备，可自行追加以下环境变量
-      # - EMBEDDING_DEVICE=cuda:0
-      # - VAD_DEVICE=cuda:0
+      # - EMBEDDING_DEVICE=${SA_EMBEDDING_DEVICE:-cuda:0}
+      # - VAD_DEVICE=${SA_VAD_DEVICE:-cuda:0}
 
     volumes:
       - ./logs:/app/logs
@@ -40,7 +42,7 @@ services:
           memory: 2G
           devices:
             - driver: nvidia
-              count: 1
+              device_ids: ["${SA_GPU_ID:-2}"]
               capabilities: [gpu]
 
     healthcheck:

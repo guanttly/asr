@@ -258,6 +258,7 @@ func TestCreateTaskRejectsWorkflowTypeMismatch(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	handler := NewASRHandler(nil, workflowSvc, "uploads", "", 100)
 

@@ -80,6 +80,8 @@ models:
 
 Docker 方式默认读取根目录 `docker-compose.yml`。如需 GPU，请设置 `DEVICE=cuda:0 ./build.sh start`。
 
+如果希望宿主机只分配第 2 张 GPU 给容器使用，应在 Compose 中把可见 GPU 限制为宿主机 GPU 2，例如 `NVIDIA_VISIBLE_DEVICES=2` 或 `device_ids: ["2"]`。此时容器内通常只会看到 1 张卡，因此服务内部仍应使用 `cuda:0`，而不是 `cuda:2`。
+
 ## 4. API 使用示例
 
 ### 4.1 声纹注册

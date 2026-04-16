@@ -357,11 +357,14 @@ func main() {
 	corrector := nlpengine.NewCorrector(entryRepo, ruleRepo)
 	summarizer := nlpengine.NewSummarizer(cfg.Services.SummaryModel)
 	legacyPostProcessor := postprocess.NewBatchMeetingProcessor(meetingRepo, transcriptRepo, summaryRepo, corrector, summarizer)
+	sensitiveDictRepo := persistence.NewSensitiveDictRepo(db)
+	sensitiveEntryRepo := persistence.NewSensitiveEntryRepo(db)
 
 	// Build workflow engine
 	engine := wfengine.NewEngine(logger)
 	engine.RegisterHandler(wfdomain.NodeTermCorrection, wfengine.NewTermCorrectionHandler(corrector))
 	engine.RegisterHandler(wfdomain.NodeFillerFilter, wfengine.NewFillerFilterHandler())
+	engine.RegisterHandler(wfdomain.NodeSensitiveFilter, wfengine.NewSensitiveFilterHandler(sensitiveDictRepo, sensitiveEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
 	engine.RegisterHandler(wfdomain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	engine.RegisterHandler(wfdomain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
@@ -370,7 +373,7 @@ func main() {
 		engine.RegisterHandler(wfdomain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diaClient))
 	}
 
-	workflowService := appwf.NewService(workflowRepo, workflowNodeRepo, workflowExecRepo, workflowResultRepo, engine)
+	workflowService := appwf.NewService(workflowRepo, workflowNodeRepo, persistence.NewWorkflowNodeDefaultRepo(db), workflowExecRepo, workflowResultRepo, engine)
 	workflowExecutor := &workflowExecutorAdapter{svc: workflowService}
 	postProcessor := postprocess.NewWorkflowAwareProcessor(legacyPostProcessor, workflowExecutor, meetingRepo, transcriptRepo, summaryRepo)
 

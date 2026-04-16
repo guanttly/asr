@@ -40,6 +40,7 @@ func (h *WorkflowHandler) Register(group *gin.RouterGroup) {
 		wf.GET("", h.ListWorkflows)
 		wf.POST("", h.CreateWorkflow)
 		wf.GET("/node-types", h.GetNodeTypes)
+		wf.PUT("/node-defaults/:nodeType", h.UpdateNodeDefault)
 		wf.POST("/test-node", h.TestNode)
 		wf.GET("/:id", h.GetWorkflow)
 		wf.PUT("/:id", h.UpdateWorkflow)
@@ -315,6 +316,11 @@ func (h *WorkflowHandler) TestNode(c *gin.Context) {
 	}
 	defer cleanup()
 
+	if wantsStreamNodeTest(c) {
+		h.streamTestNode(c, &req)
+		return
+	}
+
 	nodeType := domain.NodeType(req.NodeType)
 	if nodeType.IsSource() && req.AudioFilePath != "" {
 		if h.asrService == nil {
@@ -345,10 +351,93 @@ func (h *WorkflowHandler) TestNode(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *WorkflowHandler) streamTestNode(c *gin.Context, req *appwf.TestNodeRequest) {
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "streaming is not supported")
+		return
+	}
+
+	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	writeEvent := func(event *appwf.TestNodeStreamEvent) error {
+		payload, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write(append(payload, '\n')); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	nodeType := domain.NodeType(req.NodeType)
+	if nodeType.IsSource() && req.AudioFilePath != "" {
+		if h.asrService == nil {
+			_ = writeEvent(&appwf.TestNodeStreamEvent{Type: "done", Error: "asr service is not configured"})
+			return
+		}
+		snippet, err := h.asrService.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{LocalFilePath: req.AudioFilePath})
+		if err != nil {
+			_ = writeEvent(&appwf.TestNodeStreamEvent{Type: "done", Error: err.Error()})
+			return
+		}
+		detail, _ := json.Marshal(map[string]any{
+			"mode":     "audio_source",
+			"status":   snippet.Status,
+			"duration": snippet.Duration,
+		})
+		_ = writeEvent(&appwf.TestNodeStreamEvent{
+			Type:       "done",
+			OutputText: snippet.Text,
+			Detail:     detail,
+		})
+		return
+	}
+
+	if _, err := h.service.TestNodeStream(c.Request.Context(), req, writeEvent); err != nil {
+		_ = writeEvent(&appwf.TestNodeStreamEvent{Type: "done", Error: err.Error()})
+	}
+}
+
+func wantsStreamNodeTest(c *gin.Context) bool {
+	if c.Query("stream") == "1" {
+		return true
+	}
+	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
+	return strings.Contains(accept, "application/x-ndjson")
+}
+
 // GetNodeTypes handles GET /api/workflows/node-types
 func (h *WorkflowHandler) GetNodeTypes(c *gin.Context) {
-	types := h.service.GetNodeTypes()
+	types, err := h.service.GetNodeTypes(c.Request.Context())
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
 	response.Success(c, types)
+}
+
+// UpdateNodeDefault handles PUT /api/workflows/node-defaults/:nodeType
+func (h *WorkflowHandler) UpdateNodeDefault(c *gin.Context) {
+	nodeType := domain.NodeType(strings.TrimSpace(c.Param("nodeType")))
+	var req appwf.UpdateNodeDefaultRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	result, err := h.service.UpdateNodeDefault(c.Request.Context(), nodeType, &req)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+	response.Success(c, result)
 }
 
 // GetExecution handles GET /api/workflow-executions/:id

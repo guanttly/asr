@@ -86,7 +86,7 @@ func TestCreateWorkflowBindsSourceIDForUserRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &workflowRepoHandlerStub{}
-	service := appwf.NewService(repo, nil, nil, nil, nil)
+	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
 	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
@@ -155,7 +155,7 @@ func TestCreateWorkflowAsAdminDefaultsToUserWorkflow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &workflowRepoHandlerStub{}
-	service := appwf.NewService(repo, nil, nil, nil, nil)
+	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
 	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
@@ -204,7 +204,7 @@ func TestCreateWorkflowAsAdminCanExplicitlyCreateSystemWorkflow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &workflowRepoHandlerStub{}
-	service := appwf.NewService(repo, nil, nil, nil, nil)
+	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
 	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()
@@ -248,7 +248,7 @@ func TestListWorkflowsAppliesFilterBeforePagination(t *testing.T) {
 		2: {{WorkflowID: 2, NodeType: domain.NodeBatchASR, Position: 1, Enabled: true}},
 		3: {{WorkflowID: 3, NodeType: domain.NodeBatchASR, Position: 1, Enabled: true}},
 	}}
-	service := appwf.NewService(repo, nodes, nil, nil, nil)
+	service := appwf.NewService(repo, nodes, nil, nil, nil, nil)
 	handler := NewWorkflowHandler(service, nil)
 
 	router := gin.New()

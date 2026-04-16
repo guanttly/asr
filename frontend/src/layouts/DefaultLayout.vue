@@ -68,6 +68,10 @@ const menuIconShapes: Record<string, IconShape[]> = {
     { tag: 'path', attrs: { d: 'M8 8.5h6' } },
     { tag: 'path', attrs: { d: 'M8 12h8' } },
   ],
+  sensitive: [
+    { tag: 'path', attrs: { d: 'M12 3.8c4.3 0 7.8 3.5 7.8 7.8 0 5.7-7.8 8.6-7.8 8.6S4.2 17.3 4.2 11.6c0-4.3 3.5-7.8 7.8-7.8Z' } },
+    { tag: 'path', attrs: { d: 'M9.6 11.8 11.2 13.4 14.8 9.8' } },
+  ],
   users: [
     { tag: 'circle', attrs: { cx: 12, cy: 8, r: 3 } },
     { tag: 'path', attrs: { d: 'M5 19a7 7 0 0 1 14 0' } },
@@ -179,6 +183,7 @@ const menuOptions: MenuOption[] = [
     icon: renderMenuIcon('workflowSection', '工作流'),
     children: [
       { label: '工作流管理', key: '/workflows', icon: renderMenuIcon('workflows', '工作流管理') },
+      { label: '节点管理', key: '/workflows/nodes', icon: renderMenuIcon('workflowSection', '节点管理') },
       { label: '应用配置', key: '/workflows/application-settings', icon: renderMenuIcon('appSettings', '应用配置') },
     ],
   },
@@ -188,6 +193,7 @@ const menuOptions: MenuOption[] = [
     icon: renderMenuIcon('terminologySection', '术语库'),
     children: [
       { label: '术语库管理', key: '/terminology', icon: renderMenuIcon('terminology', '术语库管理') },
+      { label: '敏感词库', key: '/terminology/sensitive', icon: renderMenuIcon('sensitive', '敏感词库') },
       { label: '纠错规则', key: '/terminology/rules', icon: renderMenuIcon('terminology', '纠错规则') },
     ],
   },
@@ -220,12 +226,16 @@ const currentPath = computed(() => {
   const path = route.path
   if (path.startsWith('/workflows/application-settings'))
     return '/workflows/application-settings'
+  if (path.startsWith('/workflows/nodes'))
+    return '/workflows/nodes'
   if (path.startsWith('/workflows'))
     return '/workflows'
   if (path.startsWith('/meetings/voiceprints'))
     return '/meetings/voiceprints'
   if (path.startsWith('/meetings'))
     return '/meetings'
+  if (path.startsWith('/terminology/sensitive'))
+    return '/terminology/sensitive'
   if (path.startsWith('/terminology/rules'))
     return '/terminology/rules'
   if (path.startsWith('/system/users'))

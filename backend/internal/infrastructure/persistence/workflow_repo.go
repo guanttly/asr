@@ -43,6 +43,15 @@ type WorkflowNodeModel struct {
 
 func (WorkflowNodeModel) TableName() string { return "workflow_nodes" }
 
+type WorkflowNodeDefaultModel struct {
+	NodeType  string `gorm:"primaryKey;type:varchar(50)"`
+	Config    string `gorm:"type:json"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (WorkflowNodeDefaultModel) TableName() string { return "workflow_node_defaults" }
+
 type WorkflowExecutionModel struct {
 	ID           uint64 `gorm:"primaryKey;autoIncrement"`
 	WorkflowID   uint64 `gorm:"index;not null"`
@@ -267,6 +276,57 @@ func (r *WorkflowNodeRepo) BatchSave(ctx context.Context, workflowID uint64, nod
 
 func (r *WorkflowNodeRepo) DeleteByWorkflow(ctx context.Context, workflowID uint64) error {
 	return r.db.WithContext(ctx).Where("workflow_id = ?", workflowID).Delete(&WorkflowNodeModel{}).Error
+}
+
+// ─── NodeDefaultRepo ───────────────────────────────────
+
+type WorkflowNodeDefaultRepo struct {
+	db *gorm.DB
+}
+
+func NewWorkflowNodeDefaultRepo(db *gorm.DB) *WorkflowNodeDefaultRepo {
+	return &WorkflowNodeDefaultRepo{db: db}
+}
+
+func (r *WorkflowNodeDefaultRepo) List(ctx context.Context) ([]domain.NodeDefault, error) {
+	var models []WorkflowNodeDefaultModel
+	if err := r.db.WithContext(ctx).Order("node_type asc").Find(&models).Error; err != nil {
+		return nil, err
+	}
+	items := make([]domain.NodeDefault, len(models))
+	for i, model := range models {
+		items[i] = domain.NodeDefault{
+			NodeType:  domain.NodeType(model.NodeType),
+			Config:    model.Config,
+			CreatedAt: model.CreatedAt,
+			UpdatedAt: model.UpdatedAt,
+		}
+	}
+	return items, nil
+}
+
+func (r *WorkflowNodeDefaultRepo) GetByType(ctx context.Context, nodeType domain.NodeType) (*domain.NodeDefault, error) {
+	var model WorkflowNodeDefaultModel
+	if err := r.db.WithContext(ctx).Where("node_type = ?", string(nodeType)).First(&model).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &domain.NodeDefault{
+		NodeType:  domain.NodeType(model.NodeType),
+		Config:    model.Config,
+		CreatedAt: model.CreatedAt,
+		UpdatedAt: model.UpdatedAt,
+	}, nil
+}
+
+func (r *WorkflowNodeDefaultRepo) Upsert(ctx context.Context, item *domain.NodeDefault) error {
+	model := &WorkflowNodeDefaultModel{
+		NodeType: string(item.NodeType),
+		Config:   item.Config,
+	}
+	return r.db.WithContext(ctx).Save(model).Error
 }
 
 // ─── ExecutionRepo ──────────────────────────────────────

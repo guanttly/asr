@@ -63,6 +63,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/workflow/index.vue'),
       },
       {
+        path: 'workflows/nodes',
+        name: 'workflow-nodes',
+        meta: { pageManagedScroll: true, title: '节点管理', desc: '统一维护节点默认配置，并对单个节点直接做调试验证。' },
+        component: () => import('@/pages/workflow/nodes.vue'),
+      },
+      {
         path: 'workflows/:id',
         name: 'workflow-editor',
         meta: { pageManagedScroll: true, title: '工作流编辑器', desc: '调整节点顺序、配置参数，并对单节点或整条工作流做验证。' },
@@ -103,6 +109,12 @@ const routes: RouteRecordRaw[] = [
         name: 'terminology-rules',
         meta: { title: '纠错规则', desc: '管理词库对应的三层纠错规则，统一维护替换链路。' },
         component: () => import('@/pages/terminology/rules.vue'),
+      },
+      {
+        path: 'terminology/sensitive',
+        name: 'terminology-sensitive',
+        meta: { pageManagedScroll: true, title: '敏感词库', desc: '维护基础敏感词库和各业务场景词库，供敏感词过滤节点直接选择。' },
+        component: () => import('@/pages/terminology/sensitive.vue'),
       },
       {
         path: 'system/users',

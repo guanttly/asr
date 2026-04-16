@@ -117,7 +117,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("bootstrap.admin_display_name", "系统管理员")
 	v.SetDefault("services.asr", "http://127.0.0.1:9000")
 	v.SetDefault("services.asr_max_audio_size_mb", 25)
-	v.SetDefault("services.asr_stream", "http://127.0.0.1:9000")
+	v.SetDefault("services.asr_stream", "")
 	v.SetDefault("services.asr_stream_session_rollover_sec", 900)
 	v.SetDefault("services.asr_batch_sync_interval_sec", 20)
 	v.SetDefault("services.asr_batch_sync_batch_size", 20)

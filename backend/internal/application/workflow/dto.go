@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	domain "github.com/lgt/asr/internal/domain/workflow"
@@ -11,10 +12,11 @@ import (
 
 // CreateWorkflowRequest is the request DTO for creating a workflow.
 type CreateWorkflowRequest struct {
-	Name        string            `json:"name" binding:"required"`
-	Description string            `json:"description"`
-	OwnerType   *domain.OwnerType `json:"owner_type,omitempty"`
-	SourceID    *uint64           `json:"source_id,omitempty"`
+	Name         string               `json:"name" binding:"required"`
+	Description  string               `json:"description"`
+	OwnerType    *domain.OwnerType    `json:"owner_type,omitempty"`
+	SourceID     *uint64              `json:"source_id,omitempty"`
+	WorkflowType *domain.WorkflowType `json:"workflow_type,omitempty"`
 }
 
 // UpdateWorkflowRequest is the request DTO for updating workflow metadata.
@@ -46,11 +48,28 @@ type TestNodeRequest struct {
 	AudioFilePath string          `json:"-"`
 }
 
+type TestNodeStreamEvent struct {
+	Type       string          `json:"type"`
+	Message    string          `json:"message,omitempty"`
+	Delta      string          `json:"delta,omitempty"`
+	OutputText string          `json:"output_text,omitempty"`
+	Detail     json.RawMessage `json:"detail,omitempty"`
+	DurationMs int             `json:"duration_ms,omitempty"`
+	Error      string          `json:"error,omitempty"`
+}
+
+type TestNodeStreamEmitter func(event *TestNodeStreamEvent) error
+
 // ExecuteWorkflowRequest is the request DTO for executing a workflow.
 type ExecuteWorkflowRequest struct {
 	InputText     string `json:"input_text"`
 	AudioURL      string `json:"audio_url,omitempty"`
 	AudioFilePath string `json:"-"`
+}
+
+// UpdateNodeDefaultRequest is the request DTO for updating node type defaults.
+type UpdateNodeDefaultRequest struct {
+	Config json.RawMessage `json:"config" binding:"required"`
 }
 
 // ─── Response DTOs ──────────────────────────────────────
@@ -82,6 +101,7 @@ type NodeResponse struct {
 	Position int             `json:"position"`
 	Config   json.RawMessage `json:"config"`
 	Enabled  bool            `json:"enabled"`
+	IsFixed  bool            `json:"is_fixed"`
 }
 
 // WorkflowListResponse wraps a paginated list of workflows.
@@ -131,16 +151,18 @@ type TestNodeResponse struct {
 
 // NodeTypeInfo describes a registered node type.
 type NodeTypeInfo struct {
-	Type        domain.NodeType `json:"type"`
-	Label       string          `json:"label"`
-	Role        string          `json:"role"`
-	Description string          `json:"description,omitempty"`
+	Type          domain.NodeType `json:"type"`
+	Label         string          `json:"label"`
+	Role          string          `json:"role"`
+	Description   string          `json:"description,omitempty"`
+	DefaultConfig json.RawMessage `json:"default_config"`
 }
 
 // ─── Conversion Helpers ─────────────────────────────────
 
 // ToWorkflowResponse converts a domain Workflow to response DTO.
 func ToWorkflowResponse(wf *domain.Workflow) *WorkflowResponse {
+	fixedPositions := workflowFixedNodePositions(wf, wf.Nodes)
 	resp := &WorkflowResponse{
 		ID:                wf.ID,
 		Name:              wf.Name,
@@ -158,12 +180,12 @@ func ToWorkflowResponse(wf *domain.Workflow) *WorkflowResponse {
 		UpdatedAt:         wf.UpdatedAt,
 	}
 	for _, n := range wf.Nodes {
-		resp.Nodes = append(resp.Nodes, toNodeResponse(n))
+		resp.Nodes = append(resp.Nodes, toNodeResponse(n, fixedPositions[n.Position]))
 	}
 	return resp
 }
 
-func toNodeResponse(n domain.Node) NodeResponse {
+func toNodeResponse(n domain.Node, isFixed bool) NodeResponse {
 	cfg := json.RawMessage(n.Config)
 	if len(cfg) == 0 {
 		cfg = json.RawMessage("{}")
@@ -175,7 +197,34 @@ func toNodeResponse(n domain.Node) NodeResponse {
 		Position: n.Position,
 		Config:   cfg,
 		Enabled:  n.Enabled,
+		IsFixed:  isFixed,
 	}
+}
+
+func workflowFixedNodePositions(wf *domain.Workflow, nodes []domain.Node) map[int]bool {
+	positions := map[int]bool{}
+	if wf == nil || len(nodes) == 0 {
+		return positions
+	}
+
+	ordered := append([]domain.Node(nil), nodes...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Position == ordered[j].Position {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].Position < ordered[j].Position
+	})
+
+	if sourceType, ok := wf.SourceKind.NodeType(); ok && ordered[0].NodeType == sourceType {
+		positions[ordered[0].Position] = true
+	}
+	if sinkType, ok := wf.TargetKind.FixedSinkNodeType(); ok {
+		last := ordered[len(ordered)-1]
+		if last.NodeType == sinkType {
+			positions[last.Position] = true
+		}
+	}
+	return positions
 }
 
 // ToExecutionResponse converts a domain Execution to response DTO.

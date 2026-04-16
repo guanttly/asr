@@ -46,8 +46,7 @@ services:
       ASR_DATABASE_HOST: mysql
       # Batch upload / task sync endpoint. Point this to qwen-asr-serve when enabled.
       ASR_SERVICES_ASR: http://qwen-asr:8000
-      # Realtime streaming endpoint.
-      ASR_SERVICES_ASR_STREAM: http://qwen-asr:8000
+      ASR_SERVICES_SPEAKER_ANALYSIS_URL: http://speaker-analysis:8100
     ports:
       - '10011:10011'
 

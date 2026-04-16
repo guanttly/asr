@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
 const nodeLabelMap: Record<string, string> = {
   term_correction: '术语纠正',
   filler_filter: '语气词过滤',
+  sensitive_filter: '敏感词过滤',
   llm_correction: 'LLM 纠错',
   speaker_diarize: '说话人分离',
   meeting_summary: '会议纪要生成',

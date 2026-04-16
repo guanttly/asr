@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import torch
+
 from src.embedding import EmbeddingExtractor
 
 
@@ -30,3 +32,30 @@ def test_resolve_speakerlab_model_spec_for_campplus():
 
     assert import_path == "speakerlab.models.campplus.DTDNN.CAMPPlus"
     assert kwargs == {"feat_dim": 80, "embedding_size": 192}
+
+
+def test_normalize_feature_tensor_adds_batch_dim_for_2d_feature():
+    extractor = EmbeddingExtractor()
+
+    feat = torch.randn(200, 80)
+    normalized = extractor._normalize_feature_tensor(feat)
+
+    assert normalized.shape == (1, 200, 80)
+
+
+def test_normalize_feature_tensor_transposes_time_feature_layout():
+    extractor = EmbeddingExtractor()
+
+    feat = torch.randn(2, 80, 200)
+    normalized = extractor._normalize_feature_tensor(feat)
+
+    assert normalized.shape == (2, 200, 80)
+
+
+def test_normalize_feature_tensor_keeps_channel_first_layout():
+    extractor = EmbeddingExtractor()
+
+    feat = torch.randn(2, 200, 80)
+    normalized = extractor._normalize_feature_tensor(feat)
+
+    assert normalized.shape == (2, 200, 80)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/user"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
@@ -67,10 +69,82 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	return user, nil
 }
 
+// AuthenticateAnonymously issues or refreshes a user bound to a machine code.
+func (s *Service) AuthenticateAnonymously(ctx context.Context, req *AnonymousLoginRequest) (*domain.User, error) {
+	machineCode := strings.ToLower(strings.TrimSpace(req.MachineCode))
+	if machineCode == "" {
+		return nil, errors.New("machine_code is required")
+	}
+
+	identity, err := s.userRepo.GetDeviceIdentityByMachineCode(ctx, machineCode)
+	if err != nil && !errors.Is(err, domain.ErrDeviceIdentityNotFound) {
+		return nil, err
+	}
+
+	var user *domain.User
+	if identity != nil {
+		user, err = s.userRepo.GetByID(ctx, identity.UserID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		user = &domain.User{
+			Username:     buildDeviceUsername(machineCode),
+			PasswordHash: "device-auth",
+			DisplayName:  defaultDisplayName(req.DisplayName, req.Hostname, machineCode),
+			Role:         domain.RoleUser,
+		}
+		if err := s.userRepo.Create(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+
+	updatedDisplayName := strings.TrimSpace(req.DisplayName)
+	if updatedDisplayName != "" && updatedDisplayName != user.DisplayName {
+		user.DisplayName = updatedDisplayName
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			return nil, err
+		}
+	}
+
+	deviceIdentity := &domain.DeviceIdentity{
+		UserID:       user.ID,
+		MachineCode:  machineCode,
+		Hostname:     strings.TrimSpace(req.Hostname),
+		Platform:     strings.TrimSpace(req.Platform),
+		IPAddresses:  normalizeStringSlice(req.IPAddresses),
+		MACAddresses: normalizeStringSlice(req.MACAddresses),
+	}
+	if err := s.userRepo.UpsertDeviceIdentity(ctx, deviceIdentity); err != nil {
+		return nil, err
+	}
+
+	return user, nil
+}
+
 // GetUser retrieves user by ID.
 func (s *Service) GetUser(ctx context.Context, id uint64) (*UserResponse, error) {
 	user, err := s.userRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+
+	return toResponse(user), nil
+}
+
+// UpdateProfile updates the current user's display name.
+func (s *Service) UpdateProfile(ctx context.Context, userID uint64, req *UpdateProfileRequest) (*UserResponse, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	user.DisplayName = strings.TrimSpace(req.DisplayName)
+	if user.DisplayName == "" {
+		return nil, errors.New("display_name is required")
+	}
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
 	}
 
@@ -170,6 +244,11 @@ func toResponse(user *domain.User) *UserResponse {
 	}
 }
 
+// ToUserResponse converts a domain user into the public response shape.
+func ToUserResponse(user *domain.User) *UserResponse {
+	return toResponse(user)
+}
+
 func toWorkflowBindingsResponse(bindings *domain.WorkflowBindings) *WorkflowBindingsResponse {
 	if bindings == nil {
 		return &WorkflowBindingsResponse{}
@@ -226,4 +305,44 @@ func canAccessWorkflow(user *domain.User, workflow *wfdomain.Workflow) bool {
 	default:
 		return false
 	}
+}
+
+func buildDeviceUsername(machineCode string) string {
+	return "device_" + machineCode
+}
+
+func defaultDisplayName(displayName, hostname, machineCode string) string {
+	if name := strings.TrimSpace(displayName); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(hostname); name != "" {
+		return name
+	}
+	if len(machineCode) > 8 {
+		machineCode = machineCode[:8]
+	}
+	return "桌面设备-" + machineCode
+}
+
+func normalizeStringSlice(items []string) []string {
+	if len(items) == 0 {
+		return []string{}
+	}
+	set := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		value := strings.TrimSpace(item)
+		if value == "" {
+			continue
+		}
+		set[value] = struct{}{}
+	}
+	if len(set) == 0 {
+		return []string{}
+	}
+	result := make([]string, 0, len(set))
+	for item := range set {
+		result = append(result, item)
+	}
+	sort.Strings(result)
+	return result
 }

@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/.pnpm/@tauri-apps+cli@2.10.1/node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}

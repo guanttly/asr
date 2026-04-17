@@ -1,0 +1,26 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #app {
+  height: 100%;
+  overflow: hidden;
+  font-family: 'IBM Plex Sans', 'Noto Sans SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  background: transparent;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+}

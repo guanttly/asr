@@ -1,0 +1,41 @@
+{
+  "name": "asr-desktop",
+  "displayName": "语音速录助手",
+  "type": "module",
+  "version": "0.1.2",
+  "private": true,
+  "scripts": {
+    "predev": "node ./scripts/sync-version.mjs",
+    "dev": "vite",
+    "prebuild": "node ./scripts/sync-version.mjs",
+    "build": "vue-tsc -b && vite build",
+    "pretauri": "node ./scripts/sync-version.mjs",
+    "tauri": "tauri",
+    "doctor:win": "bash ./scripts/doctor-windows-cross.sh",
+    "prebuild:win": "node ./scripts/sync-version.mjs",
+    "build:win": "bash ./scripts/build-windows-cross.sh",
+    "prebuild:win:debug": "node ./scripts/sync-version.mjs",
+    "build:win:debug": "bash ./scripts/build-windows-cross.sh --debug"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.2.0",
+    "@tauri-apps/plugin-store": "^2.2.0",
+    "@vueuse/core": "^13.0.0",
+    "axios": "^1.9.0",
+    "pinia": "^3.0.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/node": "^22.14.0",
+    "@unocss/preset-attributify": "^66.1.0",
+    "@unocss/preset-uno": "^66.1.0",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "typescript": "~5.8.3",
+    "unocss": "^66.1.0",
+    "unplugin-auto-import": "^19.1.1",
+    "vite": "^6.2.5",
+    "vue-tsc": "^2.2.8"
+  }
+}

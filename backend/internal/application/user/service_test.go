@@ -26,11 +26,17 @@ func (r *userRepoStub) GetByID(_ context.Context, id uint64) (*userdomain.User, 
 func (r *userRepoStub) GetByUsername(_ context.Context, _ string) (*userdomain.User, error) {
 	return nil, userdomain.ErrUserNotFound
 }
+func (r *userRepoStub) GetDeviceIdentityByMachineCode(_ context.Context, _ string) (*userdomain.DeviceIdentity, error) {
+	return nil, userdomain.ErrDeviceIdentityNotFound
+}
 func (r *userRepoStub) GetWorkflowBindings(_ context.Context, userID uint64) (*userdomain.WorkflowBindings, error) {
 	if r.bindings != nil {
 		return r.bindings, nil
 	}
 	return &userdomain.WorkflowBindings{UserID: userID}, nil
+}
+func (r *userRepoStub) UpsertDeviceIdentity(_ context.Context, _ *userdomain.DeviceIdentity) error {
+	return nil
 }
 func (r *userRepoStub) SaveWorkflowBindings(_ context.Context, bindings *userdomain.WorkflowBindings) error {
 	copy := *bindings

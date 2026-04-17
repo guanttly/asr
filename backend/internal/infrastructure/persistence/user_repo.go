@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // UserModel is the persistence model for users.
 type UserModel struct {
 	ID           uint64 `gorm:"primaryKey;autoIncrement"`
-	Username     string `gorm:"type:varchar(64);uniqueIndex;not null"`
+	Username     string `gorm:"type:varchar(128);uniqueIndex;not null"`
 	PasswordHash string `gorm:"type:varchar(255);not null"`
 	DisplayName  string `gorm:"type:varchar(128)"`
 	Role         string `gorm:"type:varchar(20);not null;default:'user'"`
@@ -23,6 +24,22 @@ type UserModel struct {
 }
 
 func (UserModel) TableName() string { return "users" }
+
+// DeviceIdentityModel stores the machine fingerprint for anonymous desktop login.
+type DeviceIdentityModel struct {
+	ID               uint64 `gorm:"primaryKey;autoIncrement"`
+	UserID           uint64 `gorm:"uniqueIndex;not null"`
+	MachineCode      string `gorm:"type:varchar(128);uniqueIndex;not null"`
+	Hostname         string `gorm:"type:varchar(255)"`
+	Platform         string `gorm:"type:varchar(64)"`
+	IPAddressesJSON  string `gorm:"type:text"`
+	MACAddressesJSON string `gorm:"type:text"`
+	LastSeenAt       time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (DeviceIdentityModel) TableName() string { return "device_identities" }
 
 // UserWorkflowBindingsModel stores default app workflow bindings for each user.
 type UserWorkflowBindingsModel struct {
@@ -86,6 +103,17 @@ func (r *UserRepo) GetByUsername(ctx context.Context, username string) (*domain.
 	return r.toDomain(&model), nil
 }
 
+func (r *UserRepo) GetDeviceIdentityByMachineCode(ctx context.Context, machineCode string) (*domain.DeviceIdentity, error) {
+	var model DeviceIdentityModel
+	if err := r.db.WithContext(ctx).Where("machine_code = ?", machineCode).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrDeviceIdentityNotFound
+		}
+		return nil, err
+	}
+	return toDeviceIdentity(&model), nil
+}
+
 func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*domain.WorkflowBindings, error) {
 	var model UserWorkflowBindingsModel
 	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&model).Error; err != nil {
@@ -103,6 +131,39 @@ func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*dom
 		CreatedAt:          model.CreatedAt,
 		UpdatedAt:          model.UpdatedAt,
 	}, nil
+}
+
+func (r *UserRepo) UpsertDeviceIdentity(ctx context.Context, identity *domain.DeviceIdentity) error {
+	model := &DeviceIdentityModel{
+		UserID:           identity.UserID,
+		MachineCode:      identity.MachineCode,
+		Hostname:         identity.Hostname,
+		Platform:         identity.Platform,
+		IPAddressesJSON:  marshalStringSlice(identity.IPAddresses),
+		MACAddressesJSON: marshalStringSlice(identity.MACAddresses),
+		LastSeenAt:       time.Now(),
+	}
+
+	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "machine_code"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"user_id":            model.UserID,
+			"hostname":           model.Hostname,
+			"platform":           model.Platform,
+			"ip_addresses_json":  model.IPAddressesJSON,
+			"mac_addresses_json": model.MACAddressesJSON,
+			"last_seen_at":       model.LastSeenAt,
+			"updated_at":         time.Now(),
+		}),
+	}).Create(model).Error; err != nil {
+		return err
+	}
+
+	identity.ID = model.ID
+	identity.CreatedAt = model.CreatedAt
+	identity.UpdatedAt = model.UpdatedAt
+	identity.LastSeenAt = model.LastSeenAt
+	return nil
 }
 
 func (r *UserRepo) SaveWorkflowBindings(ctx context.Context, bindings *domain.WorkflowBindings) error {
@@ -164,4 +225,41 @@ func (r *UserRepo) toDomain(model *UserModel) *domain.User {
 		CreatedAt:    model.CreatedAt,
 		UpdatedAt:    model.UpdatedAt,
 	}
+}
+
+func toDeviceIdentity(model *DeviceIdentityModel) *domain.DeviceIdentity {
+	return &domain.DeviceIdentity{
+		ID:           model.ID,
+		UserID:       model.UserID,
+		MachineCode:  model.MachineCode,
+		Hostname:     model.Hostname,
+		Platform:     model.Platform,
+		IPAddresses:  unmarshalStringSlice(model.IPAddressesJSON),
+		MACAddresses: unmarshalStringSlice(model.MACAddressesJSON),
+		LastSeenAt:   model.LastSeenAt,
+		CreatedAt:    model.CreatedAt,
+		UpdatedAt:    model.UpdatedAt,
+	}
+}
+
+func marshalStringSlice(items []string) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func unmarshalStringSlice(raw string) []string {
+	if raw == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []string{}
+	}
+	return items
 }

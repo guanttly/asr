@@ -47,6 +47,16 @@ func registerProxy(router *gin.Engine, prefix, target string) {
 		panic(err)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	// Strip CORS headers from upstream responses to avoid duplicates –
+	// the gateway's own CORS middleware already sets them.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		for key := range resp.Header {
+			if strings.HasPrefix(strings.ToLower(key), "access-control-") {
+				resp.Header.Del(key)
+			}
+		}
+		return nil
+	}
 	router.Any(prefix, func(c *gin.Context) {
 		proxy.ServeHTTP(c.Writer, c.Request)
 	})

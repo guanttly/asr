@@ -68,6 +68,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&SensitiveDictModel{},
 		&SensitiveEntryModel{},
 		&UserModel{},
+		&DeviceIdentityModel{},
 		&UserWorkflowBindingsModel{},
 		&WorkflowModel{},
 		&WorkflowNodeModel{},

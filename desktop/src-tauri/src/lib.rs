@@ -111,7 +111,9 @@ struct MachineIdentityPayload {
 }
 
 #[tauri::command]
-fn get_machine_identity() -> Result<MachineIdentityPayload, String> {
+async fn get_machine_identity() -> Result<MachineIdentityPayload, String> {
+    // 必须是 async——Tauri 2 同步 command 在主线程执行，
+    // hostname/network 系统调用在 Windows 复杂网络环境下可阻塞数秒导致 UI "未响应"。
     use sha2::{Digest, Sha256};
 
     let hostname = hostname::get()
@@ -223,6 +225,11 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         "settings",
+        // 注意：不要在 WebviewUrl::App 的路径中加查询参数！
+        // Tauri Url::join 能正确处理 "index.html?window=settings"，
+        // 但 "index.html" 有特殊逻辑直接返回 base URL（更简洁）。
+        // 设置窗口检测优先通过 getCurrentWindow().label === 'settings' 完成，
+        // URL 参数仅为兜底。
         tauri::WebviewUrl::App("index.html?window=settings".into()),
     )
     .title("语音速录助手设置")
@@ -239,6 +246,8 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     let window = builder.build().map_err(|err| err.to_string())?;
     log_runtime("[window] created settings window");
 
+    // 注意：install_windows_permission_handler 必须在 build() 之后调用，
+    // 不可省略——设置页面"检测麦克风"功能依赖此 handler 自动授权。
     #[cfg(target_os = "windows")]
     install_windows_permission_handler(&window);
 

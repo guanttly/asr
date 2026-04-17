@@ -8,12 +8,25 @@ import { appendRuntimeLog, debugLog } from './utils/debug'
 
 const appStore = useAppStore()
 const shortcut = 'CmdOrCtrl+Shift+Space'
-const appWindow = getCurrentWindow()
-const isSettingsWindow = appWindow.label === 'settings' || new URLSearchParams(window.location.search).get('window') === 'settings'
+
+// getCurrentWindow() 在 settings 窗口可能因 IPC 初始化时序而失败，
+// 必须用 try-catch 兜底，否则整个 Vue 无法挂载导致白屏。
+let appWindow: ReturnType<typeof getCurrentWindow> | null = null
+let isSettingsWindow = false
+try {
+  appWindow = getCurrentWindow()
+  isSettingsWindow = appWindow.label === 'settings'
+} catch {
+  // IPC 未就绪，回退到 URL 参数检测
+  isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings'
+}
+if (!isSettingsWindow) {
+  isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings'
+}
 let unregisterShortcut: null | (() => Promise<void>) = null
 
 onMounted(() => {
-  void appendRuntimeLog('frontend.window', JSON.stringify({ label: appWindow.label, isSettingsWindow }))
+  void appendRuntimeLog('frontend.window', JSON.stringify({ label: appWindow?.label ?? 'unknown', isSettingsWindow }))
 
   if (isSettingsWindow)
     return

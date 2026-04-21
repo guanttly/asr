@@ -11,6 +11,7 @@ import (
 
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
+	appvoicecommand "github.com/lgt/asr/internal/application/voicecommand"
 	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	asrdomain "github.com/lgt/asr/internal/domain/asr"
@@ -357,15 +358,25 @@ func main() {
 	corrector := nlpengine.NewCorrector(entryRepo, ruleRepo)
 	summarizer := nlpengine.NewSummarizer(cfg.Services.SummaryModel)
 	legacyPostProcessor := postprocess.NewBatchMeetingProcessor(meetingRepo, transcriptRepo, summaryRepo, corrector, summarizer)
+	fillerDictRepo := persistence.NewFillerDictRepo(db)
+	fillerEntryRepo := persistence.NewFillerEntryRepo(db)
 	sensitiveDictRepo := persistence.NewSensitiveDictRepo(db)
 	sensitiveEntryRepo := persistence.NewSensitiveEntryRepo(db)
+	voiceCommandDictRepo := persistence.NewVoiceCommandDictRepo(db)
+	voiceCommandEntryRepo := persistence.NewVoiceCommandEntryRepo(db)
+	voiceCommandService := appvoicecommand.NewService(voiceCommandDictRepo, voiceCommandEntryRepo, persistence.NewSeedStateRepo(db))
+	if err := voiceCommandService.EnsureSeedData(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 
 	// Build workflow engine
 	engine := wfengine.NewEngine(logger)
 	engine.RegisterHandler(wfdomain.NodeTermCorrection, wfengine.NewTermCorrectionHandler(corrector))
-	engine.RegisterHandler(wfdomain.NodeFillerFilter, wfengine.NewFillerFilterHandler())
+	engine.RegisterHandler(wfdomain.NodeFillerFilter, wfengine.NewFillerFilterHandler(fillerDictRepo, fillerEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeSensitiveFilter, wfengine.NewSensitiveFilterHandler(sensitiveDictRepo, sensitiveEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
+	engine.RegisterHandler(wfdomain.NodeVoiceWake, wfengine.NewVoiceWakeHandler())
+	engine.RegisterHandler(wfdomain.NodeVoiceIntent, wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	engine.RegisterHandler(wfdomain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
 	var diarizeClient *diarization.Client

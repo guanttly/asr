@@ -16,10 +16,12 @@ const props = withDefaults(defineProps<{
 })
 
 const nodeLabelMap: Record<string, string> = {
+  voice_wake: '唤醒词识别',
   term_correction: '术语纠正',
   filler_filter: '语气词过滤',
   sensitive_filter: '敏感词过滤',
   llm_correction: 'LLM 纠错',
+  voice_intent: '语音控制意图识别',
   speaker_diarize: '说话人分离',
   meeting_summary: '会议纪要生成',
   custom_regex: '自定义正则替换',
@@ -30,17 +32,20 @@ const workflowTypeLabelMap: Record<string, string> = {
   batch_transcription: '批量转写',
   realtime_transcription: '实时语音识别',
   meeting: '会议纪要',
+  voice_control: '语音控制',
 }
 
 const sourceKindLabelMap: Record<string, string> = {
   legacy_text: '旧版文本输入',
   batch_asr: '非实时语音转写',
   realtime_asr: '实时语音转写',
+  voice_wake: '唤醒词识别',
 }
 
 const targetKindLabelMap: Record<string, string> = {
   transcript: '整理后文本',
   meeting_summary: '会议纪要',
+  voice_command: '控制指令结果',
 }
 
 const scenarioLabels = computed(() => {

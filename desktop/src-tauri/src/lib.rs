@@ -193,11 +193,13 @@ fn get_runtime_log_path() -> String {
 }
 
 #[tauri::command]
-fn open_devtools(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
-        window.open_devtools();
-    } else if let Some(window) = app.get_webview_window("main") {
-        window.open_devtools();
+fn open_devtools(app: tauri::AppHandle, window: tauri::WebviewWindow) {
+    // 优先打开调用者所在窗口的 DevTools
+    window.open_devtools();
+    // 同时打开另一个窗口的 DevTools（调试两个窗口通信问题时很有用）
+    let other_label = if window.label() == "settings" { "main" } else { "settings" };
+    if let Some(other) = app.get_webview_window(other_label) {
+        other.open_devtools();
     }
 }
 
@@ -225,13 +227,13 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     let mut builder = tauri::WebviewWindowBuilder::new(
         app,
         "settings",
-        // 注意：不要在 WebviewUrl::App 的路径中加查询参数！
-        // Tauri Url::join 能正确处理 "index.html?window=settings"，
-        // 但 "index.html" 有特殊逻辑直接返回 base URL（更简洁）。
-        // 设置窗口检测优先通过 getCurrentWindow().label === 'settings' 完成，
-        // URL 参数仅为兜底。
-        tauri::WebviewUrl::App("index.html?window=settings".into()),
+        // 不要在路径中加查询参数，Windows WebView2 的 asset 协议
+        // 会把查询参数作为文件名的一部分来查找，导致 404 白屏。
+        tauri::WebviewUrl::App("index.html".into()),
     )
+    // 在任何页面 JS 之前注入窗口标记——比 getCurrentWindow() 更可靠，
+    // 因为 __TAURI_INTERNALS__ 在动态创建的窗口中可能存在初始化时序问题。
+    .initialization_script("Object.defineProperty(window,'__ASR_WINDOW__',{value:'settings'})")
     .title("语音速录助手设置")
     .inner_size(440.0, 680.0)
     .min_inner_size(400.0, 560.0)
@@ -257,7 +259,9 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
 }
 
 #[tauri::command]
-fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    // 必须是 async——同步命令在主线程执行，而 builder.build() 创建的新窗口
+    // 会立刻通过 IPC 请求主线程（如 getCurrentWindow()），导致死锁白屏。
     open_settings_window_internal(&app)
 }
 

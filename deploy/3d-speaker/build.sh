@@ -25,18 +25,36 @@ FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 EXPORT_FILE="speaker-analysis-service-offline.tar.gz"
 MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
 DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
+PIP_DOWNLOAD_IMAGE="${PIP_DOWNLOAD_IMAGE:-python:3.10-slim}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-mirrors.aliyun.com}"
+RUNTIME_EXTRA_INDEX_URL="${RUNTIME_EXTRA_INDEX_URL:-}"
+RUNTIME_EXTRA_TRUSTED_HOST="${RUNTIME_EXTRA_TRUSTED_HOST:-}"
+TORCH_INDEX_BASE_URL="${TORCH_INDEX_BASE_URL:-https://download.pytorch.org/whl}"
+TORCH_INDEX_TRUSTED_HOST="${TORCH_INDEX_TRUSTED_HOST:-download.pytorch.org}"
+TORCH_VERSION="${TORCH_VERSION:-2.4.1}"
+TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.4.1}"
+TORCH_CPU_CHANNEL="${TORCH_CPU_CHANNEL:-cpu}"
+TORCH_CUDA_CHANNEL="${TORCH_CUDA_CHANNEL:-cu121}"
 APT_MIRROR="${APT_MIRROR:-https://mirrors.aliyun.com/debian}"
 APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.aliyun.com/debian-security}"
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_WHEEL_DIR="${WORKSPACE_DIR}/wheels/runtime"
+PYTHON_WHEEL_CACHE_DIR="${WORKSPACE_DIR}/.cache/pip"
+PYTHON_RUNTIME_WHEEL_MARKER="${PYTHON_WHEEL_DIR}/.runtime-wheels-ready"
 SPEAKERLAB_VENDOR_DIR="${WORKSPACE_DIR}/vendor/3D-Speaker"
+FUNASR_VENDOR_DIR="${WORKSPACE_DIR}/vendor/FunASR"
 SPEAKERLAB_REPO_MIRROR="${SPEAKERLAB_REPO_MIRROR:-https://gitcode.com/mirrors/modelscope/3D-Speaker.git}"
 SPEAKERLAB_REPO="${SPEAKERLAB_REPO:-https://github.com/modelscope/3D-Speaker.git}"
 SPEAKERLAB_REPO_LIST="${SPEAKERLAB_REPO_LIST:-}"
 SPEAKERLAB_REF="${SPEAKERLAB_REF:-main}"
+FUNASR_REPO_MIRROR="${FUNASR_REPO_MIRROR:-https://gitcode.com/mirrors/modelscope/FunASR.git}"
+FUNASR_REPO="${FUNASR_REPO:-https://github.com/modelscope/FunASR.git}"
+FUNASR_REPO_LIST="${FUNASR_REPO_LIST:-}"
+FUNASR_REF="${FUNASR_REF:-main}"
 SPEAKERLAB_CLONE_IMAGE="${SPEAKERLAB_CLONE_IMAGE:-alpine/git:latest}"
 SPEAKERLAB_CLONE_RETRIES="${SPEAKERLAB_CLONE_RETRIES:-3}"
+FUNASR_CLONE_RETRIES="${FUNASR_CLONE_RETRIES:-3}"
 SPEAKERLAB_CLONE_IMAGE_READY=0
 
 # 终端输出颜色。
@@ -64,6 +82,14 @@ speakerlab_source_ready() {
     [ -d "${SPEAKERLAB_VENDOR_DIR}/speakerlab" ]
 }
 
+funasr_wheel_present() {
+    compgen -G "${PYTHON_WHEEL_DIR}/funasr-*.whl" >/dev/null
+}
+
+funasr_source_ready() {
+    [ -d "${FUNASR_VENDOR_DIR}/funasr" ] && [ -f "${FUNASR_VENDOR_DIR}/setup.py" ]
+}
+
 speakerlab_repo_candidates() {
     if [ -n "${SPEAKERLAB_REPO_LIST}" ]; then
         printf '%s\n' "${SPEAKERLAB_REPO_LIST}" | tr ', ' '\n\n' | awk 'NF && !seen[$0]++'
@@ -71,6 +97,15 @@ speakerlab_repo_candidates() {
     fi
 
     printf '%s\n' "${SPEAKERLAB_REPO_MIRROR}" "${SPEAKERLAB_REPO}" | awk 'NF && !seen[$0]++'
+}
+
+funasr_repo_candidates() {
+    if [ -n "${FUNASR_REPO_LIST}" ]; then
+        printf '%s\n' "${FUNASR_REPO_LIST}" | tr ', ' '\n\n' | awk 'NF && !seen[$0]++'
+        return
+    fi
+
+    printf '%s\n' "${FUNASR_REPO_MIRROR}" "${FUNASR_REPO}" | awk 'NF && !seen[$0]++'
 }
 
 clone_speakerlab_with_git() {
@@ -95,6 +130,28 @@ clone_speakerlab_with_docker() {
         clone --depth 1 --branch "${SPEAKERLAB_REF}" "${repo}" "vendor/3D-Speaker"
 }
 
+clone_funasr_with_git() {
+    local repo="$1"
+
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${FUNASR_REF}" "${repo}" "${FUNASR_VENDOR_DIR}"
+}
+
+clone_funasr_with_docker() {
+    local repo="$1"
+
+    require_docker
+    if [ "${SPEAKERLAB_CLONE_IMAGE_READY}" -ne 1 ]; then
+        info "宿主机未检测到 git，使用容器拉取源码: ${SPEAKERLAB_CLONE_IMAGE}"
+        docker pull "${SPEAKERLAB_CLONE_IMAGE}"
+        SPEAKERLAB_CLONE_IMAGE_READY=1
+    fi
+    docker run --rm \
+        -v "${WORKSPACE_DIR}:/workspace" \
+        -w /workspace \
+        "${SPEAKERLAB_CLONE_IMAGE}" \
+        clone --depth 1 --branch "${FUNASR_REF}" "${repo}" "vendor/FunASR"
+}
+
 clone_speakerlab_once() {
     local repo
 
@@ -113,6 +170,28 @@ clone_speakerlab_once() {
         warn "3D-Speaker 源码地址不可达: ${repo}"
         rm -rf "${SPEAKERLAB_VENDOR_DIR}"
     done < <(speakerlab_repo_candidates)
+
+    return 1
+}
+
+clone_funasr_once() {
+    local repo
+
+    while IFS= read -r repo; do
+        [ -n "${repo}" ] || continue
+        info "尝试拉取 FunASR 源码: ${repo} (${FUNASR_REF})"
+        if command -v git >/dev/null 2>&1; then
+            if clone_funasr_with_git "${repo}"; then
+                return 0
+            fi
+        else
+            if clone_funasr_with_docker "${repo}"; then
+                return 0
+            fi
+        fi
+        warn "FunASR 源码地址不可达: ${repo}"
+        rm -rf "${FUNASR_VENDOR_DIR}"
+    done < <(funasr_repo_candidates)
 
     return 1
 }
@@ -152,6 +231,72 @@ ensure_speakerlab_source() {
     fi
 
     info "3D-Speaker 源码已缓存: ${SPEAKERLAB_VENDOR_DIR}"
+}
+
+ensure_funasr_source() {
+    local attempt=1
+
+    if funasr_wheel_present; then
+        info "检测到本地 FunASR wheel，跳过源码预拉取"
+        return
+    fi
+
+    if funasr_source_ready; then
+        info "检测到本地 FunASR 源码缓存: ${FUNASR_VENDOR_DIR}"
+        return
+    fi
+
+    mkdir -p "$(dirname "${FUNASR_VENDOR_DIR}")"
+    while [ "${attempt}" -le "${FUNASR_CLONE_RETRIES}" ]; do
+        info "预拉取 FunASR 源码到本地缓存 [${attempt}/${FUNASR_CLONE_RETRIES}]"
+        rm -rf "${FUNASR_VENDOR_DIR}"
+
+        if clone_funasr_once; then
+            break
+        fi
+
+        if [ "${attempt}" -lt "${FUNASR_CLONE_RETRIES}" ]; then
+            warn "FunASR 源码拉取失败，2 秒后重试"
+            sleep 2
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    if ! funasr_source_ready; then
+        error "FunASR 源码预拉取失败，请检查网络或镜像配置，或提前将源码放到 ${FUNASR_VENDOR_DIR}"
+        exit 1
+    fi
+
+    info "FunASR 源码已缓存: ${FUNASR_VENDOR_DIR}"
+}
+
+build_funasr_wheel() {
+    require_docker
+    mkdir -p "${PYTHON_WHEEL_DIR}" "${PYTHON_WHEEL_CACHE_DIR}"
+
+    if funasr_wheel_present; then
+        info "检测到本地 FunASR wheel，跳过构建"
+        return
+    fi
+
+    ensure_funasr_source
+    info "基于本地源码构建 FunASR wheel: ${PYTHON_WHEEL_DIR}"
+    rm -f "${PYTHON_WHEEL_DIR}"/funasr-*.whl
+
+    docker run --rm \
+        -e PIP_INDEX_URL="${PIP_INDEX_URL}" \
+        -e PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+        -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+        -e PIP_CACHE_DIR=/cache/pip \
+        -v "${WORKSPACE_DIR}:/workspace" \
+        -v "${PYTHON_WHEEL_CACHE_DIR}:/cache/pip" \
+        -w /workspace/vendor/FunASR \
+        "${PIP_DOWNLOAD_IMAGE}" \
+        sh -lc 'set -e; \
+            python -m pip install --retries 5 -U pip setuptools wheel \
+                -i "$PIP_INDEX_URL" \
+                --trusted-host "$PIP_TRUSTED_HOST"; \
+            python -m pip wheel --no-deps --wheel-dir /workspace/wheels/runtime .'
 }
 
 # 兼容 docker compose 与 legacy docker-compose 两种命令形态。
@@ -227,6 +372,65 @@ detect_device() {
     fi
 
     echo "cpu"
+}
+
+resolve_torch_channel() {
+    local device_value="${1:-cpu}"
+
+    if [[ "${device_value}" == cuda* ]]; then
+        echo "${TORCH_CUDA_CHANNEL}"
+        return
+    fi
+
+    echo "${TORCH_CPU_CHANNEL}"
+}
+
+resolve_torch_index() {
+    local torch_channel
+
+    torch_channel="$(resolve_torch_channel "$1")"
+    echo "${TORCH_INDEX_BASE_URL}/${torch_channel}"
+}
+
+resolve_torch_packages() {
+    local torch_channel
+
+    torch_channel="$(resolve_torch_channel "$1")"
+    echo "torch==${TORCH_VERSION}+${torch_channel} torchaudio==${TORCHAUDIO_VERSION}+${torch_channel}"
+}
+
+runtime_requirements_signature() {
+    grep -viE '^(torch|torchaudio)([<>=!~].*)?$' "${WORKSPACE_DIR}/requirements.txt" | tr -d '\r' | sha256sum | awk '{print $1}'
+}
+
+torch_wheels_ready() {
+    local wheel_count
+
+    if [ ! -d "${PYTHON_WHEEL_DIR}" ]; then
+        return 1
+    fi
+
+    wheel_count="$(find "${PYTHON_WHEEL_DIR}" -maxdepth 1 -type f \( -name 'torch-*.whl' -o -name 'torchaudio-*.whl' \) | wc -l | tr -d ' ')"
+    [ "${wheel_count}" -ge 2 ]
+}
+
+runtime_wheels_ready() {
+    local actual_signature expected_signature
+
+    if [ ! -f "${PYTHON_RUNTIME_WHEEL_MARKER}" ]; then
+        return 1
+    fi
+
+    expected_signature="$(runtime_requirements_signature)"
+    actual_signature="$(tr -d '[:space:]' < "${PYTHON_RUNTIME_WHEEL_MARKER}" 2>/dev/null || true)"
+
+    if [ "${actual_signature}" = "${expected_signature}" ]; then
+        return 0
+    fi
+
+    warn "检测到过期的 runtime wheel 标记，重新预下载普通依赖"
+    rm -f "${PYTHON_RUNTIME_WHEEL_MARKER}"
+    return 1
 }
 
 # 构建镜像前校验必须的本地模型目录是否存在。
@@ -307,6 +511,69 @@ can_download_models_locally() {
     return 1
 }
 
+prefetch_python_wheels() {
+    local device_value="$1"
+    local torch_index_url="$2"
+    local torch_packages="$3"
+
+    require_docker
+    mkdir -p "${PYTHON_WHEEL_DIR}" "${PYTHON_WHEEL_CACHE_DIR}"
+
+    info "预下载 Python 依赖到本地缓存: ${PYTHON_WHEEL_DIR}"
+    info "当前 DEVICE=${device_value}，PyTorch 源: ${torch_index_url}"
+
+    if torch_wheels_ready; then
+        info "检测到本地 torch/torchaudio wheel，跳过 PyTorch 预下载"
+    else
+        docker run --rm \
+            -e TORCH_INDEX_URL="${torch_index_url}" \
+            -e TORCH_INDEX_TRUSTED_HOST="${TORCH_INDEX_TRUSTED_HOST}" \
+            -e TORCH_PACKAGES="${torch_packages}" \
+            -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            -e PIP_CACHE_DIR=/cache/pip \
+            -v "${WORKSPACE_DIR}:/workspace" \
+            -v "${PYTHON_WHEEL_CACHE_DIR}:/cache/pip" \
+            -w /workspace \
+            "${PIP_DOWNLOAD_IMAGE}" \
+            sh -lc 'set -e; \
+                python -m pip download --retries 5 --dest /workspace/wheels/runtime \
+                    --index-url "$TORCH_INDEX_URL" \
+                    --trusted-host "$TORCH_INDEX_TRUSTED_HOST" \
+                    $TORCH_PACKAGES'
+    fi
+
+    if runtime_wheels_ready; then
+        info "检测到本地 runtime wheel 标记，跳过普通依赖预下载"
+    else
+        docker run --rm \
+            -e PIP_INDEX_URL="${PIP_INDEX_URL}" \
+            -e PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+            -e RUNTIME_EXTRA_INDEX_URL="${RUNTIME_EXTRA_INDEX_URL}" \
+            -e RUNTIME_EXTRA_TRUSTED_HOST="${RUNTIME_EXTRA_TRUSTED_HOST}" \
+            -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            -e PIP_CACHE_DIR=/cache/pip \
+            -v "${WORKSPACE_DIR}:/workspace" \
+            -v "${PYTHON_WHEEL_CACHE_DIR}:/cache/pip" \
+            -w /workspace \
+            "${PIP_DOWNLOAD_IMAGE}" \
+            sh -lc 'set -e; \
+                grep -viE "^(torch|torchaudio)([<>=!~].*)?$" requirements.txt > /tmp/requirements.runtime.txt; \
+                runtime_hash="$(sha256sum /tmp/requirements.runtime.txt | awk "{print \$1}")"; \
+                set -- python -m pip download --retries 5 --dest /workspace/wheels/runtime \
+                    -r /tmp/requirements.runtime.txt \
+                    -i "$PIP_INDEX_URL" \
+                    --trusted-host "$PIP_TRUSTED_HOST"; \
+                if [ -n "$RUNTIME_EXTRA_INDEX_URL" ]; then \
+                    set -- "$@" --extra-index-url "$RUNTIME_EXTRA_INDEX_URL"; \
+                fi; \
+                if [ -n "$RUNTIME_EXTRA_TRUSTED_HOST" ]; then \
+                    set -- "$@" --trusted-host "$RUNTIME_EXTRA_TRUSTED_HOST"; \
+                fi; \
+                "$@"; \
+                printf "%s\n" "$runtime_hash" > /workspace/wheels/runtime/.runtime-wheels-ready'
+    fi
+}
+
 download_models_via_docker() {
     require_docker
     info "使用容器模式下载模型，不依赖宿主机 Python"
@@ -361,12 +628,22 @@ download-models-docker)
 
 # 联网环境：基于根目录 Dockerfile 构建服务镜像。
 build)
+    DEVICE_VALUE="$(detect_device)"
+    TORCH_INDEX_VALUE="$(resolve_torch_index "${DEVICE_VALUE}")"
+    TORCH_PACKAGES_VALUE="$(resolve_torch_packages "${DEVICE_VALUE}")"
     check_models
     ensure_speakerlab_source
+    build_funasr_wheel
+    prefetch_python_wheels "${DEVICE_VALUE}" "${TORCH_INDEX_VALUE}" "${TORCH_PACKAGES_VALUE}"
     info "开始构建 Docker 镜像: ${FULL_IMAGE}"
     DOCKER_BUILDKIT=1 docker build \
         --build-arg PIP_INDEX="${PIP_INDEX_URL}" \
         --build-arg PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+        --build-arg RUNTIME_EXTRA_INDEX="${RUNTIME_EXTRA_INDEX_URL}" \
+        --build-arg RUNTIME_EXTRA_TRUSTED_HOST="${RUNTIME_EXTRA_TRUSTED_HOST}" \
+        --build-arg TORCH_INDEX="${TORCH_INDEX_VALUE}" \
+        --build-arg TORCH_TRUSTED_HOST="${TORCH_INDEX_TRUSTED_HOST}" \
+        --build-arg TORCH_PACKAGES="${TORCH_PACKAGES_VALUE}" \
         --build-arg APT_MIRROR="${APT_MIRROR}" \
         --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
         -t "${FULL_IMAGE}" .
@@ -454,7 +731,7 @@ logs)
     echo "命令（联网环境）:"
     echo "  download-models  下载模型权重到 models/"
     echo "  download-models-docker  通过 Docker 拉取辅助镜像下载模型（无需宿主机 Python）"
-    echo "  build            构建 Docker 镜像（自动缓存 3D-Speaker 源码与 pip 下载）"
+    echo "  build            构建 Docker 镜像（自动缓存 3D-Speaker 源码、本地 wheel 与 pip 下载）"
     echo "  export           导出镜像为 tar.gz 文件"
     echo ""
     echo "命令（离线环境）:"

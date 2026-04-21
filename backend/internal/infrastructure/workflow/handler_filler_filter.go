@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	fillerdomain "github.com/lgt/asr/internal/domain/filler"
+	"gorm.io/gorm"
 )
 
 // FillerFilterConfig is the configuration for the filler word filter node.
 type FillerFilterConfig struct {
+	DictID      uint64   `json:"dict_id"`
 	FilterWords []string `json:"filter_words"`
 	CustomWords []string `json:"custom_words,omitempty"`
 }
@@ -21,10 +25,13 @@ var DefaultFillerWords = []string{
 }
 
 // FillerFilterHandler removes filler/hesitation words from text.
-type FillerFilterHandler struct{}
+type FillerFilterHandler struct {
+	dictRepo  fillerdomain.DictRepository
+	entryRepo fillerdomain.EntryRepository
+}
 
-func NewFillerFilterHandler() *FillerFilterHandler {
-	return &FillerFilterHandler{}
+func NewFillerFilterHandler(dictRepo fillerdomain.DictRepository, entryRepo fillerdomain.EntryRepository) *FillerFilterHandler {
+	return &FillerFilterHandler{dictRepo: dictRepo, entryRepo: entryRepo}
 }
 
 func (h *FillerFilterHandler) Validate(config json.RawMessage) error {
@@ -35,7 +42,7 @@ func (h *FillerFilterHandler) Validate(config json.RawMessage) error {
 	return json.Unmarshal(config, &cfg)
 }
 
-func (h *FillerFilterHandler) Execute(_ context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta) (string, json.RawMessage, error) {
+func (h *FillerFilterHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta) (string, json.RawMessage, error) {
 	var cfg FillerFilterConfig
 	if len(config) > 0 && string(config) != "null" {
 		if err := json.Unmarshal(config, &cfg); err != nil {
@@ -45,8 +52,31 @@ func (h *FillerFilterHandler) Execute(_ context.Context, config json.RawMessage,
 
 	// Merge word lists
 	wordSet := make(map[string]struct{})
+	hasDictSource := false
+	if cfg.DictID > 0 && h.dictRepo != nil {
+		if _, err := h.dictRepo.GetByID(ctx, cfg.DictID); err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return inputText, nil, fmt.Errorf("filler dict %d not found", cfg.DictID)
+			}
+			return inputText, nil, err
+		}
+	}
+	if h.entryRepo != nil {
+		entries, err := h.entryRepo.ListAppliedByDict(ctx, cfg.DictID)
+		if err != nil {
+			return inputText, nil, err
+		}
+		if len(entries) > 0 {
+			hasDictSource = true
+		}
+		for _, entry := range entries {
+			if word := strings.TrimSpace(entry.Word); word != "" {
+				wordSet[word] = struct{}{}
+			}
+		}
+	}
 	words := cfg.FilterWords
-	if len(words) == 0 {
+	if len(words) == 0 && !hasDictSource {
 		words = DefaultFillerWords
 	}
 	for _, w := range words {
@@ -88,6 +118,7 @@ func (h *FillerFilterHandler) Execute(_ context.Context, config json.RawMessage,
 	result = cleanupSpaces(result)
 
 	detail, _ := json.Marshal(map[string]interface{}{
+		"dict_id":       cfg.DictID,
 		"removed_words": removed,
 		"words_used":    len(sortedWords),
 	})

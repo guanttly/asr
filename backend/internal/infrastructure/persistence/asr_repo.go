@@ -128,10 +128,13 @@ func (r *TaskRepo) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&TaskModel{}, id).Error
 }
 
-func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
+func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, taskType *domain.TaskType, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
 	var models []TaskModel
 	var total int64
 	q := r.db.WithContext(ctx).Model(&TaskModel{}).Where("user_id = ?", userID)
+	if taskType != nil {
+		q = q.Where("type = ?", string(*taskType))
+	}
 	q.Count(&total)
 	if err := q.Order("created_at DESC").Offset(offset).Limit(limit).Find(&models).Error; err != nil {
 		return nil, 0, err

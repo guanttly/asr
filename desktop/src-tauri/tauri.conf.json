@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/.pnpm/@tauri-apps+cli@2.10.1/node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "asr-desktop",
+  "productName": "语音速录助手",
   "identifier": "com.asr.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -45,7 +45,12 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "languages": [
+          "English",
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false
       }
     },
     "icon": [

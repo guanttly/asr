@@ -54,6 +54,14 @@ function ensureNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function ensureNumberArray(value: unknown) {
+  if (!Array.isArray(value))
+    return [] as number[]
+  return value
+    .map(item => Number(item))
+    .filter(item => Number.isFinite(item) && item > 0)
+}
+
 function ensureRegexRules(value: unknown) {
   if (!Array.isArray(value))
     return [{ pattern: '', replacement: '', enabled: true }]
@@ -69,14 +77,18 @@ function ensureRegexRules(value: unknown) {
 
 export function fallbackNodeDefaultConfig(type: string): Record<string, unknown> {
   switch (type) {
+    case 'voice_wake':
+      return { wake_words: ['你好小鲨'], homophone_words: ['你好小沙', '你好小莎', '你好小善'] }
     case 'term_correction':
       return { dict_id: 0 }
     case 'filler_filter':
-      return { filter_words: ['嗯', '啊', '呃', '那个', '就是', '然后'], custom_words: [] }
+      return { dict_id: 0, filter_words: [], custom_words: [] }
     case 'sensitive_filter':
       return { dict_id: 0, custom_words: [], replacement: '[已过滤]' }
     case 'llm_correction':
       return { endpoint: '', model: '', api_key: '', prompt_template: '', temperature: 0.3, max_tokens: 4096, allow_markdown: false }
+    case 'voice_intent':
+      return { endpoint: '', model: '', api_key: '', prompt_template: '', extra_prompt: '', temperature: 0, max_tokens: 512, include_base: true, dict_ids: [] }
     case 'speaker_diarize':
       return { service_url: '', enable_voiceprint_match: false, fail_on_error: false }
     case 'meeting_summary':
@@ -99,6 +111,13 @@ export function getNodeDefaultConfig(type: string, nodeTypes?: WorkflowNodeTypeD
 export function normalizeNodeConfig(type: string, raw: Record<string, unknown>, defaults?: Record<string, unknown>) {
   const base = mergeObjects(fallbackNodeDefaultConfig(type), defaults || {})
   switch (type) {
+    case 'voice_wake':
+      return {
+        ...base,
+        ...raw,
+        wake_words: ensureStringArray(raw.wake_words, ensureStringArray(base.wake_words)),
+        homophone_words: ensureStringArray(raw.homophone_words, ensureStringArray(base.homophone_words)),
+      }
     case 'term_correction':
       return {
         ...base,
@@ -109,6 +128,7 @@ export function normalizeNodeConfig(type: string, raw: Record<string, unknown>, 
       return {
         ...base,
         ...raw,
+        dict_id: ensureNumber(raw.dict_id, ensureNumber(base.dict_id, 0)),
         filter_words: ensureStringArray(raw.filter_words, ensureStringArray(base.filter_words)),
         custom_words: ensureStringArray(raw.custom_words, ensureStringArray(base.custom_words)),
       }
@@ -131,6 +151,20 @@ export function normalizeNodeConfig(type: string, raw: Record<string, unknown>, 
         temperature: ensureNumber(raw.temperature, ensureNumber(base.temperature, 0.3)),
         max_tokens: ensureNumber(raw.max_tokens, ensureNumber(base.max_tokens, 4096)),
         allow_markdown: ensureBoolean(raw.allow_markdown, ensureBoolean(base.allow_markdown, false)),
+      }
+    case 'voice_intent':
+      return {
+        ...base,
+        ...raw,
+        endpoint: String(raw.endpoint ?? base.endpoint ?? ''),
+        model: String(raw.model ?? base.model ?? ''),
+        api_key: String(raw.api_key ?? base.api_key ?? ''),
+        prompt_template: String(raw.prompt_template ?? base.prompt_template ?? ''),
+        extra_prompt: String(raw.extra_prompt ?? base.extra_prompt ?? ''),
+        temperature: ensureNumber(raw.temperature, ensureNumber(base.temperature, 0)),
+        max_tokens: ensureNumber(raw.max_tokens, ensureNumber(base.max_tokens, 512)),
+        include_base: ensureBoolean(raw.include_base, ensureBoolean(base.include_base, true)),
+        dict_ids: ensureNumberArray(raw.dict_ids ?? base.dict_ids),
       }
     case 'speaker_diarize':
       return {

@@ -168,13 +168,21 @@ func (s *Service) ListUsers(ctx context.Context, offset, limit int) ([]*UserResp
 
 // GetWorkflowBindings returns current user's app workflow bindings.
 func (s *Service) GetWorkflowBindings(ctx context.Context, userID uint64) (*WorkflowBindingsResponse, error) {
-	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
 		return nil, err
 	}
 
 	bindings, err := s.userRepo.GetWorkflowBindings(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+	if user.Role != domain.RoleAdmin {
+		adminBindings, err := s.loadAdminWorkflowBindings(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		bindings = mergeWorkflowBindings(bindings, adminBindings)
 	}
 
 	return toWorkflowBindingsResponse(bindings), nil
@@ -196,12 +204,16 @@ func (s *Service) UpdateWorkflowBindings(ctx context.Context, userID uint64, req
 	if err := s.validateWorkflowBinding(ctx, user, "meeting", req.Meeting, wfdomain.WorkflowTypeMeeting); err != nil {
 		return nil, err
 	}
+	if err := s.validateWorkflowBinding(ctx, user, "voice_control", req.Voice, wfdomain.WorkflowTypeVoice); err != nil {
+		return nil, err
+	}
 
 	bindings := &domain.WorkflowBindings{
 		UserID:             userID,
 		RealtimeWorkflowID: req.Realtime,
 		BatchWorkflowID:    req.Batch,
 		MeetingWorkflowID:  req.Meeting,
+		VoiceWorkflowID:    req.Voice,
 	}
 	if err := s.userRepo.SaveWorkflowBindings(ctx, bindings); err != nil {
 		return nil, err
@@ -235,6 +247,72 @@ func (s *Service) EnsureAdmin(ctx context.Context, username, password, displayNa
 	return err
 }
 
+func loadAllUsers(ctx context.Context, repo domain.UserRepository) ([]*domain.User, error) {
+	const pageSize = 100
+	users := make([]*domain.User, 0, pageSize)
+	for offset := 0; ; offset += pageSize {
+		page, total, err := repo.List(ctx, offset, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, page...)
+		if len(users) >= int(total) || len(page) == 0 {
+			break
+		}
+	}
+	return users, nil
+}
+
+func (s *Service) loadAdminWorkflowBindings(ctx context.Context, currentUserID uint64) (*domain.WorkflowBindings, error) {
+	users, err := loadAllUsers(ctx, s.userRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	var admin *domain.User
+	for _, item := range users {
+		if item == nil || item.Role != domain.RoleAdmin || item.ID == currentUserID {
+			continue
+		}
+		if admin == nil || item.ID < admin.ID {
+			admin = item
+		}
+	}
+	if admin == nil {
+		return nil, nil
+	}
+
+	return s.userRepo.GetWorkflowBindings(ctx, admin.ID)
+}
+
+func mergeWorkflowBindings(primary *domain.WorkflowBindings, inherited *domain.WorkflowBindings) *domain.WorkflowBindings {
+	if primary == nil && inherited == nil {
+		return &domain.WorkflowBindings{}
+	}
+
+	result := &domain.WorkflowBindings{}
+	if primary != nil {
+		*result = *primary
+	}
+	if inherited == nil {
+		return result
+	}
+
+	if result.RealtimeWorkflowID == nil {
+		result.RealtimeWorkflowID = inherited.RealtimeWorkflowID
+	}
+	if result.BatchWorkflowID == nil {
+		result.BatchWorkflowID = inherited.BatchWorkflowID
+	}
+	if result.MeetingWorkflowID == nil {
+		result.MeetingWorkflowID = inherited.MeetingWorkflowID
+	}
+	if result.VoiceWorkflowID == nil {
+		result.VoiceWorkflowID = inherited.VoiceWorkflowID
+	}
+	return result
+}
+
 func toResponse(user *domain.User) *UserResponse {
 	return &UserResponse{
 		ID:          user.ID,
@@ -258,6 +336,7 @@ func toWorkflowBindingsResponse(bindings *domain.WorkflowBindings) *WorkflowBind
 		Realtime: bindings.RealtimeWorkflowID,
 		Batch:    bindings.BatchWorkflowID,
 		Meeting:  bindings.MeetingWorkflowID,
+		Voice:    bindings.VoiceWorkflowID,
 	}
 }
 

@@ -68,8 +68,28 @@ func (r *taskRepoHandlerStub) Delete(_ context.Context, id uint64) error {
 	return nil
 }
 
-func (r *taskRepoHandlerStub) ListByUser(_ context.Context, _ uint64, _, _ int) ([]*domainasr.TranscriptionTask, int64, error) {
-	panic("unexpected ListByUser call")
+func (r *taskRepoHandlerStub) ListByUser(_ context.Context, userID uint64, taskType *domainasr.TaskType, offset, limit int) ([]*domainasr.TranscriptionTask, int64, error) {
+	items := make([]*domainasr.TranscriptionTask, 0, len(r.tasks))
+	for _, task := range r.tasks {
+		if task.UserID != userID {
+			continue
+		}
+		if taskType != nil && task.Type != *taskType {
+			continue
+		}
+		items = append(items, cloneTaskForHandler(task))
+	}
+	if offset >= len(items) {
+		return []*domainasr.TranscriptionTask{}, int64(len(items)), nil
+	}
+	if limit <= 0 {
+		limit = len(items)
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], int64(len(items)), nil
 }
 
 func (r *taskRepoHandlerStub) ListSyncCandidates(_ context.Context, _ int) ([]*domainasr.TranscriptionTask, error) {
@@ -356,6 +376,74 @@ func TestDeleteTaskRejectsActiveTask(t *testing.T) {
 	}
 	if repo.deletedID != 0 {
 		t.Fatalf("expected task not to be deleted, got %d", repo.deletedID)
+	}
+}
+
+func TestClearTasksSupportsTaskTypeFilter(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	repo := &taskRepoHandlerStub{tasks: map[uint64]*domainasr.TranscriptionTask{
+		1: {
+			ID:                1,
+			UserID:            7,
+			Type:              domainasr.TaskTypeRealtime,
+			Status:            domainasr.TaskStatusCompleted,
+			PostProcessStatus: domainasr.PostProcessCompleted,
+		},
+		2: {
+			ID:                2,
+			UserID:            7,
+			Type:              domainasr.TaskTypeBatch,
+			Status:            domainasr.TaskStatusCompleted,
+			PostProcessStatus: domainasr.PostProcessCompleted,
+		},
+	}}
+	handler := NewASRHandler(appasr.NewService(repo, nil, nil, 5, nil), nil, "uploads", "", 100)
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("auth_claims", &middleware.Claims{UserID: 7, Role: "user"})
+		c.Next()
+	})
+	router.DELETE("/tasks", handler.ClearTasks)
+
+	req := httptest.NewRequest(http.MethodDelete, "/tasks?type=realtime", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, ok := repo.tasks[1]; ok {
+		t.Fatal("expected realtime task removed")
+	}
+	if _, ok := repo.tasks[2]; !ok {
+		t.Fatal("expected batch task to remain")
+	}
+	if !bytes.Contains(recorder.Body.Bytes(), []byte("deleted_count")) {
+		t.Fatalf("expected clear response body, got %s", recorder.Body.String())
+	}
+}
+
+func TestListTasksRejectsInvalidTaskType(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	handler := NewASRHandler(appasr.NewService(&taskRepoHandlerStub{}, nil, nil, 5, nil), nil, "uploads", "", 100)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("auth_claims", &middleware.Claims{UserID: 7, Role: "user"})
+		c.Next()
+	})
+	router.GET("/tasks", handler.ListTasks)
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks?type=unknown", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

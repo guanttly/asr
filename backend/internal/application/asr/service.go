@@ -378,6 +378,57 @@ func (s *Service) DeleteTask(ctx context.Context, userID, id uint64) error {
 	return nil
 }
 
+// ClearTasks removes deletable transcription tasks from the user's history.
+func (s *Service) ClearTasks(ctx context.Context, userID uint64, taskType *domain.TaskType) (*ClearTasksResponse, error) {
+	const batchSize = 100
+
+	collected := make([]*domain.TranscriptionTask, 0, batchSize)
+	skippedCount := 0
+	offset := 0
+
+	for {
+		tasks, _, err := s.taskRepo.ListByUser(ctx, userID, taskType, offset, batchSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(tasks) == 0 {
+			break
+		}
+
+		for _, task := range tasks {
+			if canDeleteTask(task) {
+				collected = append(collected, task)
+				continue
+			}
+			skippedCount++
+		}
+
+		if len(tasks) < batchSize {
+			break
+		}
+		offset += len(tasks)
+	}
+
+	deletedCount := 0
+	for _, task := range collected {
+		if err := s.taskRepo.Delete(ctx, task.ID); err != nil {
+			return nil, err
+		}
+		deletedCount++
+		if localFilePath := strings.TrimSpace(task.LocalFilePath); localFilePath != "" {
+			removeErr := os.Remove(localFilePath)
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				// Ignore best-effort cleanup failures after the database record is gone.
+			}
+		}
+	}
+
+	return &ClearTasksResponse{
+		DeletedCount: deletedCount,
+		SkippedCount: skippedCount,
+	}, nil
+}
+
 // AdminSyncTask refreshes a batch task status without user ownership filtering.
 func (s *Service) AdminSyncTask(ctx context.Context, id uint64) (*TaskResponse, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
@@ -490,8 +541,8 @@ func (s *Service) SyncPendingTasks(ctx context.Context, limit int) (*BatchSyncSu
 }
 
 // ListTasks returns a paginated list of tasks for a user.
-func (s *Service) ListTasks(ctx context.Context, userID uint64, offset, limit int) (*TaskListResponse, error) {
-	tasks, total, err := s.taskRepo.ListByUser(ctx, userID, offset, limit)
+func (s *Service) ListTasks(ctx context.Context, userID uint64, taskType *domain.TaskType, offset, limit int) (*TaskListResponse, error) {
+	tasks, total, err := s.taskRepo.ListByUser(ctx, userID, taskType, offset, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -11,6 +11,7 @@ function defaultWorkflowBindings(): WorkflowBindings {
     realtime: null,
     batch: null,
     meeting: null,
+    voice_control: null,
   }
 }
 
@@ -19,6 +20,7 @@ function normalizeWorkflowBindings(raw?: Partial<Record<WorkflowBindingKey, unkn
     realtime: typeof raw?.realtime === 'number' ? raw.realtime : null,
     batch: typeof raw?.batch === 'number' ? raw.batch : null,
     meeting: typeof raw?.meeting === 'number' ? raw.meeting : null,
+    voice_control: typeof raw?.voice_control === 'number' ? raw.voice_control : null,
   }
 }
 

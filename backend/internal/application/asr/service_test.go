@@ -107,8 +107,28 @@ func (r *taskRepoServiceStub) Delete(_ context.Context, id uint64) error {
 	return nil
 }
 
-func (r *taskRepoServiceStub) ListByUser(_ context.Context, _ uint64, _, _ int) ([]*domain.TranscriptionTask, int64, error) {
-	return nil, 0, nil
+func (r *taskRepoServiceStub) ListByUser(_ context.Context, userID uint64, taskType *domain.TaskType, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
+	items := make([]*domain.TranscriptionTask, 0, len(r.tasks))
+	for _, task := range r.tasks {
+		if task.UserID != userID {
+			continue
+		}
+		if taskType != nil && task.Type != *taskType {
+			continue
+		}
+		items = append(items, cloneTask(task))
+	}
+	if offset >= len(items) {
+		return []*domain.TranscriptionTask{}, int64(len(items)), nil
+	}
+	if limit <= 0 {
+		limit = len(items)
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], int64(len(items)), nil
 }
 
 func (r *taskRepoServiceStub) ListSyncCandidates(_ context.Context, _ int) ([]*domain.TranscriptionTask, error) {
@@ -220,6 +240,71 @@ func TestDeleteTaskRejectsForeignTask(t *testing.T) {
 	}
 	if repo.deletedID != 0 {
 		t.Fatalf("expected task not deleted, got %d", repo.deletedID)
+	}
+}
+
+func TestClearTasksDeletesOnlyOwnedDeletableTasks(t *testing.T) {
+	localDir := t.TempDir()
+	firstFile := filepath.Join(localDir, "first.wav")
+	if err := os.WriteFile(firstFile, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+
+	realtimeType := domain.TaskTypeRealtime
+	repo := &taskRepoServiceStub{tasks: map[uint64]*domain.TranscriptionTask{
+		1: {
+			ID:                1,
+			UserID:            7,
+			Type:              domain.TaskTypeRealtime,
+			Status:            domain.TaskStatusCompleted,
+			PostProcessStatus: domain.PostProcessCompleted,
+			LocalFilePath:     firstFile,
+		},
+		2: {
+			ID:                2,
+			UserID:            7,
+			Type:              domain.TaskTypeRealtime,
+			Status:            domain.TaskStatusProcessing,
+			PostProcessStatus: domain.PostProcessPending,
+		},
+		3: {
+			ID:                3,
+			UserID:            7,
+			Type:              domain.TaskTypeBatch,
+			Status:            domain.TaskStatusCompleted,
+			PostProcessStatus: domain.PostProcessCompleted,
+		},
+		4: {
+			ID:                4,
+			UserID:            8,
+			Type:              domain.TaskTypeRealtime,
+			Status:            domain.TaskStatusCompleted,
+			PostProcessStatus: domain.PostProcessCompleted,
+		},
+	}}
+	service := NewService(repo, nil, nil, 5, nil)
+
+	result, err := service.ClearTasks(context.Background(), 7, &realtimeType)
+	if err != nil {
+		t.Fatalf("clear tasks: %v", err)
+	}
+	if result.DeletedCount != 1 {
+		t.Fatalf("expected one task deleted, got %+v", result)
+	}
+	if result.SkippedCount != 1 {
+		t.Fatalf("expected one task skipped, got %+v", result)
+	}
+	if _, ok := repo.tasks[1]; ok {
+		t.Fatal("expected realtime completed task to be deleted")
+	}
+	if _, ok := repo.tasks[2]; !ok {
+		t.Fatal("expected processing realtime task to remain")
+	}
+	if _, ok := repo.tasks[3]; !ok {
+		t.Fatal("expected other task type to remain")
+	}
+	if _, err := os.Stat(firstFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected local file removed, stat err=%v", err)
 	}
 }
 

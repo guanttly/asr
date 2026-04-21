@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { onBeforeUnmount, onMounted } from 'vue'
 import RecorderWindow from './components/RecorderWindow.vue'
@@ -17,16 +18,24 @@ try {
   appWindow = getCurrentWindow()
   isSettingsWindow = appWindow.label === 'settings'
 } catch {
-  // IPC 未就绪，回退到 URL 参数检测
-  isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings'
+  // IPC 未就绪，回退到初始化脚本注入的标记
 }
 if (!isSettingsWindow) {
-  isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings'
+  isSettingsWindow = (window as any).__ASR_WINDOW__ === 'settings'
 }
 let unregisterShortcut: null | (() => Promise<void>) = null
 
+function handleKeydown(e: KeyboardEvent) {
+  if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyD') {
+    e.preventDefault()
+    void invoke('open_devtools').catch(() => undefined)
+  }
+}
+
 onMounted(() => {
   void appendRuntimeLog('frontend.window', JSON.stringify({ label: appWindow?.label ?? 'unknown', isSettingsWindow }))
+
+  window.addEventListener('keydown', handleKeydown)
 
   if (isSettingsWindow)
     return
@@ -47,6 +56,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
   void unregisterShortcut?.().catch(() => undefined)
 })
 </script>

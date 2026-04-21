@@ -3,6 +3,8 @@ package workflow
 import (
 	"encoding/json"
 	"testing"
+
+	domain "github.com/lgt/asr/internal/domain/workflow"
 )
 
 func TestDefaultWorkflowSeeds(t *testing.T) {
@@ -10,6 +12,8 @@ func TestDefaultWorkflowSeeds(t *testing.T) {
 	if len(seeds) == 0 {
 		t.Fatal("expected workflow seeds")
 	}
+
+	voiceSeedFound := false
 
 	seenNames := make(map[string]struct{}, len(seeds))
 	for _, seed := range seeds {
@@ -33,5 +37,22 @@ func TestDefaultWorkflowSeeds(t *testing.T) {
 				t.Fatalf("seed %s contains invalid node config for node type %s", seed.Name, node.NodeType)
 			}
 		}
+
+		if seed.Name == "语音控制工作流" {
+			voiceSeedFound = true
+			if len(seed.Nodes) != 2 {
+				t.Fatalf("voice seed should include exactly 2 fixed nodes, got %d", len(seed.Nodes))
+			}
+			if seed.Nodes[0].NodeType != domain.NodeVoiceWake {
+				t.Fatalf("voice seed first node should be voice_wake, got %s", seed.Nodes[0].NodeType)
+			}
+			if seed.Nodes[1].NodeType != domain.NodeVoiceIntent {
+				t.Fatalf("voice seed second node should be voice_intent, got %s", seed.Nodes[1].NodeType)
+			}
+		}
+	}
+
+	if !voiceSeedFound {
+		t.Fatal("expected built-in voice control workflow seed")
 	}
 }

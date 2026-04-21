@@ -29,7 +29,12 @@ const createForm = reactive({
 
 const columns = [
   { title: 'ID', key: 'id', width: 64 },
-  { title: '用户名', key: 'username', width: 140 },
+  {
+    title: '用户名 / 机器码',
+    key: 'username',
+    width: 560,
+    render: (row: UserItem) => h('span', { style: 'word-break: break-all' }, row.username),
+  },
   { title: '显示名', key: 'displayName', render: (row: UserItem) => row.displayName || row.display_name || '-' },
   {
     title: '角色',

@@ -6,10 +6,13 @@ import (
 	"log"
 	"time"
 
+	appappsettings "github.com/lgt/asr/internal/application/appsettings"
 	appasr "github.com/lgt/asr/internal/application/asr"
+	appfiller "github.com/lgt/asr/internal/application/filler"
 	appsensitive "github.com/lgt/asr/internal/application/sensitive"
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	appuser "github.com/lgt/asr/internal/application/user"
+	appvoicecommand "github.com/lgt/asr/internal/application/voicecommand"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/infrastructure/asrengine"
@@ -120,6 +123,30 @@ func main() {
 	}
 	logger.Info("sensitive seed data ensured")
 
+	fillerDictRepo := persistence.NewFillerDictRepo(db)
+	fillerEntryRepo := persistence.NewFillerEntryRepo(db)
+	fillerService := appfiller.NewService(
+		fillerDictRepo,
+		fillerEntryRepo,
+		persistence.NewSeedStateRepo(db),
+	)
+	if err := fillerService.EnsureSeedData(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("filler seed data ensured")
+
+	voiceCommandDictRepo := persistence.NewVoiceCommandDictRepo(db)
+	voiceCommandEntryRepo := persistence.NewVoiceCommandEntryRepo(db)
+	voiceCommandService := appvoicecommand.NewService(
+		voiceCommandDictRepo,
+		voiceCommandEntryRepo,
+		persistence.NewSeedStateRepo(db),
+	)
+	if err := voiceCommandService.EnsureSeedData(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("voice command seed data ensured")
+
 	meetingRepo := persistence.NewMeetingRepo(db)
 	transcriptRepo := persistence.NewTranscriptRepo(db)
 	summaryRepo := persistence.NewSummaryRepo(db)
@@ -135,9 +162,11 @@ func main() {
 	// Initialize workflow engine and handlers
 	engine := wfengine.NewEngine(logger)
 	engine.RegisterHandler(domain.NodeTermCorrection, wfengine.NewTermCorrectionHandler(corrector))
-	engine.RegisterHandler(domain.NodeFillerFilter, wfengine.NewFillerFilterHandler())
+	engine.RegisterHandler(domain.NodeFillerFilter, wfengine.NewFillerFilterHandler(fillerDictRepo, fillerEntryRepo))
 	engine.RegisterHandler(domain.NodeSensitiveFilter, wfengine.NewSensitiveFilterHandler(sensitiveDictRepo, sensitiveEntryRepo))
 	engine.RegisterHandler(domain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
+	engine.RegisterHandler(domain.NodeVoiceWake, wfengine.NewVoiceWakeHandler())
+	engine.RegisterHandler(domain.NodeVoiceIntent, wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo))
 	engine.RegisterHandler(domain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
 	engine.RegisterHandler(domain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	var diarizeClient *diarization.Client
@@ -174,9 +203,13 @@ func main() {
 	protected := router.Group("/api/admin", middleware.AuthRequired(cfg.JWT.Secret))
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
+	api.NewFillerHandler(fillerService).Register(protected)
 	api.NewSensitiveHandler(sensitiveService).Register(protected)
+	api.NewVoiceCommandHandler(voiceCommandService).Register(protected)
 	api.NewDashboardHandler(asrService, cfg.Services.ASRBatchSyncWarnThreshold, 6).Register(protected)
 	api.NewWorkflowHandler(workflowService, asrService).Register(protected)
+	appSettingsService := appappsettings.NewService(persistence.NewAppSettingRepo(db))
+	api.NewAppSettingsHandler(appSettingsService).Register(protected)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.AdminAPIPort)
 	logger.Info("admin-api listening", zap.String("addr", addr))

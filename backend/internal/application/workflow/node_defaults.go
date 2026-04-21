@@ -14,11 +14,15 @@ func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	case domain.NodeTermCorrection:
 		return map[string]any{"dict_id": 0}
 	case domain.NodeFillerFilter:
-		return map[string]any{"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"}, "custom_words": []string{}}
+		return map[string]any{"dict_id": 0, "filter_words": []string{}, "custom_words": []string{}}
 	case domain.NodeSensitiveFilter:
 		return map[string]any{"dict_id": 0, "custom_words": []string{}, "replacement": "[已过滤]"}
 	case domain.NodeLLMCorrection:
 		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "temperature": 0.3, "max_tokens": 4096, "allow_markdown": false}
+	case domain.NodeVoiceWake:
+		return map[string]any{"wake_words": []string{"你好小鲨"}, "homophone_words": []string{"你好小沙", "你好小莎", "你好小善"}}
+	case domain.NodeVoiceIntent:
+		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "extra_prompt": "", "temperature": 0.0, "max_tokens": 512, "include_base": true, "dict_ids": []uint64{}}
 	case domain.NodeSpeakerDiarize:
 		return map[string]any{"service_url": "", "enable_voiceprint_match": false, "fail_on_error": false}
 	case domain.NodeMeetingSummary:

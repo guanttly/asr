@@ -7,6 +7,7 @@ import (
 
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ─── GORM Models ────────────────────────────────────────
@@ -322,11 +323,20 @@ func (r *WorkflowNodeDefaultRepo) GetByType(ctx context.Context, nodeType domain
 }
 
 func (r *WorkflowNodeDefaultRepo) Upsert(ctx context.Context, item *domain.NodeDefault) error {
+	now := time.Now()
 	model := &WorkflowNodeDefaultModel{
-		NodeType: string(item.NodeType),
-		Config:   item.Config,
+		NodeType:  string(item.NodeType),
+		Config:    item.Config,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	return r.db.WithContext(ctx).Save(model).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "node_type"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"config":     model.Config,
+			"updated_at": now,
+		}),
+	}).Create(model).Error
 }
 
 // ─── ExecutionRepo ──────────────────────────────────────

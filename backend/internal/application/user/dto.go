@@ -70,6 +70,7 @@ type UpdateWorkflowBindingsRequest struct {
 	Realtime *uint64 `json:"realtime"`
 	Batch    *uint64 `json:"batch"`
 	Meeting  *uint64 `json:"meeting"`
+	Voice    *uint64 `json:"voice_control"`
 }
 
 // WorkflowBindingsResponse returns default app workflow bindings for the current user.
@@ -77,4 +78,5 @@ type WorkflowBindingsResponse struct {
 	Realtime *uint64 `json:"realtime,omitempty"`
 	Batch    *uint64 `json:"batch,omitempty"`
 	Meeting  *uint64 `json:"meeting,omitempty"`
+	Voice    *uint64 `json:"voice_control,omitempty"`
 }

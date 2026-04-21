@@ -15,9 +15,9 @@ interface WorkflowItem {
   id: number
   name: string
   description?: string
-  workflow_type: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting'
-  source_kind: 'legacy_text' | 'batch_asr' | 'realtime_asr'
-  target_kind: 'transcript' | 'meeting_summary'
+  workflow_type: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control'
+  source_kind: 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake'
+  target_kind: 'transcript' | 'meeting_summary' | 'voice_command'
   is_legacy: boolean
   validation_message?: string
   owner_type: 'system' | 'user'
@@ -69,6 +69,11 @@ const workflowScenarioOptions: Array<{ value: ActiveWorkflowType, label: string,
     label: '会议纪要',
     description: '自动固化首个 ASR 节点和末尾会议纪要节点。',
   },
+  {
+    value: 'voice_control',
+    label: '语音控制',
+    description: '固化唤醒词识别源节点与意图识别输出节点，用于终端语音控制。',
+  },
 ]
 
 const workflowFilterOptions: Array<{ value: 'all' | ActiveWorkflowType | 'legacy', label: string }> = [
@@ -76,6 +81,7 @@ const workflowFilterOptions: Array<{ value: 'all' | ActiveWorkflowType | 'legacy
   { value: 'batch_transcription', label: '批量转写' },
   { value: 'realtime_transcription', label: '实时转写' },
   { value: 'meeting', label: '会议纪要' },
+  { value: 'voice_control', label: '语音控制' },
   { value: 'legacy', label: 'Legacy' },
 ]
 
@@ -128,6 +134,7 @@ function workflowTypeLabel(value?: WorkflowItem['workflow_type']) {
     batch_transcription: '批量转写',
     realtime_transcription: '实时转写',
     meeting: '会议纪要',
+    voice_control: '语音控制',
   }
   return map[value || ''] || value || '-'
 }
@@ -140,10 +147,12 @@ function workflowProfileLabel(row: WorkflowItem) {
     legacy_text: '文本',
     batch_asr: '批量 ASR',
     realtime_asr: '实时 ASR',
+    voice_wake: '唤醒词',
   }
   const targetMap: Record<string, string> = {
     transcript: '整理文本',
     meeting_summary: '会议纪要',
+    voice_command: '控制指令',
   }
   return `${sourceMap[row.source_kind] || row.source_kind} -> ${targetMap[row.target_kind] || row.target_kind}`
 }

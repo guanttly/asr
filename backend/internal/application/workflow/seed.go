@@ -70,7 +70,7 @@ func defaultWorkflowSeeds() []workflowSeed {
 			Nodes: []domain.Node{
 				seedNode(domain.NodeBatchASR, true, map[string]any{}),
 				seedNode(domain.NodeFillerFilter, true, map[string]any{
-					"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"},
+					"dict_id":      0,
 					"custom_words": []string{},
 				}),
 				seedNode(domain.NodeCustomRegex, true, map[string]any{
@@ -101,7 +101,7 @@ func defaultWorkflowSeeds() []workflowSeed {
 			Nodes: []domain.Node{
 				seedNode(domain.NodeRealtimeASR, true, map[string]any{}),
 				seedNode(domain.NodeFillerFilter, true, map[string]any{
-					"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"},
+					"dict_id":      0,
 					"custom_words": []string{},
 				}),
 				seedNode(domain.NodeCustomRegex, true, map[string]any{
@@ -134,7 +134,7 @@ func defaultWorkflowSeeds() []workflowSeed {
 					"fail_on_error":           false,
 				}),
 				seedNode(domain.NodeFillerFilter, true, map[string]any{
-					"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"},
+					"dict_id":      0,
 					"custom_words": []string{},
 				}),
 				seedNode(domain.NodeTermCorrection, false, map[string]any{
@@ -174,12 +174,20 @@ func defaultWorkflowSeeds() []workflowSeed {
 					},
 				}),
 				seedNode(domain.NodeFillerFilter, true, map[string]any{
-					"filter_words": []string{"嗯", "啊", "呃", "那个", "就是", "然后"},
+					"dict_id":      0,
 					"custom_words": []string{},
 				}),
 				seedNode(domain.NodeTermCorrection, false, map[string]any{
 					"dict_id": 0,
 				}),
+			},
+		},
+		{
+			Name:        "语音控制工作流",
+			Description: "面向终端语音控制。固定包含 voice_wake 唤醒词识别源节点和 voice_intent 意图识别输出节点。",
+			Nodes: []domain.Node{
+				seedNode(domain.NodeVoiceWake, true, map[string]any{}),
+				seedNode(domain.NodeVoiceIntent, true, map[string]any{}),
 			},
 		},
 	}

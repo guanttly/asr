@@ -87,6 +87,12 @@ type TaskListResponse struct {
 	Total int64           `json:"total"`
 }
 
+// ClearTasksResponse reports how many history records were deleted in one clear action.
+type ClearTasksResponse struct {
+	DeletedCount int `json:"deleted_count"`
+	SkippedCount int `json:"skipped_count"`
+}
+
 // SyncHealthResponse is the admin dashboard view of batch task synchronization health.
 type SyncHealthResponse struct {
 	PendingCount               int64                      `json:"pending_count"`

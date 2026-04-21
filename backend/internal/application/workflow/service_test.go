@@ -204,6 +204,37 @@ func TestCreateWorkflowSeedsFixedBoundaryNodes(t *testing.T) {
 	}
 }
 
+func TestCreateVoiceControlWorkflowSeedsIntentSink(t *testing.T) {
+	repo := &workflowRepoStub{}
+	nodes := &nodeRepoStub{items: map[uint64][]domain.Node{}}
+	service := NewService(repo, nodes, nil, nil, nil, nil)
+	workflowType := domain.WorkflowTypeVoice
+
+	result, err := service.CreateWorkflow(context.Background(), domain.OwnerUser, 7, &CreateWorkflowRequest{
+		Name:         "语音控制工作流",
+		Description:  "识别唤醒后的控制指令",
+		WorkflowType: &workflowType,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow returned error: %v", err)
+	}
+	if len(nodes.lastSaved) != 2 {
+		t.Fatalf("expected wake source and intent sink nodes, got %d", len(nodes.lastSaved))
+	}
+	if nodes.lastSaved[0].NodeType != domain.NodeVoiceWake || nodes.lastSaved[0].Position != 1 || !nodes.lastSaved[0].Enabled {
+		t.Fatalf("expected fixed source node to be voice_wake at position 1, got %+v", nodes.lastSaved[0])
+	}
+	if nodes.lastSaved[1].NodeType != domain.NodeVoiceIntent || nodes.lastSaved[1].Position != 2 || !nodes.lastSaved[1].Enabled {
+		t.Fatalf("expected fixed sink node to be voice_intent at position 2, got %+v", nodes.lastSaved[1])
+	}
+	if result.WorkflowType != domain.WorkflowTypeVoice || result.SourceKind != domain.SourceKindVoiceWake || result.TargetKind != domain.TargetKindVoiceCommand {
+		t.Fatalf("expected voice control profile in response, got %+v", result)
+	}
+	if len(result.Nodes) != 2 || !result.Nodes[0].IsFixed || !result.Nodes[1].IsFixed {
+		t.Fatalf("expected fixed node metadata in response, got %+v", result.Nodes)
+	}
+}
+
 func TestBatchUpdateNodesRejectsChangingFixedBoundary(t *testing.T) {
 	repo := &workflowRepoStub{byID: map[uint64]*domain.Workflow{
 		101: {

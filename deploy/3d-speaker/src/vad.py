@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import os
 import time
 import uuid
@@ -37,6 +38,7 @@ class VoiceActivityDetector:
         self.min_silence_duration = min_silence_duration
         self.speech_pad_duration = speech_pad_duration
         self._pipeline = None
+        self._funasr_model = None
         self._loaded = False
         self.backend = "energy"
 
@@ -44,21 +46,28 @@ class VoiceActivityDetector:
         if self._loaded:
             return
 
-        try:
-            from modelscope.pipelines import pipeline as ms_pipeline
+        model_ref = self._resolve_model_reference()
+        load_errors: list[str] = []
 
-            model_ref = self._resolve_model_reference()
-            self._pipeline = ms_pipeline(
-                task="voice-activity-detection",
-                model=model_ref,
-                device="gpu" if self.device.startswith("cuda") else "cpu",
-            )
+        try:
+            self._pipeline = self._load_modelscope_pipeline(model_ref, load_errors)
             self.backend = "modelscope-fsmn-vad"
-            logger.info(f"VAD 模型加载完成: {model_ref} (device={self.device})")
+            logger.info(f"VAD 模型加载完成: {model_ref} (backend={self.backend}, device={self.device})")
         except Exception as exc:
             self._pipeline = None
-            self.backend = "energy"
-            logger.warning(f"VAD 模型加载失败，回退到能量阈值模式: {exc}")
+            load_errors.append(f"ModelScope pipeline: {exc}")
+
+        if self._pipeline is None:
+            try:
+                self._ensure_funasr_backend(model_ref)
+                logger.info(f"VAD 模型加载完成: {model_ref} (backend={self.backend}, device={self.device})")
+            except Exception as exc:
+                self._funasr_model = None
+                self.backend = "energy"
+                load_errors.append(f"FunASR AutoModel: {exc}")
+                logger.warning(
+                    "VAD 模型加载失败，回退到能量阈值模式: " + " | ".join(load_errors)
+                )
 
         self._loaded = True
 
@@ -100,12 +109,26 @@ class VoiceActivityDetector:
 
         if self._pipeline is not None:
             try:
-                result = self._pipeline(audio_path)
+                result = self._pipeline(input=audio_path)
                 segments = self._parse_pipeline_output(result, audio_duration)
                 if segments:
                     return self._merge_segments(segments)
             except Exception as exc:
-                logger.warning(f"VAD 模型推理失败，回退到能量阈值模式: {exc}")
+                logger.warning(f"ModelScope VAD 推理失败，尝试切换到 FunASR: {exc}")
+                self._pipeline = None
+                try:
+                    self._ensure_funasr_backend(self._resolve_model_reference())
+                except Exception as fallback_exc:
+                    logger.warning(f"FunASR VAD 加载失败，继续回退到能量阈值模式: {fallback_exc}")
+
+        if self._funasr_model is not None:
+            try:
+                result = self._funasr_model.generate(input=audio_path)
+                segments = self._parse_pipeline_output(result, audio_duration)
+                if segments:
+                    return self._merge_segments(segments)
+            except Exception as exc:
+                logger.warning(f"FunASR VAD 推理失败，回退到能量阈值模式: {exc}")
 
         self.backend = "energy"
         return self._run_energy_vad(waveform, sample_rate)
@@ -119,8 +142,113 @@ class VoiceActivityDetector:
 
     def _resolve_model_reference(self) -> str:
         if self.local_dir and os.path.isdir(self.local_dir):
-            return self.local_dir
+            resolved_local_dir = self._resolve_local_model_dir(self.local_dir)
+            if resolved_local_dir:
+                return resolved_local_dir
+            logger.warning(f"VAD 本地模型目录结构未识别，回退到模型 ID: {self.local_dir}")
         return self.model_id
+
+    def _resolve_local_model_dir(self, base_dir: str) -> Optional[str]:
+        base_path = Path(base_dir)
+        if not base_path.is_dir():
+            return None
+
+        if self._looks_like_model_dir(base_path):
+            return str(base_path)
+
+        candidates: list[Path] = []
+        for config_name in ("configuration.json", "config.yaml"):
+            candidates.extend(path.parent for path in base_path.rglob(config_name))
+
+        if not candidates:
+            return None
+
+        unique_candidates = sorted(
+            {candidate.resolve() for candidate in candidates if candidate.is_dir()},
+            key=lambda candidate: (len(candidate.parts), str(candidate)),
+        )
+        for candidate in unique_candidates:
+            if self._looks_like_model_dir(candidate):
+                return str(candidate)
+
+        return str(unique_candidates[0]) if unique_candidates else None
+
+    def _looks_like_model_dir(self, candidate: Path) -> bool:
+        config_markers = ("configuration.json", "config.yaml")
+        weight_patterns = ("*.pt", "*.bin", "*.pth", "*.onnx")
+
+        if not any((candidate / marker).exists() for marker in config_markers):
+            return False
+
+        if (candidate / "am.mvn").exists() or (candidate / "model.pb").exists():
+            return True
+
+        return any(next(candidate.glob(pattern), None) is not None for pattern in weight_patterns)
+
+    def _load_modelscope_pipeline(self, model_ref: str, load_errors: list[str]) -> Any:
+        from modelscope.pipelines import pipeline as ms_pipeline
+        from modelscope.utils.constant import Tasks
+
+        for module_name in (
+            "modelscope.models.audio.funasr.model",
+            "modelscope.pipelines.audio.funasr_pipeline",
+        ):
+            try:
+                importlib.import_module(module_name)
+            except Exception as exc:
+                load_errors.append(f"import {module_name} failed: {exc}")
+
+        task_candidates: list[str] = []
+        official_task = getattr(Tasks, "voice_activity_detection", None)
+        if official_task:
+            task_candidates.append(official_task)
+        task_candidates.extend([
+            "voice_activity_detection",
+            "voice-activity-detection",
+        ])
+
+        seen: set[str] = set()
+        last_error: Exception | None = None
+        for task_name in task_candidates:
+            task_key = str(task_name)
+            if task_key in seen:
+                continue
+            seen.add(task_key)
+            try:
+                return ms_pipeline(
+                    task=task_name,
+                    model=model_ref,
+                    device=self._resolve_modelscope_device(),
+                )
+            except Exception as exc:
+                last_error = exc
+                load_errors.append(f"task={task_key}: {exc}")
+
+        raise RuntimeError(str(last_error) if last_error is not None else "unknown ModelScope VAD init error")
+
+    def _ensure_funasr_backend(self, model_ref: str) -> None:
+        if self._funasr_model is not None:
+            self.backend = "funasr-fsmn-vad"
+            return
+
+        from funasr import AutoModel
+
+        self._funasr_model = AutoModel(
+            model=model_ref,
+            device=self._resolve_funasr_device(),
+            disable_update=True,
+        )
+        self.backend = "funasr-fsmn-vad"
+
+    def _resolve_modelscope_device(self) -> str:
+        return "gpu" if self.device.startswith("cuda") else "cpu"
+
+    def _resolve_funasr_device(self) -> str:
+        if self.device == "gpu":
+            return "cuda:0"
+        if self.device.startswith("cuda"):
+            return self.device if ":" in self.device else f"{self.device}:0"
+        return "cpu"
 
     def _parse_pipeline_output(self, payload: Any, audio_duration: float) -> list[VADSegment]:
         segments: list[VADSegment] = []

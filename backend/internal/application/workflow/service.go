@@ -469,6 +469,16 @@ func (s *Service) GetNodeTypes(ctx context.Context) ([]NodeTypeInfo, error) {
 	return infos, nil
 }
 
+// GetNodeDefaultConfig returns the merged global default configuration for a node type.
+// Used by callers (e.g. voice control intent classifier) that need to reuse the
+// admin-configured LLM endpoint without going through the full workflow pipeline.
+func (s *Service) GetNodeDefaultConfig(ctx context.Context, nodeType domain.NodeType) (json.RawMessage, error) {
+	if !nodeType.Valid() {
+		return nil, fmt.Errorf("invalid node_type: %s", nodeType)
+	}
+	return s.resolveGlobalNodeDefault(ctx, nodeType)
+}
+
 // UpdateNodeDefault updates the persisted default configuration for a node type.
 func (s *Service) UpdateNodeDefault(ctx context.Context, nodeType domain.NodeType, req *UpdateNodeDefaultRequest) (*NodeTypeInfo, error) {
 	if !nodeType.Valid() {
@@ -995,6 +1005,14 @@ func deriveWorkflowProfile(nodes []domain.Node) (*workflowProfile, error) {
 	}
 
 	if sourceCount == 0 {
+		if deriveTargetKind(enabled) == domain.TargetKindVoiceCommand {
+			return &workflowProfile{
+				WorkflowType:      domain.WorkflowTypeVoice,
+				SourceKind:        domain.SourceKindLegacyText,
+				TargetKind:        domain.TargetKindVoiceCommand,
+				ValidationMessage: "缺少唤醒源节点，当前按兼容模式保留为语音控制工作流；建议补齐 voice_wake 节点。",
+			}, nil
+		}
 		return &workflowProfile{
 			WorkflowType:      domain.WorkflowTypeLegacy,
 			SourceKind:        domain.SourceKindLegacyText,
@@ -1016,6 +1034,8 @@ func deriveWorkflowProfile(nodes []domain.Node) (*workflowProfile, error) {
 		sourceKind = domain.SourceKindBatchASR
 	case domain.NodeRealtimeASR:
 		sourceKind = domain.SourceKindRealtimeASR
+	case domain.NodeVoiceWake:
+		sourceKind = domain.SourceKindVoiceWake
 	default:
 		return nil, fmt.Errorf("不支持的源节点类型: %s", enabled[0].NodeType)
 	}
@@ -1026,6 +1046,8 @@ func deriveWorkflowProfile(nodes []domain.Node) (*workflowProfile, error) {
 	}
 	if profile.TargetKind == domain.TargetKindMeetingSummary {
 		profile.WorkflowType = domain.WorkflowTypeMeeting
+	} else if profile.TargetKind == domain.TargetKindVoiceCommand {
+		profile.WorkflowType = domain.WorkflowTypeVoice
 	} else if sourceKind == domain.SourceKindRealtimeASR {
 		profile.WorkflowType = domain.WorkflowTypeRealtime
 	} else {
@@ -1056,6 +1078,9 @@ func deriveTargetKind(nodes []domain.Node) domain.WorkflowTargetKind {
 		if node.NodeType == domain.NodeMeetingSummary {
 			return domain.TargetKindMeetingSummary
 		}
+		if node.NodeType == domain.NodeVoiceIntent {
+			return domain.TargetKindVoiceCommand
+		}
 	}
 	return domain.TargetKindTranscript
 }
@@ -1081,6 +1106,9 @@ func buildInitialWorkflow(workflowType *domain.WorkflowType) (*workflowProfile, 
 	case domain.WorkflowTypeMeeting:
 		profile.SourceKind = domain.SourceKindBatchASR
 		profile.TargetKind = domain.TargetKindMeetingSummary
+	case domain.WorkflowTypeVoice:
+		profile.SourceKind = domain.SourceKindVoiceWake
+		profile.TargetKind = domain.TargetKindVoiceCommand
 	default:
 		return nil, nil, fmt.Errorf("invalid workflow_type: %s", *workflowType)
 	}

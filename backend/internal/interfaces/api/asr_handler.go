@@ -54,6 +54,7 @@ func NewASRHandler(service *appasr.Service, workflowSvc *appwf.Service, uploadDi
 // Register registers ASR routes.
 func (h *ASRHandler) Register(group *gin.RouterGroup) {
 	group.POST("/tasks", h.CreateTask)
+	group.DELETE("/tasks", h.ClearTasks)
 	group.POST("/tasks/upload", h.UploadTaskFile)
 	group.POST("/realtime-tasks/upload", h.UploadRealtimeTaskFile)
 	group.POST("/stream-sessions", h.StartStreamSession)
@@ -376,9 +377,31 @@ func (h *ASRHandler) CreateTask(c *gin.Context) {
 func (h *ASRHandler) ListTasks(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	taskType, err := parseOptionalTaskType(c.Query("type"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 	userID := middleware.UserIDFromContext(c)
 
-	result, err := h.service.ListTasks(c.Request.Context(), userID, offset, limit)
+	result, err := h.service.ListTasks(c.Request.Context(), userID, taskType, offset, limit)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, result)
+}
+
+func (h *ASRHandler) ClearTasks(c *gin.Context) {
+	taskType, err := parseOptionalTaskType(c.Query("type"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	userID := middleware.UserIDFromContext(c)
+	result, err := h.service.ClearTasks(c.Request.Context(), userID, taskType)
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
@@ -516,4 +539,19 @@ func (h *ASRHandler) validateWorkflowBinding(ctx context.Context, workflowID *ui
 func isASRBadRequest(err error) bool {
 	var upstreamErr *asrengine.UpstreamBadRequestError
 	return errors.As(err, &upstreamErr)
+}
+
+func parseOptionalTaskType(raw string) (*domainasr.TaskType, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	taskType := domainasr.TaskType(trimmed)
+	switch taskType {
+	case domainasr.TaskTypeRealtime, domainasr.TaskTypeBatch:
+		return &taskType, nil
+	default:
+		return nil, fmt.Errorf("invalid task type")
+	}
 }

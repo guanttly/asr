@@ -3,14 +3,16 @@ import { onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettings } from '@/composables/useSettings'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
-import { useAppStore } from '@/stores/app'
-import { ensureAnonymousLogin, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
+import { useVoiceControl } from '@/composables/useVoiceControl'
+import { useAppStore, type SceneMode } from '@/stores/app'
+import { ensureAnonymousLogin, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
 import { appendRuntimeLog, debugLog, getRuntimeLogPath, readRuntimeLogTail } from '@/utils/debug'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 const appStore = useAppStore()
 const { settings, reset } = useSettings()
 const recorder = useAudioRecorder()
+const voiceControl = useVoiceControl()
 const machineIdentity = ref<MachineIdentity | null>(null)
 const runtimeLogPath = ref('')
 const runtimeLogTail = ref('')
@@ -18,6 +20,16 @@ const runtimeLogTail = ref('')
 const authLoading = ref(false)
 const authMessage = ref('')
 const authMessageType = ref<'success' | 'error' | 'info'>('info')
+
+function setSceneMode(mode: SceneMode) {
+  if (appStore.sceneMode === mode) return
+  appStore.sceneMode = mode
+  void debugLog('settings.scene', 'scene mode changed', { mode })
+}
+
+async function refreshVoiceControl() {
+  await voiceControl.ensureLoaded(true)
+}
 
 function setAuthMessage(type: 'success' | 'error' | 'info', message: string) {
   authMessageType.value = type
@@ -34,8 +46,9 @@ async function syncIdentityAndLogin(forceLogin = false) {
       await ensureAnonymousLogin(forceLogin)
     else
       await getCurrentUser().catch(async () => await ensureAnonymousLogin(true))
+    await ensureRealtimeWorkflowBinding(true)
     setAuthMessage('success', '服务连接正常，已完成匿名登录')
-    await debugLog('settings.auth', 'identity sync completed', { username: appStore.username, machineCode: appStore.machineCode })
+    await debugLog('settings.auth', 'identity sync completed', { username: appStore.username, machineCode: appStore.machineCode, realtimeWorkflowId: appStore.realtimeWorkflowId })
   }
   catch (error) {
     setAuthMessage('error', error instanceof Error ? error.message : '匿名登录失败')
@@ -128,6 +141,7 @@ watch(() => appStore.debugLoggingEnabled, async (enabled) => {
 onMounted(() => {
   void syncIdentityAndLogin(false)
   void refreshRuntimeLogs()
+  void voiceControl.ensureLoaded()
 })
 </script>
 
@@ -207,6 +221,50 @@ onMounted(() => {
           <span class="toggle-slider" />
         </label>
       </div>
+    </section>
+
+    <section class="settings-section">
+      <h4 class="section-title">使用场景</h4>
+      <p class="section-hint">报告模式：录音结束仅保存为实时转写历史；会议模式：录音结束自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。</p>
+      <div class="scene-segmented" role="tablist">
+        <button
+          type="button"
+          class="scene-btn report"
+          :class="{ active: appStore.sceneMode === 'report' }"
+          @click="setSceneMode('report')"
+        >
+          <span class="scene-dot" /> 报告模式
+          <span class="scene-tag">实时</span>
+        </button>
+        <button
+          type="button"
+          class="scene-btn meeting"
+          :class="{ active: appStore.sceneMode === 'meeting' }"
+          @click="setSceneMode('meeting')"
+        >
+          <span class="scene-dot" /> 会议模式
+          <span class="scene-tag">纪要</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h4 class="section-title">终端语音控制</h4>
+      <p class="section-hint">桌面端会优先读取当前绑定语音控制工作流里的 voice_wake 配置做本地唤醒；命中后，小球会进入“等待指令”状态（蓝色），再按控制指令库中的候选话术做本地匹配，voice_intent 节点可选。</p>
+      <div class="voice-card">
+        <div class="voice-row">
+          <span class="voice-label">等待时长</span>
+          <span>{{ Math.round(appStore.voiceControl.commandTimeoutMs / 1000) }} 秒</span>
+        </div>
+        <div class="voice-row">
+          <span class="voice-label">语音控制</span>
+          <span :class="appStore.voiceControl.enabled ? 'voice-on' : 'voice-off'">{{ appStore.voiceControl.enabled ? '已启用' : '已关闭' }}</span>
+        </div>
+      </div>
+      <div class="field action-row">
+        <button class="action-btn" :disabled="authLoading" @click="refreshVoiceControl">刷新语音控制配置</button>
+      </div>
+      <p class="section-hint">实际唤醒词和同音词识别以当前绑定工作流里的 voice_wake 节点配置为准；命令近义词匹配则来自控制指令库。这里仅展示全局运行状态和等待时长。</p>
     </section>
 
     <section class="settings-section">
@@ -542,4 +600,91 @@ onMounted(() => {
   border-radius: 10px;
   resize: vertical;
 }
+
+/* Scene mode segmented control */
+.scene-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.scene-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.6);
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-align: left;
+}
+
+.scene-btn:hover { background: rgba(255, 255, 255, 0.9); }
+
+.scene-btn .scene-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.scene-btn .scene-tag {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.scene-btn.report.active {
+  color: #0f766e;
+  border-color: #0f766e;
+  background: rgba(15, 118, 110, 0.08);
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.15);
+}
+
+.scene-btn.meeting.active {
+  color: #b45309;
+  border-color: #d97706;
+  background: rgba(217, 119, 6, 0.08);
+  box-shadow: 0 4px 12px rgba(217, 119, 6, 0.18);
+}
+
+/* Voice control read-only card */
+.voice-card {
+  margin: 0 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.voice-label {
+  color: #64748b;
+}
+
+.voice-wake {
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  color: #1d4ed8;
+}
+
+.voice-on { color: #0f766e; }
+.voice-off { color: #94a3b8; }
 </style>

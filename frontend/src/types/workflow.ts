@@ -1,9 +1,9 @@
-export type WorkflowBindingKey = 'realtime' | 'batch' | 'meeting'
+export type WorkflowBindingKey = 'realtime' | 'batch' | 'meeting' | 'voice_control'
 export type WorkflowOwnerType = 'system' | 'user'
-export type WorkflowType = 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting'
+export type WorkflowType = 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control'
 export type ActiveWorkflowType = Exclude<WorkflowType, 'legacy'>
-export type WorkflowSourceKind = 'legacy_text' | 'batch_asr' | 'realtime_asr'
-export type WorkflowTargetKind = 'transcript' | 'meeting_summary'
+export type WorkflowSourceKind = 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake'
+export type WorkflowTargetKind = 'transcript' | 'meeting_summary' | 'voice_command'
 
 export interface WorkflowPreviewNode {
   id?: number

@@ -47,6 +47,7 @@ type UserWorkflowBindingsModel struct {
 	RealtimeWorkflowID *uint64
 	BatchWorkflowID    *uint64
 	MeetingWorkflowID  *uint64
+	VoiceWorkflowID    *uint64 `gorm:"column:voice_control_workflow_id"`
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -128,6 +129,7 @@ func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*dom
 		RealtimeWorkflowID: model.RealtimeWorkflowID,
 		BatchWorkflowID:    model.BatchWorkflowID,
 		MeetingWorkflowID:  model.MeetingWorkflowID,
+		VoiceWorkflowID:    model.VoiceWorkflowID,
 		CreatedAt:          model.CreatedAt,
 		UpdatedAt:          model.UpdatedAt,
 	}, nil
@@ -172,11 +174,12 @@ func (r *UserRepo) SaveWorkflowBindings(ctx context.Context, bindings *domain.Wo
 		RealtimeWorkflowID: bindings.RealtimeWorkflowID,
 		BatchWorkflowID:    bindings.BatchWorkflowID,
 		MeetingWorkflowID:  bindings.MeetingWorkflowID,
+		VoiceWorkflowID:    bindings.VoiceWorkflowID,
 	}
 
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"realtime_workflow_id", "batch_workflow_id", "meeting_workflow_id", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"realtime_workflow_id", "batch_workflow_id", "meeting_workflow_id", "voice_control_workflow_id", "updated_at"}),
 	}).Create(model).Error; err != nil {
 		return err
 	}

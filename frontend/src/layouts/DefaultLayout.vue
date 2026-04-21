@@ -193,7 +193,9 @@ const menuOptions: MenuOption[] = [
     icon: renderMenuIcon('terminologySection', '术语库'),
     children: [
       { label: '术语库管理', key: '/terminology', icon: renderMenuIcon('terminology', '术语库管理') },
+      { label: '语气词库', key: '/terminology/fillers', icon: renderMenuIcon('terminology', '语气词库') },
       { label: '敏感词库', key: '/terminology/sensitive', icon: renderMenuIcon('sensitive', '敏感词库') },
+      { label: '控制指令库', key: '/terminology/voice-commands', icon: renderMenuIcon('terminology', '控制指令库') },
       { label: '纠错规则', key: '/terminology/rules', icon: renderMenuIcon('terminology', '纠错规则') },
     ],
   },
@@ -234,6 +236,10 @@ const currentPath = computed(() => {
     return '/meetings/voiceprints'
   if (path.startsWith('/meetings'))
     return '/meetings'
+  if (path.startsWith('/terminology/fillers'))
+    return '/terminology/fillers'
+  if (path.startsWith('/terminology/voice-commands'))
+    return '/terminology/voice-commands'
   if (path.startsWith('/terminology/sensitive'))
     return '/terminology/sensitive'
   if (path.startsWith('/terminology/rules'))

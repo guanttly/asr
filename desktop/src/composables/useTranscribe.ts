@@ -1,8 +1,10 @@
 import { ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useInjector } from './useInjector'
-import { authedFetch, readResponseEnvelope } from '@/utils/auth'
+import { useVoiceControl } from './useVoiceControl'
+import { authedFetch, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
+import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
 
 const TARGET_SAMPLE_RATE = 16000
 const CHUNK_MS = 300
@@ -15,6 +17,8 @@ const MAX_SEGMENT_CHUNKS = 40
 export function useTranscribe() {
   const appStore = useAppStore()
   const { injectText } = useInjector()
+  const voiceControl = useVoiceControl()
+  void voiceControl.ensureLoaded()
 
   const listeningLevel = ref(0)
   const noiseFloorLevel = ref(DEFAULT_NOISE_FLOOR)
@@ -30,6 +34,9 @@ export function useTranscribe() {
   let trailingSilence = 0
   let uploadQueue: { file: File, duration: number }[] = []
   let uploadPromise: Promise<void> | null = null
+  let saveSessionPromise: Promise<void> | null = null
+  const sessionAudioChunks: ArrayBuffer[] = []
+  const sessionRecognizedTexts: string[] = []
 
   function computeRms(chunk: ArrayBuffer): number {
     const samples = new Int16Array(chunk)
@@ -89,6 +96,52 @@ export function useTranscribe() {
 
   function hasContent(value?: string): boolean {
     return /[A-Z0-9\u3400-\u9FFF]/i.test(normalizeText(value))
+  }
+
+  async function applyRealtimeWorkflow(text: string) {
+    const workflowId = await ensureRealtimeWorkflowBinding()
+    if (workflowId == null)
+      return text
+
+    status.value = 'processing'
+    try {
+      const resp = await authedFetch(`/api/admin/workflows/${workflowId}/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ input_text: text }),
+      })
+      const json = await readResponseEnvelope<{ final_text?: string, status?: string, error_message?: string }>(resp)
+      if (!resp.ok)
+        throw new Error(json.message || `工作流执行失败: ${resp.status}`)
+
+      const hasFinalText = Object.prototype.hasOwnProperty.call(json.data || {}, 'final_text')
+      const output = normalizeText(hasFinalText ? json.data?.final_text : text)
+      if (hasFinalText)
+        return output
+
+      if (!output || !hasContent(output))
+        return text
+
+      await debugLog('transcribe.workflow', 'applied realtime workflow to segment', {
+        workflowId,
+        status: json.data?.status || 'completed',
+      })
+      return output
+    }
+    catch (error) {
+      await debugLog('transcribe.workflow', 'realtime workflow execution failed, fallback to raw text', error instanceof Error ? {
+        workflowId,
+        message: error.message,
+        stack: error.stack,
+      } : { workflowId, error })
+      return text
+    }
+    finally {
+      if (status.value === 'processing')
+        status.value = 'uploading'
+    }
   }
 
   function writeASCII(view: DataView, offset: number, value: string) {
@@ -156,7 +209,9 @@ export function useTranscribe() {
   }
 
   async function flushUploadQueue() {
-    if (uploadPromise) return
+    if (uploadPromise)
+      return uploadPromise
+
     uploadPromise = (async () => {
       try {
         while (uploadQueue.length > 0) {
@@ -179,8 +234,24 @@ export function useTranscribe() {
               void debugLog('transcribe.error', 'segment upload failed', { status: resp.status, message: lastError.value })
               continue
             }
-            const text = normalizeText(json.data?.text)
-            if (!text || !hasContent(text)) continue
+            const rawText = normalizeText(json.data?.text)
+            if (!rawText || !hasContent(rawText)) continue
+            sessionRecognizedTexts.push(rawText)
+
+            // Voice control: detect wake word / classify command. When swallowed,
+            // we skip workflow / inject / history append for this segment so the
+            // user's command words don't pollute the document.
+            const voiceResult = await voiceControl.handleSegmentText(rawText)
+            if (voiceResult.swallow) {
+              await debugLog('voice.command', 'segment swallowed', { rawText, voiceResult })
+              continue
+            }
+
+            const text = await applyRealtimeWorkflow(rawText)
+            if (!text || !hasContent(text)) {
+              await debugLog('transcribe.workflow', 'workflow produced empty segment text', { rawText })
+              continue
+            }
 
             appStore.appendHistory(text)
             lastError.value = ''
@@ -204,13 +275,126 @@ export function useTranscribe() {
       finally {
         pendingCount.value = uploadQueue.length
         uploadPromise = null
-        if (status.value === 'uploading') status.value = 'listening'
+        if (status.value === 'uploading' || status.value === 'processing') status.value = 'listening'
       }
     })()
+
+    return uploadPromise
+  }
+
+  async function persistRealtimeSession() {
+    const transcript = sessionRecognizedTexts.join('\n').trim()
+    if (!transcript)
+      return
+
+    if (saveSessionPromise)
+      return saveSessionPromise
+
+    const scene = appStore.sceneMode
+
+    saveSessionPromise = (async () => {
+      const duration = sessionAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
+
+      if (scene === 'meeting') {
+        await persistMeetingSession(transcript, duration)
+        return
+      }
+
+      const workflowId = await ensureRealtimeWorkflowBinding().catch(() => appStore.realtimeWorkflowId)
+
+      try {
+        if (sessionAudioChunks.length > 0) {
+          try {
+            const formData = new FormData()
+            formData.append('file', createWav(sessionAudioChunks, `realtime-session-${Date.now()}.wav`))
+            formData.append('result_text', transcript)
+            if (workflowId != null)
+              formData.append('workflow_id', String(workflowId))
+            await uploadRealtimeSessionTask(formData)
+          }
+          catch (error) {
+            await debugLog('transcribe.session', 'session audio upload failed, fallback to text-only task', error instanceof Error ? {
+              message: error.message,
+              stack: error.stack,
+            } : error)
+            await createRealtimeTranscriptionTask({
+              result_text: transcript,
+              duration,
+              workflow_id: workflowId ?? undefined,
+            })
+          }
+        }
+        else {
+          await createRealtimeTranscriptionTask({
+            result_text: transcript,
+            duration,
+            workflow_id: workflowId ?? undefined,
+          })
+        }
+
+        await debugLog('transcribe.session', 'saved realtime transcription session', {
+          duration,
+          workflowId,
+          hasAudio: sessionAudioChunks.length > 0,
+          segmentCount: sessionRecognizedTexts.length,
+        })
+      }
+      catch (error) {
+        lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
+        await debugLog('transcribe.session', 'failed to save realtime transcription session', error instanceof Error ? {
+          message: error.message,
+          stack: error.stack,
+        } : error)
+      }
+      finally {
+        saveSessionPromise = null
+      }
+    })()
+
+    return saveSessionPromise
+  }
+
+  async function persistMeetingSession(transcript: string, duration: number) {
+    try {
+      if (sessionAudioChunks.length === 0) {
+        // No audio means we cannot create a meeting (会议链路依赖音频). Fall
+        // back to a realtime task so the user does not lose the transcript.
+        await debugLog('transcribe.session', 'meeting scene without audio, fallback to realtime task')
+        await createRealtimeTranscriptionTask({
+          result_text: transcript,
+          duration,
+          workflow_id: appStore.realtimeWorkflowId ?? undefined,
+        })
+        return
+      }
+      const formData = new FormData()
+      formData.append('file', createWav(sessionAudioChunks, `meeting-session-${Date.now()}.wav`))
+      const meetingTitle = `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`
+      formData.append('title', meetingTitle)
+      if (appStore.meetingWorkflowId != null)
+        formData.append('workflow_id', String(appStore.meetingWorkflowId))
+      const result = await uploadMeetingFromAudio(formData)
+      await debugLog('transcribe.session', 'created meeting from desktop session', {
+        meetingId: result?.meeting?.id,
+        duration,
+        segmentCount: sessionRecognizedTexts.length,
+      })
+    }
+    catch (error) {
+      lastError.value = error instanceof Error ? error.message : '会议纪要任务创建失败'
+      await debugLog('transcribe.session', 'failed to create meeting session', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error)
+    }
+    finally {
+      saveSessionPromise = null
+    }
   }
 
   function handleChunk(chunk: ArrayBuffer) {
     const copied = chunk.slice(0)
+    sessionAudioChunks.push(copied)
     const rms = computeRms(copied)
     listeningLevel.value = rms
     const threshold = getThreshold()
@@ -255,16 +439,23 @@ export function useTranscribe() {
     }
   }
 
-  function stopAndFlush() {
+  async function stopAndFlush() {
     finalizeSegment('stop')
+    await flushUploadQueue()
+    await persistRealtimeSession()
     status.value = 'idle'
   }
 
   function reset() {
+    voiceControl.reset()
     resetActiveSegment()
     leadInChunks.splice(0, leadInChunks.length)
+    sessionAudioChunks.splice(0, sessionAudioChunks.length)
+    sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
     uploadQueue = []
     uploadPromise = null
+    saveSessionPromise = null
+    appStore.invalidateWorkflowBindings()
     noiseFloorLevel.value = DEFAULT_NOISE_FLOOR
     listeningLevel.value = 0
     status.value = 'idle'

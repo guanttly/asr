@@ -6,6 +6,7 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const DEFAULT_COMMAND_TIMEOUT_MS: typeof import('./stores/app')['DEFAULT_COMMAND_TIMEOUT_MS']
   const EffectScope: typeof import('vue')['EffectScope']
   const SETTINGS_STORAGE_KEY: typeof import('./stores/app')['SETTINGS_STORAGE_KEY']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
@@ -76,6 +77,7 @@ declare global {
   const useSlots: typeof import('vue')['useSlots']
   const useTemplateRef: typeof import('vue')['useTemplateRef']
   const useTranscribe: typeof import('./composables/useTranscribe')['useTranscribe']
+  const useVoiceControl: typeof import('./composables/useVoiceControl')['useVoiceControl']
   const watch: typeof import('vue')['watch']
   const watchEffect: typeof import('vue')['watchEffect']
   const watchPostEffect: typeof import('vue')['watchPostEffect']
@@ -89,4 +91,10 @@ declare global {
   // @ts-ignore
   export type { RecognitionSettings } from './composables/useSettings'
   import('./composables/useSettings')
+  // @ts-ignore
+  export type { SegmentHandleResult } from './composables/useVoiceControl'
+  import('./composables/useVoiceControl')
+  // @ts-ignore
+  export type { SceneMode, VoiceControlConfig } from './stores/app'
+  import('./stores/app')
 }

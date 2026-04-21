@@ -40,14 +40,13 @@ type NodeTestResult struct {
 
 // TestNode executes a single node handler against sample input.
 func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config json.RawMessage, inputText string, meta *ExecutionMeta) (*NodeTestResult, error) {
-	if nodeType.IsSource() {
+	handler, ok := e.handlers[nodeType]
+	if nodeType.IsSource() && !ok {
 		return &NodeTestResult{
 			DurationMs: 0,
 			Error:      "源节点仅用于声明输入来源，不能做文本级单节点测试。请测试后续处理节点，或执行整条工作流。",
 		}, nil
 	}
-
-	handler, ok := e.handlers[nodeType]
 	if !ok {
 		return nil, fmt.Errorf("unsupported node type: %s", nodeType)
 	}
@@ -73,7 +72,8 @@ func (e *Engine) TestNode(ctx context.Context, nodeType domain.NodeType, config 
 
 // TestNodeStream executes a single node and emits incremental events when supported.
 func (e *Engine) TestNodeStream(ctx context.Context, nodeType domain.NodeType, config json.RawMessage, inputText string, meta *ExecutionMeta, emit StreamEmitter) (*NodeTestResult, error) {
-	if nodeType.IsSource() {
+	handler, ok := e.handlers[nodeType]
+	if nodeType.IsSource() && !ok {
 		result := &NodeTestResult{
 			DurationMs: 0,
 			Error:      "源节点仅用于声明输入来源，不能做文本级单节点测试。请测试后续处理节点，或执行整条工作流。",
@@ -85,8 +85,6 @@ func (e *Engine) TestNodeStream(ctx context.Context, nodeType domain.NodeType, c
 		}
 		return result, nil
 	}
-
-	handler, ok := e.handlers[nodeType]
 	if !ok {
 		return nil, fmt.Errorf("unsupported node type: %s", nodeType)
 	}
@@ -132,10 +130,10 @@ func (e *Engine) TestNodeStream(ctx context.Context, nodeType domain.NodeType, c
 
 // ValidateNodeConfig validates a node config without executing the node.
 func (e *Engine) ValidateNodeConfig(nodeType domain.NodeType, config json.RawMessage) error {
-	if nodeType.IsSource() {
+	handler, ok := e.handlers[nodeType]
+	if nodeType.IsSource() && !ok {
 		return nil
 	}
-	handler, ok := e.handlers[nodeType]
 	if !ok {
 		return fmt.Errorf("unsupported node type: %s", nodeType)
 	}
@@ -181,7 +179,8 @@ func (e *Engine) Execute(ctx context.Context, nodes []domain.Node, inputText str
 			continue
 		}
 
-		if node.NodeType.IsSource() {
+		handler, ok := e.handlers[node.NodeType]
+		if node.NodeType.IsSource() && !ok {
 			detail, _ := json.Marshal(map[string]string{
 				"mode":        "declarative_source",
 				"source_kind": string(node.NodeType),
@@ -194,8 +193,6 @@ func (e *Engine) Execute(ctx context.Context, nodes []domain.Node, inputText str
 			nodeResults = append(nodeResults, nr)
 			continue
 		}
-
-		handler, ok := e.handlers[node.NodeType]
 		if !ok {
 			nr.Status = domain.NodeResultFailed
 			nr.OutputText = currentText

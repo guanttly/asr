@@ -4,7 +4,16 @@ import { defineStore } from 'pinia'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 export const SETTINGS_STORAGE_KEY = 'asr-desktop-settings'
+const SETTINGS_SYNC_CHANNEL = `${SETTINGS_STORAGE_KEY}:sync`
 const MAX_HISTORY = 50
+
+export type SceneMode = 'report' | 'meeting'
+export const DEFAULT_COMMAND_TIMEOUT_MS = 10000
+
+export interface VoiceControlConfig {
+  commandTimeoutMs: number
+  enabled: boolean
+}
 
 interface PersistedState {
   serverUrl: string
@@ -19,6 +28,7 @@ interface PersistedState {
   microphonePermissionGranted: boolean
   debugLoggingEnabled: boolean
   recognitionSettings: RecognitionSettings
+  sceneMode: SceneMode
 }
 
 const DEFAULT_RECOGNITION: RecognitionSettings = {
@@ -30,28 +40,7 @@ const DEFAULT_RECOGNITION: RecognitionSettings = {
   singleChunkPeakMultiplier: 1.45,
 }
 
-function loadPersisted(): PersistedState {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<PersistedState>
-      return {
-        serverUrl: normalizeServerUrl(parsed.serverUrl || DEFAULT_SERVER_URL),
-        token: parsed.token || '',
-        deviceAlias: parsed.deviceAlias || '',
-        machineCode: parsed.machineCode || '',
-        username: parsed.username || '',
-        displayName: parsed.displayName || '',
-        role: parsed.role || '',
-        autoInject: parsed.autoInject !== false,
-        autoHideWindowOnRecordStart: false,
-        microphonePermissionGranted: parsed.microphonePermissionGranted === true,
-        debugLoggingEnabled: parsed.debugLoggingEnabled === true,
-        recognitionSettings: { ...DEFAULT_RECOGNITION, ...parsed.recognitionSettings },
-      }
-    }
-  }
-  catch { /* ignore */ }
+function defaultPersistedState(): PersistedState {
   return {
     serverUrl: DEFAULT_SERVER_URL,
     token: '',
@@ -65,7 +54,47 @@ function loadPersisted(): PersistedState {
     microphonePermissionGranted: false,
     debugLoggingEnabled: false,
     recognitionSettings: { ...DEFAULT_RECOGNITION },
+    sceneMode: 'report',
   }
+}
+
+function normalizePersistedState(parsed?: Partial<PersistedState> | null): PersistedState {
+  const defaults = defaultPersistedState()
+  return {
+    serverUrl: normalizeServerUrl(parsed?.serverUrl || defaults.serverUrl),
+    token: parsed?.token || '',
+    deviceAlias: parsed?.deviceAlias || '',
+    machineCode: parsed?.machineCode || '',
+    username: parsed?.username || '',
+    displayName: parsed?.displayName || '',
+    role: parsed?.role || '',
+    autoInject: parsed?.autoInject !== false,
+    autoHideWindowOnRecordStart: parsed?.autoHideWindowOnRecordStart === true,
+    microphonePermissionGranted: parsed?.microphonePermissionGranted === true,
+    debugLoggingEnabled: parsed?.debugLoggingEnabled === true,
+    recognitionSettings: { ...DEFAULT_RECOGNITION, ...parsed?.recognitionSettings },
+    sceneMode: parsed?.sceneMode === 'meeting' ? 'meeting' : 'report',
+  }
+}
+
+function parsePersistedState(raw?: string | null): PersistedState | null {
+  if (!raw)
+    return null
+
+  try {
+    return normalizePersistedState(JSON.parse(raw) as Partial<PersistedState>)
+  }
+  catch {
+    return null
+  }
+}
+
+function serializePersistedState(state: PersistedState) {
+  return JSON.stringify(state)
+}
+
+function loadPersisted(): PersistedState {
+  return parsePersistedState(localStorage.getItem(SETTINGS_STORAGE_KEY)) || defaultPersistedState()
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -83,23 +112,32 @@ export const useAppStore = defineStore('app', () => {
   const microphonePermissionGranted = ref(persisted.microphonePermissionGranted)
   const debugLoggingEnabled = ref(persisted.debugLoggingEnabled)
   const recognitionSettings = reactive<RecognitionSettings>({ ...persisted.recognitionSettings })
+  const sceneMode = ref<SceneMode>(persisted.sceneMode)
+  const voiceControl = reactive<VoiceControlConfig>({
+    commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    enabled: true,
+  })
+  const voiceControlLoaded = ref(false)
+  const voiceCommandActive = ref(false)
+  const voiceCommandProcessing = ref(false)
+  const voiceCommandRemainingMs = ref(0)
+  const realtimeWorkflowId = ref<number | null>(null)
+  const meetingWorkflowId = ref<number | null>(null)
+  const voiceWorkflowId = ref<number | null>(null)
+  const workflowBindingsLoaded = ref(false)
 
   const history = ref<string[]>([])
   const isRecording = ref(false)
   const expanded = ref(false)
 
-  function appendHistory(text: string) {
-    history.value.unshift(text)
-    if (history.value.length > MAX_HISTORY)
-      history.value.splice(MAX_HISTORY)
-  }
+  let suppressPersist = false
+  let lastSerializedState = serializePersistedState(persisted)
+  const syncChannel = typeof BroadcastChannel !== 'undefined'
+    ? new BroadcastChannel(SETTINGS_SYNC_CHANNEL)
+    : null
 
-  function clearHistory() {
-    history.value = []
-  }
-
-  function persist() {
-    const state: PersistedState = {
+  function snapshotState(): PersistedState {
+    return {
       serverUrl: serverUrl.value,
       token: token.value,
       deviceAlias: deviceAlias.value,
@@ -112,8 +150,63 @@ export const useAppStore = defineStore('app', () => {
       microphonePermissionGranted: microphonePermissionGranted.value,
       debugLoggingEnabled: debugLoggingEnabled.value,
       recognitionSettings: { ...recognitionSettings },
+      sceneMode: sceneMode.value,
     }
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(state))
+  }
+
+  function applyPersistedState(next: PersistedState) {
+    suppressPersist = true
+    serverUrl.value = next.serverUrl
+    token.value = next.token
+    deviceAlias.value = next.deviceAlias
+    machineCode.value = next.machineCode
+    username.value = next.username
+    displayName.value = next.displayName
+    role.value = next.role
+    autoInject.value = next.autoInject
+    autoHideWindowOnRecordStart.value = next.autoHideWindowOnRecordStart
+    microphonePermissionGranted.value = next.microphonePermissionGranted
+    debugLoggingEnabled.value = next.debugLoggingEnabled
+    Object.assign(recognitionSettings, next.recognitionSettings)
+    sceneMode.value = next.sceneMode
+    suppressPersist = false
+    lastSerializedState = serializePersistedState(next)
+  }
+
+  function syncFromRaw(raw?: string | null) {
+    const next = parsePersistedState(raw)
+    if (!next)
+      return
+
+    const serialized = serializePersistedState(next)
+    if (serialized === lastSerializedState)
+      return
+
+    applyPersistedState(next)
+  }
+
+  function appendHistory(text: string) {
+    history.value.unshift(text)
+    if (history.value.length > MAX_HISTORY)
+      history.value.splice(MAX_HISTORY)
+  }
+
+  function clearHistory() {
+    history.value = []
+  }
+
+  function persist() {
+    if (suppressPersist)
+      return
+
+    const state = snapshotState()
+    const serialized = serializePersistedState(state)
+    if (serialized === lastSerializedState)
+      return
+
+    lastSerializedState = serialized
+    localStorage.setItem(SETTINGS_STORAGE_KEY, serialized)
+    syncChannel?.postMessage(serialized)
   }
 
   function applyAuthenticatedUser(user?: { display_name?: string, role?: string, username?: string } | null) {
@@ -129,6 +222,31 @@ export const useAppStore = defineStore('app', () => {
     username.value = ''
     displayName.value = ''
     role.value = ''
+    realtimeWorkflowId.value = null
+    meetingWorkflowId.value = null
+    voiceWorkflowId.value = null
+    workflowBindingsLoaded.value = false
+  }
+
+  function applyWorkflowBindings(bindings?: { realtime?: number | null, meeting?: number | null, voice_control?: number | null } | null) {
+    realtimeWorkflowId.value = typeof bindings?.realtime === 'number' ? bindings.realtime : null
+    meetingWorkflowId.value = typeof bindings?.meeting === 'number' ? bindings.meeting : null
+    voiceWorkflowId.value = typeof bindings?.voice_control === 'number' ? bindings.voice_control : null
+    workflowBindingsLoaded.value = true
+  }
+
+  function invalidateWorkflowBindings() {
+    workflowBindingsLoaded.value = false
+  }
+
+  function applyVoiceControl(cfg?: Partial<VoiceControlConfig> | null) {
+    if (cfg && typeof cfg.commandTimeoutMs === 'number' && cfg.commandTimeoutMs > 0) {
+      voiceControl.commandTimeoutMs = cfg.commandTimeoutMs
+    }
+    if (cfg && typeof cfg.enabled === 'boolean') {
+      voiceControl.enabled = cfg.enabled
+    }
+    voiceControlLoaded.value = true
   }
 
   // Auto-persist on key config changes
@@ -140,11 +258,28 @@ export const useAppStore = defineStore('app', () => {
     username,
     displayName,
     role,
+    realtimeWorkflowId,
+    meetingWorkflowId,
+    voiceWorkflowId,
+    workflowBindingsLoaded,
     autoInject,
     autoHideWindowOnRecordStart,
     microphonePermissionGranted,
     debugLoggingEnabled,
+    sceneMode,
   ], () => persist())
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (event) => {
+      if (event.key === SETTINGS_STORAGE_KEY)
+        syncFromRaw(event.newValue)
+    })
+  }
+
+  syncChannel?.addEventListener('message', (event) => {
+    if (typeof event.data === 'string')
+      syncFromRaw(event.data)
+  })
 
   return {
     serverUrl,
@@ -154,15 +289,28 @@ export const useAppStore = defineStore('app', () => {
     username,
     displayName,
     role,
+    realtimeWorkflowId,
+    meetingWorkflowId,
+    voiceWorkflowId,
+    workflowBindingsLoaded,
     autoInject,
     autoHideWindowOnRecordStart,
     microphonePermissionGranted,
     debugLoggingEnabled,
     recognitionSettings,
+    sceneMode,
+    voiceControl,
+    voiceControlLoaded,
+    voiceCommandActive,
+    voiceCommandProcessing,
+    voiceCommandRemainingMs,
     history,
     isRecording,
     expanded,
     applyAuthenticatedUser,
+    applyWorkflowBindings,
+    invalidateWorkflowBindings,
+    applyVoiceControl,
     clearAuth,
     appendHistory,
     clearHistory,

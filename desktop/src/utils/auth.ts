@@ -23,6 +23,13 @@ export interface MachineIdentity {
   mac_addresses: string[]
 }
 
+interface WorkflowBindingsPayload {
+  realtime?: number | null
+  batch?: number | null
+  meeting?: number | null
+  voice_control?: number | null
+}
+
 interface AnonymousLoginPayload {
   token: string
   expires_in: number
@@ -30,6 +37,7 @@ interface AnonymousLoginPayload {
 }
 
 let anonymousLoginPromise: Promise<AuthUser> | null = null
+let workflowBindingsPromise: Promise<WorkflowBindingsPayload | null> | null = null
 
 function mergeHeaders(headers?: HeadersInit, extra?: Record<string, string>) {
   const merged = new Headers(headers)
@@ -83,6 +91,11 @@ function applyUser(user?: AuthUser | null) {
   if (user?.display_name?.trim())
     appStore.deviceAlias = user.display_name.trim()
   appStore.persist()
+}
+
+function applyWorkflowBindings(bindings?: WorkflowBindingsPayload | null) {
+  const appStore = useAppStore()
+  appStore.applyWorkflowBindings(bindings)
 }
 
 function snapshotUser(appStore = useAppStore()): AuthUser {
@@ -165,6 +178,62 @@ export async function getCurrentUser() {
     throw new Error(payload.message || '获取当前用户失败')
   applyUser(payload.data)
   return payload.data
+}
+
+export async function getCurrentUserWorkflowBindings(): Promise<WorkflowBindingsPayload | null> {
+  const response = await authedFetch('/api/admin/me/workflow-bindings')
+  const payload = await readResponseEnvelope<WorkflowBindingsPayload>(response)
+  if (!response.ok) {
+    throw new Error(payload.message || '获取工作流绑定失败')
+  }
+  applyWorkflowBindings(payload.data || null)
+  return payload.data || null
+}
+
+export async function ensureRealtimeWorkflowBinding(force = false): Promise<number | null> {
+  const appStore = useAppStore()
+  if (!force && appStore.workflowBindingsLoaded)
+    return appStore.realtimeWorkflowId
+
+  if (workflowBindingsPromise && !force) {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.realtime === 'number' ? bindings.realtime : null
+  }
+
+  workflowBindingsPromise = (async () => {
+    return await getCurrentUserWorkflowBindings()
+  })()
+
+  try {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.realtime === 'number' ? bindings.realtime : null
+  }
+  finally {
+    workflowBindingsPromise = null
+  }
+}
+
+export async function ensureVoiceWorkflowBinding(force = false): Promise<number | null> {
+  const appStore = useAppStore()
+  if (!force && appStore.workflowBindingsLoaded)
+    return appStore.voiceWorkflowId
+
+  if (workflowBindingsPromise && !force) {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.voice_control === 'number' ? bindings.voice_control : null
+  }
+
+  workflowBindingsPromise = (async () => {
+    return await getCurrentUserWorkflowBindings()
+  })()
+
+  try {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.voice_control === 'number' ? bindings.voice_control : null
+  }
+  finally {
+    workflowBindingsPromise = null
+  }
 }
 
 export async function updateProfile(displayName: string) {

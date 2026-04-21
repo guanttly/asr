@@ -153,16 +153,30 @@ class DiarizationEngine:
         if not cache_dir:
             return True
 
+        seed_cache_dir = os.path.abspath(
+            os.getenv("NATIVE_MODEL_CACHE_SEED_DIR", "./models/native_cache")
+        )
+
         required_files = ("campplus_cn_en_common.pt",)
         missing_files = [
             file_name for file_name in required_files
             if not any(Path(cache_dir).rglob(file_name))
         ]
         if missing_files:
+            seed_missing_files = [
+                file_name for file_name in required_files
+                if not any(Path(seed_cache_dir).rglob(file_name))
+            ]
+            seed_state = (
+                f"seed_cache_dir={seed_cache_dir}, seed_missing={', '.join(seed_missing_files)}"
+                if Path(seed_cache_dir).exists()
+                else f"seed_cache_dir={seed_cache_dir}, seed_missing=directory-not-found"
+            )
             logger.warning(
-                "native diarization 模型缓存不完整，跳过原生流水线并回退兼容模式: {} (cache_dir={})",
+                "native diarization 模型缓存不完整，跳过原生流水线并回退兼容模式: {} (cache_dir={}, {})",
                 ", ".join(missing_files),
                 cache_dir,
+                seed_state,
             )
             return False
         return True

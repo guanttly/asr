@@ -5,8 +5,10 @@ import { useMessage } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { getFillerDicts } from '@/api/filler'
 import { getSensitiveDicts } from '@/api/sensitive'
 import { getTermDicts } from '@/api/terminology'
+import { getVoiceCommandDicts } from '@/api/voiceCommands'
 import { createWorkflow, deleteWorkflow, executeWorkflow, getNodeTypes, getWorkflow, getWorkflows, testNodeStream, updateWorkflow, updateWorkflowNodes } from '@/api/workflow'
 import iconArrowRight from '@/assets/icons/icon-arrow-right.svg?raw'
 import iconChevronDown from '@/assets/icons/icon-chevron-down.svg?raw'
@@ -41,9 +43,9 @@ interface TemplateOption {
   label: string
   value: number
   description?: string
-  workflow_type?: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting'
-  source_kind?: 'legacy_text' | 'batch_asr' | 'realtime_asr'
-  target_kind?: 'transcript' | 'meeting_summary'
+  workflow_type?: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control'
+  source_kind?: 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake'
+  target_kind?: 'transcript' | 'meeting_summary' | 'voice_command'
   is_legacy?: boolean
 }
 
@@ -112,7 +114,9 @@ const showChangedPreviewOnly = ref(false)
 const highlightedNodeIndex = ref<number | null>(null)
 const nodeTypes = ref<NodeTypeOption[]>([])
 const termDictOptions = ref<DictOption[]>([])
+const fillerDictOptions = ref<DictOption[]>([])
 const sensitiveDictOptions = ref<DictOption[]>([])
+const voiceCommandDictOptions = ref<DictOption[]>([])
 const templateOptions = ref<TemplateOption[]>([])
 const selectedTemplateId = ref<number | null>(null)
 const templatePreviewNodes = ref<EditableNode[]>([])
@@ -137,9 +141,9 @@ const executeResult = ref<WorkflowExecutionResult | null>(null)
 const workflow = reactive({
   name: '',
   description: '',
-  workflow_type: 'legacy' as 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting',
-  source_kind: 'legacy_text' as 'legacy_text' | 'batch_asr' | 'realtime_asr',
-  target_kind: 'transcript' as 'transcript' | 'meeting_summary',
+  workflow_type: 'legacy' as 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control',
+  source_kind: 'legacy_text' as 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake',
+  target_kind: 'transcript' as 'transcript' | 'meeting_summary' | 'voice_command',
   is_legacy: true,
   validation_message: '',
   is_published: false,
@@ -487,6 +491,8 @@ const nodeTestHint = computed(() => {
     return '上传音频后会直接调用说话人分离服务，并返回当前节点输出。'
   if (selectedNode.value.node_type === 'batch_asr' || selectedNode.value.node_type === 'realtime_asr')
     return '上传音频后会先做一次短音频识别，返回当前源节点的识别结果。'
+  if (selectedNode.value.node_type === 'voice_wake')
+    return '输入一段转写文本，验证是否能命中唤醒词、同音词，以及能否正确提取尾随指令。'
   return '输入样本文本，验证当前节点输出。'
 })
 const workflowTestHint = computed(() => {
@@ -503,6 +509,7 @@ function workflowTypeLabel(value?: typeof workflow.workflow_type) {
     batch_transcription: '批量转写',
     realtime_transcription: '实时语音识别',
     meeting: '会议纪要',
+    voice_control: '语音控制',
   }
   return map[value || ''] || value || '-'
 }
@@ -512,6 +519,7 @@ function sourceKindLabel(value?: typeof workflow.source_kind) {
     legacy_text: '旧版文本输入',
     batch_asr: '非实时语音转写',
     realtime_asr: '实时语音转写',
+    voice_wake: '唤醒词识别',
   }
   return map[value || ''] || value || '-'
 }
@@ -520,6 +528,7 @@ function targetKindLabel(value?: typeof workflow.target_kind) {
   const map: Record<string, string> = {
     transcript: '整理后文本',
     meeting_summary: '会议纪要',
+    voice_command: '控制指令结果',
   }
   return map[value || ''] || value || '-'
 }
@@ -822,6 +831,36 @@ async function loadSensitiveDictOptions() {
   }
   catch {
     message.warning('敏感词库加载失败，敏感词节点仍可手动填写 JSON 配置')
+  }
+}
+
+async function loadFillerDictOptions() {
+  try {
+    const result = await getFillerDicts({ offset: 0, limit: 100 })
+    fillerDictOptions.value = (result.data.items || [])
+      .filter((item: { id: number, name: string, scene: string, is_base: boolean }) => !item.is_base)
+      .map((item: { id: number, name: string, scene: string }) => ({
+        label: `${item.name} / ${item.scene}`,
+        value: item.id,
+      }))
+  }
+  catch {
+    message.warning('语气词库加载失败，语气词节点仍可手动填写 JSON 配置')
+  }
+}
+
+async function loadVoiceCommandDictOptions() {
+  try {
+    const result = await getVoiceCommandDicts({ offset: 0, limit: 100 })
+    voiceCommandDictOptions.value = (result.data.items || [])
+      .filter((item: { id: number, name: string, group_key: string, is_base: boolean }) => !item.is_base)
+      .map((item: { id: number, name: string, group_key: string }) => ({
+        label: `${item.name} / ${item.group_key}`,
+        value: item.id,
+      }))
+  }
+  catch {
+    message.warning('控制指令组加载失败，语音控制节点仍可手动填写 JSON 配置')
   }
 }
 
@@ -1261,7 +1300,7 @@ async function handleExecuteWorkflow() {
 
 onMounted(async () => {
   await loadPage()
-  await Promise.all([loadTermDictOptions(), loadSensitiveDictOptions(), loadTemplateOptions()])
+  await Promise.all([loadTermDictOptions(), loadFillerDictOptions(), loadSensitiveDictOptions(), loadVoiceCommandDictOptions(), loadTemplateOptions()])
 })
 
 onBeforeUnmount(() => {
@@ -1663,15 +1702,18 @@ watch(selectedIndex, () => {
                   <div class="grid gap-3">
                     <div>
                       <div class="text-xs text-slate/70">
-                        预设过滤词
+                        场景语气词库
                       </div>
-                      <NInput
-                        :value="listToText(selectedConfig.filter_words)"
-                        type="textarea"
-                        :autosize="{ minRows: 4, maxRows: 8 }"
-                        placeholder="每行一个，或用逗号分隔"
-                        @update:value="updateSelectedConfig({ filter_words: textToList($event) })"
+                      <NSelect
+                        :value="selectedConfig.dict_id || null"
+                        clearable
+                        :options="fillerDictOptions"
+                        placeholder="不选则仅使用基础语气词库"
+                        @update:value="updateSelectedConfig({ dict_id: $event || 0 })"
                       />
+                      <div class="mt-2 text-[11px] leading-5 text-slate/65">
+                        基础语气词库会自动参与过滤，这里只选择当前工作流节点额外叠加的场景词库。
+                      </div>
                     </div>
                     <div>
                       <div class="text-xs text-slate/70">
@@ -1751,6 +1793,93 @@ watch(selectedIndex, () => {
                       placeholder="Prompt 模板，使用 {{TEXT}} 作为原文占位符"
                       @update:value="updateSelectedConfig({ prompt_template: $event })"
                     />
+                  </div>
+                </template>
+
+                <template v-else-if="selectedNode.node_type === 'voice_intent'">
+                  <div class="grid gap-3">
+                    <div class="grid gap-3 lg:grid-cols-2">
+                      <NInput :value="selectedConfig.endpoint" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.model" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
+                    </div>
+                    <div class="text-xs leading-6 text-slate/75">
+                      该节点用于语音控制意图识别，建议配专用分类 Prompt，并通过控制指令库限定有效分组，而不是复用普通纠错节点配置。
+                    </div>
+                    <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                    <div class="grid gap-3 lg:grid-cols-3">
+                      <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0 })" />
+                      <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="64" @update:value="updateSelectedConfig({ max_tokens: $event ?? 512 })" />
+                      <div class="flex items-center gap-2 rounded-2 bg-white px-3 py-2.5">
+                        <span class="text-xs text-slate">自动附加基础指令组</span>
+                        <NSwitch :value="selectedConfig.include_base" @update:value="updateSelectedConfig({ include_base: $event })" />
+                      </div>
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        额外有效分组
+                      </div>
+                      <NSelect
+                        :value="selectedConfig.dict_ids || []"
+                        multiple
+                        filterable
+                        clearable
+                        :options="voiceCommandDictOptions"
+                        placeholder="选择当前节点允许命中的额外控制指令组"
+                        @update:value="updateSelectedConfig({ dict_ids: Array.isArray($event) ? $event : [] })"
+                      />
+                      <div class="mt-2 text-[11px] leading-5 text-slate/65">
+                        基础组按开关自动叠加，这里只选择需要额外开放给当前 workflow 的控制分组。
+                      </div>
+                    </div>
+                    <NInput
+                      :value="selectedConfig.prompt_template"
+                      type="textarea"
+                      :autosize="{ minRows: 6, maxRows: 12 }"
+                      placeholder="Prompt 模板，支持 {{TEXT}}、{{COMMAND_LIBRARY}}、{{EXTRA_PROMPT}} 占位符"
+                      @update:value="updateSelectedConfig({ prompt_template: $event })"
+                    />
+                    <NInput
+                      :value="selectedConfig.extra_prompt"
+                      type="textarea"
+                      :autosize="{ minRows: 3, maxRows: 6 }"
+                      placeholder="可选附加提示：补充当前控制流程的限制、优先级或禁用项"
+                      @update:value="updateSelectedConfig({ extra_prompt: $event })"
+                    />
+                  </div>
+                </template>
+
+                <template v-else-if="selectedNode.node_type === 'voice_wake'">
+                  <div class="grid gap-3">
+                    <div class="rounded-2 bg-white px-3 py-3 text-xs leading-6 text-slate/80">
+                      该节点是语音控制工作流的固定源节点。它不会调用 ASR，而是对桌面端上传的转写文本做唤醒词识别；命中后会把剩余文本继续传给 voice_intent 节点。
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        唤醒词列表
+                      </div>
+                      <NInput
+                        :value="listToText(selectedConfig.wake_words)"
+                        type="textarea"
+                        :autosize="{ minRows: 3, maxRows: 6 }"
+                        placeholder="每行一个正式唤醒词，例如：你好小鲨"
+                        @update:value="updateSelectedConfig({ wake_words: textToList($event) })"
+                      />
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        同音 / 易错识别词
+                      </div>
+                      <NInput
+                        :value="listToText(selectedConfig.homophone_words)"
+                        type="textarea"
+                        :autosize="{ minRows: 4, maxRows: 8 }"
+                        placeholder="每行一个，例如：你好小莎、你好小沙、你好小善"
+                        @update:value="updateSelectedConfig({ homophone_words: textToList($event) })"
+                      />
+                      <div class="mt-2 text-[11px] leading-5 text-slate/65">
+                        这里建议填写 ASR 日志里出现过的同音误识别词。命中任一候选后，节点会自动截掉唤醒词，只把后面的真实控制指令交给 voice_intent。
+                      </div>
+                    </div>
                   </div>
                 </template>
 

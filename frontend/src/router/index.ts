@@ -53,7 +53,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'workflows/application-settings',
         name: 'application-settings',
-        meta: { pageManagedScroll: true, title: '应用配置', desc: '在工作流目录下统一配置实时、批量和会议纪要应用默认绑定的工作流。' },
+        meta: { pageManagedScroll: true, title: '应用配置', desc: '在工作流目录下统一配置实时、批量、会议纪要和语音控制应用默认绑定的工作流。' },
         component: () => import('@/pages/application/settings.vue'),
       },
       {
@@ -115,6 +115,18 @@ const routes: RouteRecordRaw[] = [
         name: 'terminology-sensitive',
         meta: { pageManagedScroll: true, title: '敏感词库', desc: '维护基础敏感词库和各业务场景词库，供敏感词过滤节点直接选择。' },
         component: () => import('@/pages/terminology/sensitive.vue'),
+      },
+      {
+        path: 'terminology/fillers',
+        name: 'terminology-fillers',
+        meta: { pageManagedScroll: true, title: '语气词库', desc: '维护基础语气词库和各业务场景词库，供语气词过滤节点直接选择。' },
+        component: () => import('@/pages/terminology/fillers.vue'),
+      },
+      {
+        path: 'terminology/voice-commands',
+        name: 'terminology-voice-commands',
+        meta: { pageManagedScroll: true, title: '控制指令库', desc: '维护语音控制工作流里可识别的控制指令组、候选话术与有效分组。' },
+        component: () => import('@/pages/terminology/voice-commands.vue'),
       },
       {
         path: 'system/users',

@@ -743,17 +743,21 @@ onMounted(async () => {
 
               <template v-else-if="selectedNode.type === 'voice_intent'">
                 <div class="grid gap-3">
-                  <div class="grid gap-3 lg:grid-cols-2">
-                    <NInput :value="selectedConfig.endpoint" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                    <NInput :value="selectedConfig.model" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
-                  </div>
                   <div class="text-xs leading-6 text-slate/75">
-                    该节点会输出结构化 JSON，用于桌面端唤醒后的控制指令解析。建议单独选择更稳定的分类模型，而不是复用通用纠错提示词。
+                    该节点会输出结构化 JSON，用于桌面端唤醒后的控制指令解析。默认直接按指令分组做匹配；开启 LLM 后，会在同一批分组范围内改用大模型做分类判断。
                   </div>
-                  <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
-                  <div class="grid gap-3 lg:grid-cols-3">
-                    <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0 })" />
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="64" @update:value="updateSelectedConfig({ max_tokens: $event ?? 512 })" />
+                  <div class="grid gap-3 lg:grid-cols-2">
+                    <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2.5">
+                      <div>
+                        <div class="text-sm text-ink">
+                          启用 LLM 判定
+                        </div>
+                        <div class="text-[11px] leading-5 text-slate/65">
+                          关闭后直接按指令分组做匹配，不再调用模型。
+                        </div>
+                      </div>
+                      <NSwitch :value="selectedConfig.enable_llm" @update:value="updateSelectedConfig({ enable_llm: $event })" />
+                    </div>
                     <div class="flex items-center gap-2 rounded-2 bg-white px-3 py-2.5">
                       <span class="text-xs text-slate">自动附加基础指令组</span>
                       <NSwitch :value="selectedConfig.include_base" @update:value="updateSelectedConfig({ include_base: $event })" />
@@ -776,20 +780,31 @@ onMounted(async () => {
                       基础指令组会按开关自动叠加，这里只选择需要额外开放的业务控制分组。
                     </div>
                   </div>
-                  <NInput
-                    :value="selectedConfig.prompt_template"
-                    type="textarea"
-                    :autosize="{ minRows: 6, maxRows: 12 }"
-                    placeholder="默认 Prompt 模板，支持 {{TEXT}}、{{COMMAND_LIBRARY}}、{{EXTRA_PROMPT}} 占位符"
-                    @update:value="updateSelectedConfig({ prompt_template: $event })"
-                  />
-                  <NInput
-                    :value="selectedConfig.extra_prompt"
-                    type="textarea"
-                    :autosize="{ minRows: 3, maxRows: 6 }"
-                    placeholder="可选附加提示：补充当前控制流程的约束、禁止项或业务解释"
-                    @update:value="updateSelectedConfig({ extra_prompt: $event })"
-                  />
+                  <template v-if="selectedConfig.enable_llm">
+                    <div class="grid gap-3 lg:grid-cols-2">
+                      <NInput :value="selectedConfig.endpoint" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.model" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
+                    </div>
+                    <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                    <div class="grid gap-3 lg:grid-cols-2">
+                      <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0 })" />
+                      <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="64" @update:value="updateSelectedConfig({ max_tokens: $event ?? 512 })" />
+                    </div>
+                    <NInput
+                      :value="selectedConfig.prompt_template"
+                      type="textarea"
+                      :autosize="{ minRows: 6, maxRows: 12 }"
+                      placeholder="默认 Prompt 模板，支持 {{TEXT}}、{{COMMAND_LIBRARY}}、{{EXTRA_PROMPT}} 占位符"
+                      @update:value="updateSelectedConfig({ prompt_template: $event })"
+                    />
+                    <NInput
+                      :value="selectedConfig.extra_prompt"
+                      type="textarea"
+                      :autosize="{ minRows: 3, maxRows: 6 }"
+                      placeholder="可选附加提示：补充当前控制流程的约束、禁止项或业务解释"
+                      @update:value="updateSelectedConfig({ extra_prompt: $event })"
+                    />
+                  </template>
                 </div>
               </template>
 

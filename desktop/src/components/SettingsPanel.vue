@@ -250,7 +250,7 @@ onMounted(() => {
 
     <section class="settings-section">
       <h4 class="section-title">终端语音控制</h4>
-      <p class="section-hint">桌面端会优先读取当前绑定语音控制工作流里的 voice_wake 配置做本地唤醒；命中后，小球会进入“等待指令”状态（蓝色），再按控制指令库中的候选话术做本地匹配，voice_intent 节点可选。</p>
+      <p class="section-hint">桌面端会把每段转写文本发送给当前绑定的语音控制工作流，由后台统一执行 voice_wake 与 voice_intent 节点；命中后，小球会进入“等待指令”状态（蓝色）。</p>
       <div class="voice-card">
         <div class="voice-row">
           <span class="voice-label">等待时长</span>
@@ -264,7 +264,7 @@ onMounted(() => {
       <div class="field action-row">
         <button class="action-btn" :disabled="authLoading" @click="refreshVoiceControl">刷新语音控制配置</button>
       </div>
-      <p class="section-hint">实际唤醒词和同音词识别以当前绑定工作流里的 voice_wake 节点配置为准；命令近义词匹配则来自控制指令库。这里仅展示全局运行状态和等待时长。</p>
+      <p class="section-hint">实际唤醒词、同音词归一化和命令命中结果，均以后台执行当前绑定工作流返回的结果为准。这里仅展示全局运行状态和等待时长。</p>
     </section>
 
     <section class="settings-section">

@@ -14,6 +14,7 @@ import (
 )
 
 type VoiceIntentConfig struct {
+	EnableLLM      bool     `json:"enable_llm"`
 	Endpoint       string   `json:"endpoint"`
 	Model          string   `json:"model"`
 	APIKey         string   `json:"api_key,omitempty"`
@@ -39,6 +40,9 @@ func (h *VoiceIntentHandler) Validate(config json.RawMessage) error {
 	var cfg VoiceIntentConfig
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return fmt.Errorf("invalid voice_intent config: %w", err)
+	}
+	if !cfg.EnableLLM {
+		return nil
 	}
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return fmt.Errorf("endpoint is required")
@@ -93,6 +97,36 @@ func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage
 	dicts, entries, catalog, err := h.resolveCatalog(ctx, cfg)
 	if err != nil {
 		return inputText, nil, err
+	}
+	if !cfg.EnableLLM {
+		result, detail := buildCatalogMatchResult(inputText, dicts, entries, catalog)
+		if wakeResult != nil {
+			result.WakeMatched = wakeResult.WakeMatched
+			result.WakeWord = wakeResult.WakeWord
+			result.WakeAlias = wakeResult.WakeAlias
+			detail, _ = json.Marshal(map[string]any{
+				"match_mode":    "catalog",
+				"dict_ids":      catalog.DictIDs,
+				"group_keys":    catalog.GroupKeys,
+				"dict_count":    len(dicts),
+				"command_count": countEnabledEntries(entries),
+				"wake_matched":  result.WakeMatched,
+				"wake_word":     result.WakeWord,
+				"wake_alias":    result.WakeAlias,
+				"matched":       result.Matched,
+				"intent":        result.Intent,
+				"group_key":     result.GroupKey,
+				"command_id":    result.CommandID,
+				"confidence":    result.Confidence,
+				"reason":        result.Reason,
+				"raw_output":    result.RawOutput,
+			})
+		}
+		output, err := json.Marshal(result)
+		if err != nil {
+			return inputText, nil, err
+		}
+		return string(output), detail, nil
 	}
 	endpoint, err := normalizeOpenAIChatEndpoint(cfg.Endpoint)
 	if err != nil {
@@ -245,6 +279,7 @@ func (h *VoiceIntentHandler) parseResult(respBody []byte, dicts []*voicecommand.
 		}
 	}
 	detail, _ := json.Marshal(map[string]any{
+		"match_mode":        "llm",
 		"model":             chatResp.Model,
 		"prompt_tokens":     chatResp.Usage.PromptTokens,
 		"completion_tokens": chatResp.Usage.CompletionTokens,
@@ -266,9 +301,41 @@ func (h *VoiceIntentHandler) parseResult(respBody []byte, dicts []*voicecommand.
 	return result, detail, nil
 }
 
+func countEnabledEntries(entries []voicecommand.Entry) int {
+	count := 0
+	for _, entry := range entries {
+		if entry.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
 func fallbackReason(value string, fallback string) string {
 	if strings.TrimSpace(value) != "" {
 		return strings.TrimSpace(value)
 	}
 	return fallback
+}
+
+func buildCatalogMatchResult(inputText string, dicts []*voicecommand.Dict, entries []voicecommand.Entry, catalog voiceintent.Catalog) (voiceintent.Result, json.RawMessage) {
+	result := voiceintent.MatchCatalog(inputText, catalog)
+	detail, _ := json.Marshal(map[string]any{
+		"match_mode":    "catalog",
+		"dict_ids":      catalog.DictIDs,
+		"group_keys":    catalog.GroupKeys,
+		"dict_count":    len(dicts),
+		"command_count": countEnabledEntries(entries),
+		"matched":       result.Matched,
+		"wake_matched":  result.WakeMatched,
+		"wake_word":     result.WakeWord,
+		"wake_alias":    result.WakeAlias,
+		"intent":        result.Intent,
+		"group_key":     result.GroupKey,
+		"command_id":    result.CommandID,
+		"confidence":    result.Confidence,
+		"reason":        result.Reason,
+		"raw_output":    result.RawOutput,
+	})
+	return result, detail
 }

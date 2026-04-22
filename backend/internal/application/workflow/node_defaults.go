@@ -22,7 +22,7 @@ func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	case domain.NodeVoiceWake:
 		return map[string]any{"wake_words": []string{"你好小鲨"}, "homophone_words": []string{"你好小沙", "你好小莎", "你好小善"}}
 	case domain.NodeVoiceIntent:
-		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "extra_prompt": "", "temperature": 0.0, "max_tokens": 512, "include_base": true, "dict_ids": []uint64{}}
+		return map[string]any{"enable_llm": false, "endpoint": "", "model": "", "api_key": "", "prompt_template": "", "extra_prompt": "", "temperature": 0.0, "max_tokens": 512, "include_base": true, "dict_ids": []uint64{}}
 	case domain.NodeSpeakerDiarize:
 		return map[string]any{"service_url": "", "enable_voiceprint_match": false, "fail_on_error": false}
 	case domain.NodeMeetingSummary:

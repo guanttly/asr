@@ -88,7 +88,7 @@ export function fallbackNodeDefaultConfig(type: string): Record<string, unknown>
     case 'llm_correction':
       return { endpoint: '', model: '', api_key: '', prompt_template: '', temperature: 0.3, max_tokens: 4096, allow_markdown: false }
     case 'voice_intent':
-      return { endpoint: '', model: '', api_key: '', prompt_template: '', extra_prompt: '', temperature: 0, max_tokens: 512, include_base: true, dict_ids: [] }
+      return { enable_llm: false, endpoint: '', model: '', api_key: '', prompt_template: '', extra_prompt: '', temperature: 0, max_tokens: 512, include_base: true, dict_ids: [] }
     case 'speaker_diarize':
       return { service_url: '', enable_voiceprint_match: false, fail_on_error: false }
     case 'meeting_summary':
@@ -156,6 +156,7 @@ export function normalizeNodeConfig(type: string, raw: Record<string, unknown>, 
       return {
         ...base,
         ...raw,
+        enable_llm: ensureBoolean(raw.enable_llm, ensureBoolean(base.enable_llm, false)),
         endpoint: String(raw.endpoint ?? base.endpoint ?? ''),
         model: String(raw.model ?? base.model ?? ''),
         api_key: String(raw.api_key ?? base.api_key ?? ''),

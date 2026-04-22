@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const VoiceCommandBypassPrefix = "__voice_command__:"
@@ -131,10 +132,10 @@ func buildWakeCandidates(cfg VoiceWakeConfig) []wakeCandidate {
 		appendCandidate(item, defaultWakeWord)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		if len(items[i].Normalized) == len(items[j].Normalized) {
+		if utf8.RuneCountInString(items[i].Normalized) == utf8.RuneCountInString(items[j].Normalized) {
 			return items[i].Alias < items[j].Alias
 		}
-		return len(items[i].Normalized) > len(items[j].Normalized)
+		return utf8.RuneCountInString(items[i].Normalized) > utf8.RuneCountInString(items[j].Normalized)
 	})
 	return items
 }
@@ -155,7 +156,8 @@ func matchWakeCandidate(text string, candidates []wakeCandidate) (wakeWord strin
 		if idx < 0 {
 			continue
 		}
-		cutAt := sliceOriginalAfterNormalized(text, idx+len(candidate.Normalized))
+		matchEnd := utf8.RuneCountInString(normalizedText[:idx]) + utf8.RuneCountInString(candidate.Normalized)
+		cutAt := sliceOriginalAfterNormalized(text, matchEnd)
 		matchedText := strings.TrimSpace(candidate.Alias)
 		if cutAt >= 0 {
 			return candidate.WakeWord, matchedText, strings.TrimSpace(text[cutAt:]), true

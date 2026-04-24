@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useSettings } from '@/composables/useSettings'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
-import { ensureAnonymousLogin, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
+import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
 import { appendRuntimeLog, debugLog, getRuntimeLogPath, readRuntimeLogTail } from '@/utils/debug'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
@@ -22,6 +23,8 @@ const authMessage = ref('')
 const authMessageType = ref<'success' | 'error' | 'info'>('info')
 
 function setSceneMode(mode: SceneMode) {
+	if (mode === SCENE_MODES.MEETING && !appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
+		return
   if (appStore.sceneMode === mode) return
   appStore.sceneMode = mode
   void debugLog('settings.scene', 'scene mode changed', { mode })
@@ -46,6 +49,7 @@ async function syncIdentityAndLogin(forceLogin = false) {
       await ensureAnonymousLogin(forceLogin)
     else
       await getCurrentUser().catch(async () => await ensureAnonymousLogin(true))
+    await ensureProductFeatures(true)
     await ensureRealtimeWorkflowBinding(true)
     setAuthMessage('success', '服务连接正常，已完成匿名登录')
     await debugLog('settings.auth', 'identity sync completed', { username: appStore.username, machineCode: appStore.machineCode, realtimeWorkflowId: appStore.realtimeWorkflowId })
@@ -225,22 +229,23 @@ onMounted(() => {
 
     <section class="settings-section">
       <h4 class="section-title">使用场景</h4>
-      <p class="section-hint">报告模式：录音结束仅保存为实时转写历史；会议模式：录音结束自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。</p>
+      <p class="section-hint">{{ appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING) ? '报告模式：录音结束仅保存为实时转写历史；会议模式：录音结束自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。' : '当前版本仅开放报告模式，录音结束后保存为实时转写历史。' }}</p>
       <div class="scene-segmented" role="tablist">
         <button
           type="button"
           class="scene-btn report"
-          :class="{ active: appStore.sceneMode === 'report' }"
-          @click="setSceneMode('report')"
+          :class="{ active: appStore.sceneMode === SCENE_MODES.REPORT }"
+          @click="setSceneMode(SCENE_MODES.REPORT)"
         >
           <span class="scene-dot" /> 报告模式
           <span class="scene-tag">实时</span>
         </button>
         <button
+          v-if="appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)"
           type="button"
           class="scene-btn meeting"
-          :class="{ active: appStore.sceneMode === 'meeting' }"
-          @click="setSceneMode('meeting')"
+          :class="{ active: appStore.sceneMode === SCENE_MODES.MEETING }"
+          @click="setSceneMode(SCENE_MODES.MEETING)"
         >
           <span class="scene-dot" /> 会议模式
           <span class="scene-tag">纪要</span>
@@ -248,7 +253,7 @@ onMounted(() => {
       </div>
     </section>
 
-    <section class="settings-section">
+    <section v-if="appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL)" class="settings-section">
       <h4 class="section-title">终端语音控制</h4>
       <p class="section-hint">桌面端会把每段转写文本发送给当前绑定的语音控制工作流，由后台统一执行 voice_wake 与 voice_intent 节点；命中后，小球会进入“等待指令”状态（蓝色）。</p>
       <div class="voice-card">

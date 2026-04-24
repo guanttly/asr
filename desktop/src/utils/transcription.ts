@@ -1,8 +1,12 @@
+import type { TranscriptionTaskType } from '@/constants/transcription'
+
+import { TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
+
 import { authedFetch, readResponseEnvelope } from './auth'
 
 export interface TranscriptionTaskItem {
   id: number
-  type: 'realtime' | 'batch'
+  type: TranscriptionTaskType
   status: string
   post_process_status: string
   post_process_error?: string
@@ -62,7 +66,7 @@ function buildQuery(params: Record<string, string | number | undefined>) {
   return query ? `?${query}` : ''
 }
 
-export async function getTranscriptionTasks(params?: { offset?: number, limit?: number, type?: 'realtime' | 'batch' }) {
+export async function getTranscriptionTasks(params?: { offset?: number, limit?: number, type?: TranscriptionTaskType }) {
   const response = await authedFetch(`/api/asr/tasks${buildQuery({
     offset: params?.offset,
     limit: params?.limit,
@@ -92,7 +96,7 @@ export async function deleteTranscriptionTask(taskId: number | string) {
   return payload.data || { deleted: true }
 }
 
-export async function clearTranscriptionTasks(type?: 'realtime' | 'batch') {
+export async function clearTranscriptionTasks(type?: TranscriptionTaskType) {
   const response = await authedFetch(`/api/asr/tasks${buildQuery({ type })}`, {
     method: 'DELETE',
   })
@@ -109,7 +113,7 @@ export async function createRealtimeTranscriptionTask(payload: { result_text: st
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      type: 'realtime',
+      type: TRANSCRIPTION_TASK_TYPES.REALTIME,
       result_text: payload.result_text,
       duration: payload.duration,
       workflow_id: payload.workflow_id,

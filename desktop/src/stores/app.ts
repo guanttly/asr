@@ -1,18 +1,37 @@
 import { reactive, ref, watch } from 'vue'
 import type { RecognitionSettings } from '@/composables/useSettings'
 import { defineStore } from 'pinia'
+import { PRODUCT_API_CAPABILITY_KEYS, PRODUCT_CAPABILITY_KEYS, PRODUCT_EDITIONS, SCENE_MODES, type ProductCapabilityKey, type ProductEdition, type SceneMode as ProductSceneMode } from '@/constants/product'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 export const SETTINGS_STORAGE_KEY = 'asr-desktop-settings'
 const SETTINGS_SYNC_CHANNEL = `${SETTINGS_STORAGE_KEY}:sync`
 const MAX_HISTORY = 50
 
-export type SceneMode = 'report' | 'meeting'
+export type SceneMode = ProductSceneMode
 export const DEFAULT_COMMAND_TIMEOUT_MS = 10000
+
+export interface ProductCapabilities {
+  realtime: boolean
+  batch: boolean
+  meeting: boolean
+  voiceprint: boolean
+  voiceControl: boolean
+}
 
 export interface VoiceControlConfig {
   commandTimeoutMs: number
   enabled: boolean
+}
+
+function defaultProductCapabilities(): ProductCapabilities {
+  return {
+    [PRODUCT_CAPABILITY_KEYS.REALTIME]: true,
+    [PRODUCT_CAPABILITY_KEYS.BATCH]: true,
+    [PRODUCT_CAPABILITY_KEYS.MEETING]: false,
+    [PRODUCT_CAPABILITY_KEYS.VOICEPRINT]: false,
+    [PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL]: false,
+  }
 }
 
 interface PersistedState {
@@ -54,7 +73,7 @@ function defaultPersistedState(): PersistedState {
     microphonePermissionGranted: false,
     debugLoggingEnabled: false,
     recognitionSettings: { ...DEFAULT_RECOGNITION },
-    sceneMode: 'report',
+    sceneMode: SCENE_MODES.REPORT,
   }
 }
 
@@ -73,7 +92,7 @@ function normalizePersistedState(parsed?: Partial<PersistedState> | null): Persi
     microphonePermissionGranted: parsed?.microphonePermissionGranted === true,
     debugLoggingEnabled: parsed?.debugLoggingEnabled === true,
     recognitionSettings: { ...DEFAULT_RECOGNITION, ...parsed?.recognitionSettings },
-    sceneMode: parsed?.sceneMode === 'meeting' ? 'meeting' : 'report',
+    sceneMode: parsed?.sceneMode === SCENE_MODES.MEETING ? SCENE_MODES.MEETING : SCENE_MODES.REPORT,
   }
 }
 
@@ -117,6 +136,9 @@ export const useAppStore = defineStore('app', () => {
     commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     enabled: true,
   })
+  const productEdition = ref<ProductEdition>(PRODUCT_EDITIONS.STANDARD)
+  const productCapabilities = reactive<ProductCapabilities>(defaultProductCapabilities())
+  const productFeaturesLoaded = ref(false)
   const voiceControlLoaded = ref(false)
   const voiceCommandActive = ref(false)
   const voiceCommandProcessing = ref(false)
@@ -230,8 +252,8 @@ export const useAppStore = defineStore('app', () => {
 
   function applyWorkflowBindings(bindings?: { realtime?: number | null, meeting?: number | null, voice_control?: number | null } | null) {
     realtimeWorkflowId.value = typeof bindings?.realtime === 'number' ? bindings.realtime : null
-    meetingWorkflowId.value = typeof bindings?.meeting === 'number' ? bindings.meeting : null
-    voiceWorkflowId.value = typeof bindings?.voice_control === 'number' ? bindings.voice_control : null
+    meetingWorkflowId.value = productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING] && typeof bindings?.meeting === 'number' ? bindings.meeting : null
+    voiceWorkflowId.value = productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL] && typeof bindings?.voice_control === 'number' ? bindings.voice_control : null
     workflowBindingsLoaded.value = true
   }
 
@@ -240,6 +262,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function applyVoiceControl(cfg?: Partial<VoiceControlConfig> | null) {
+    if (!productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL]) {
+    voiceControl.commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS
+    voiceControl.enabled = false
+    voiceControlLoaded.value = true
+    voiceCommandActive.value = false
+    voiceCommandProcessing.value = false
+    voiceCommandRemainingMs.value = 0
+    return
+  }
     if (cfg && typeof cfg.commandTimeoutMs === 'number' && cfg.commandTimeoutMs > 0) {
       voiceControl.commandTimeoutMs = cfg.commandTimeoutMs
     }
@@ -247,6 +278,42 @@ export const useAppStore = defineStore('app', () => {
       voiceControl.enabled = cfg.enabled
     }
     voiceControlLoaded.value = true
+  }
+
+  function hasCapability(key: ProductCapabilityKey) {
+    return Boolean(productCapabilities[key])
+  }
+
+  function applyProductFeatures(payload?: {
+    edition?: string
+    capabilities?: {
+      realtime?: boolean
+      batch?: boolean
+      meeting?: boolean
+      voiceprint?: boolean
+      voice_control?: boolean
+    }
+  } | null) {
+    productEdition.value = payload?.edition === PRODUCT_EDITIONS.ADVANCED ? PRODUCT_EDITIONS.ADVANCED : PRODUCT_EDITIONS.STANDARD
+    productCapabilities[PRODUCT_CAPABILITY_KEYS.REALTIME] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.REALTIME] !== false
+    productCapabilities[PRODUCT_CAPABILITY_KEYS.BATCH] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.BATCH] !== false
+    productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.MEETING] === true
+    productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICEPRINT] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.VOICEPRINT] === true
+    productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.VOICE_CONTROL] === true
+    productFeaturesLoaded.value = true
+    if (!productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING]) {
+      sceneMode.value = SCENE_MODES.REPORT
+      meetingWorkflowId.value = null
+    }
+    if (!productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL]) {
+      voiceWorkflowId.value = null
+      voiceCommandActive.value = false
+      voiceCommandProcessing.value = false
+      voiceCommandRemainingMs.value = 0
+      voiceControl.commandTimeoutMs = DEFAULT_COMMAND_TIMEOUT_MS
+      voiceControl.enabled = false
+      voiceControlLoaded.value = true
+    }
   }
 
   // Auto-persist on key config changes
@@ -300,6 +367,9 @@ export const useAppStore = defineStore('app', () => {
     recognitionSettings,
     sceneMode,
     voiceControl,
+    productEdition,
+    productCapabilities,
+    productFeaturesLoaded,
     voiceControlLoaded,
     voiceCommandActive,
     voiceCommandProcessing,
@@ -311,9 +381,11 @@ export const useAppStore = defineStore('app', () => {
     applyWorkflowBindings,
     invalidateWorkflowBindings,
     applyVoiceControl,
+    applyProductFeatures,
     clearAuth,
     appendHistory,
     clearHistory,
+    hasCapability,
     persist,
   }
 })

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
@@ -16,14 +17,15 @@ import (
 type VoiceprintHandler struct {
 	service        *appvoiceprint.Service
 	maxAudioSizeMB int64
+	feature        featureGate
 }
 
 // NewVoiceprintHandler creates a new voiceprint handler.
-func NewVoiceprintHandler(service *appvoiceprint.Service, maxAudioSizeMB int64) *VoiceprintHandler {
+func NewVoiceprintHandler(service *appvoiceprint.Service, maxAudioSizeMB int64, features pkgconfig.ProductFeatures) *VoiceprintHandler {
 	if maxAudioSizeMB <= 0 {
 		maxAudioSizeMB = 100
 	}
-	return &VoiceprintHandler{service: service, maxAudioSizeMB: maxAudioSizeMB}
+	return &VoiceprintHandler{service: service, maxAudioSizeMB: maxAudioSizeMB, feature: newFeatureGate(features)}
 }
 
 // Register registers voiceprint routes.
@@ -34,6 +36,10 @@ func (h *VoiceprintHandler) Register(group *gin.RouterGroup) {
 }
 
 func (h *VoiceprintHandler) List(c *gin.Context) {
+	if !h.feature.voiceprint() {
+		h.feature.denyFeature(c, "当前版本未开放声纹库")
+		return
+	}
 	items, err := h.service.List(c.Request.Context())
 	if err != nil {
 		h.writeError(c, err)
@@ -48,6 +54,10 @@ func (h *VoiceprintHandler) List(c *gin.Context) {
 }
 
 func (h *VoiceprintHandler) Enroll(c *gin.Context) {
+	if !h.feature.voiceprint() {
+		h.feature.denyFeature(c, "当前版本未开放声纹库")
+		return
+	}
 	audioFile, err := saveTemporaryUploadedAudio(c, "file", "voiceprint", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
@@ -74,6 +84,10 @@ func (h *VoiceprintHandler) Enroll(c *gin.Context) {
 }
 
 func (h *VoiceprintHandler) Delete(c *gin.Context) {
+	if !h.feature.voiceprint() {
+		h.feature.denyFeature(c, "当前版本未开放声纹库")
+		return
+	}
 	recordID := strings.TrimSpace(c.Param("id"))
 	if err := h.service.Delete(c.Request.Context(), recordID); err != nil {
 		h.writeError(c, err)

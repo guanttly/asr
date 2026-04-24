@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { SCENE_MODES } from '@/constants/product'
 import MicButton from './MicButton.vue'
 import { useAppStore } from '@/stores/app'
 
@@ -11,7 +12,7 @@ const appWindow = getCurrentWindow()
 const orbState = computed(() => {
   if (!appStore.isRecording) return 'idle'
   if (appStore.voiceCommandActive) return 'command'
-  return appStore.sceneMode === 'meeting' ? 'meeting' : 'report'
+  return appStore.sceneMode === SCENE_MODES.MEETING ? SCENE_MODES.MEETING : SCENE_MODES.REPORT
 })
 
 async function openSettings() {

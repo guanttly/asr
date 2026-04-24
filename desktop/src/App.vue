@@ -5,6 +5,7 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import RecorderWindow from './components/RecorderWindow.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
 import { useAppStore } from './stores/app'
+import { ensureProductFeatures } from './utils/auth'
 import { appendRuntimeLog, debugLog } from './utils/debug'
 
 const appStore = useAppStore()
@@ -34,6 +35,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   void appendRuntimeLog('frontend.window', JSON.stringify({ label: appWindow?.label ?? 'unknown', isSettingsWindow }))
+  void ensureProductFeatures().catch(() => undefined)
 
   window.addEventListener('keydown', handleKeydown)
 

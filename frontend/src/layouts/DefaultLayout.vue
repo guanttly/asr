@@ -7,6 +7,7 @@ import { computed, h, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useBusinessSocket } from '@/composables/useBusinessSocket'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
@@ -79,6 +80,13 @@ const menuIconShapes: Record<string, IconShape[]> = {
   roles: [
     { tag: 'path', attrs: { d: 'M12 3.5 18.5 6v5c0 4.2-2.68 7.27-6.5 9-3.82-1.73-6.5-4.8-6.5-9V6l6.5-2.5Z' } },
     { tag: 'path', attrs: { d: 'm9.5 12 1.7 1.7 3.3-3.7' } },
+  ],
+  downloads: [
+    { tag: 'path', attrs: { d: 'M12 4.5v9.5' } },
+    { tag: 'path', attrs: { d: 'm8.5 10.5 3.5 3.5 3.5-3.5' } },
+    { tag: 'path', attrs: { d: 'M5 18.5h14' } },
+    { tag: 'path', attrs: { d: 'M7.5 15.5v3' } },
+    { tag: 'path', attrs: { d: 'M16.5 15.5v3' } },
   ],
   overviewSection: [
     { tag: 'rect', attrs: { x: 3.5, y: 4.5, width: 17, height: 15, rx: 3 } },
@@ -160,55 +168,64 @@ function renderMenuIcon(icon: keyof typeof menuIconShapes, tooltipLabel: string)
   )
 }
 
-const menuOptions: MenuOption[] = [
-  {
-    label: '数据看板',
-    key: '/dashboard',
-    icon: renderMenuIcon('dashboard', '数据看板'),
-  },
-  {
-    label: '应用',
-    key: 'applications',
-    icon: renderMenuIcon('applicationsSection', '应用'),
-    children: [
-      { label: '实时语音识别', key: '/realtime', icon: renderMenuIcon('realtime', '实时语音识别') },
-      { label: '批量转写', key: '/transcription', icon: renderMenuIcon('transcription', '批量转写') },
-      { label: '会议纪要', key: '/meetings', icon: renderMenuIcon('meetings', '会议纪要') },
-      { label: '声纹库', key: '/meetings/voiceprints', icon: renderMenuIcon('voiceprints', '声纹库') },
-    ],
-  },
-  {
-    label: '工作流',
-    key: 'workflow-center',
-    icon: renderMenuIcon('workflowSection', '工作流'),
-    children: [
-      { label: '工作流管理', key: '/workflows', icon: renderMenuIcon('workflows', '工作流管理') },
-      { label: '节点管理', key: '/workflows/nodes', icon: renderMenuIcon('workflowSection', '节点管理') },
-      { label: '应用配置', key: '/workflows/application-settings', icon: renderMenuIcon('appSettings', '应用配置') },
-    ],
-  },
-  {
-    label: '术语库',
-    key: 'terminology-center',
-    icon: renderMenuIcon('terminologySection', '术语库'),
-    children: [
-      { label: '术语库管理', key: '/terminology', icon: renderMenuIcon('terminology', '术语库管理') },
-      { label: '语气词库', key: '/terminology/fillers', icon: renderMenuIcon('terminology', '语气词库') },
-      { label: '敏感词库', key: '/terminology/sensitive', icon: renderMenuIcon('sensitive', '敏感词库') },
-      { label: '控制指令库', key: '/terminology/voice-commands', icon: renderMenuIcon('terminology', '控制指令库') },
-      { label: '纠错规则', key: '/terminology/rules', icon: renderMenuIcon('terminology', '纠错规则') },
-    ],
-  },
-  {
-    label: '系统管理',
-    key: 'system',
-    icon: renderMenuIcon('systemSection', '系统管理'),
-    children: [
-      { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
-      { label: '角色管理', key: '/system/roles', icon: renderMenuIcon('roles', '角色管理') },
-    ],
-  },
-]
+const menuOptions = computed<MenuOption[]>(() => {
+  const applicationChildren: MenuOption[] = [
+    { label: '实时语音识别', key: '/realtime', icon: renderMenuIcon('realtime', '实时语音识别') },
+    { label: '批量转写', key: '/transcription', icon: renderMenuIcon('transcription', '批量转写') },
+  ]
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING))
+    applicationChildren.push({ label: '会议纪要', key: '/meetings', icon: renderMenuIcon('meetings', '会议纪要') })
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICEPRINT))
+    applicationChildren.push({ label: '声纹库', key: '/meetings/voiceprints', icon: renderMenuIcon('voiceprints', '声纹库') })
+
+  const terminologyChildren: MenuOption[] = [
+    { label: '术语库管理', key: '/terminology', icon: renderMenuIcon('terminology', '术语库管理') },
+    { label: '语气词库', key: '/terminology/fillers', icon: renderMenuIcon('terminology', '语气词库') },
+    { label: '敏感词库', key: '/terminology/sensitive', icon: renderMenuIcon('sensitive', '敏感词库') },
+    { label: '纠错规则', key: '/terminology/rules', icon: renderMenuIcon('terminology', '纠错规则') },
+  ]
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+    terminologyChildren.splice(3, 0, { label: '控制指令库', key: '/terminology/voice-commands', icon: renderMenuIcon('terminology', '控制指令库') })
+
+  return [
+    {
+      label: '数据看板',
+      key: '/dashboard',
+      icon: renderMenuIcon('dashboard', '数据看板'),
+    },
+    {
+      label: '应用',
+      key: 'applications',
+      icon: renderMenuIcon('applicationsSection', '应用'),
+      children: applicationChildren,
+    },
+    {
+      label: '工作流',
+      key: 'workflow-center',
+      icon: renderMenuIcon('workflowSection', '工作流'),
+      children: [
+        { label: '工作流管理', key: '/workflows', icon: renderMenuIcon('workflows', '工作流管理') },
+        { label: '节点管理', key: '/workflows/nodes', icon: renderMenuIcon('workflowSection', '节点管理') },
+        { label: '应用配置', key: '/workflows/application-settings', icon: renderMenuIcon('appSettings', '应用配置') },
+      ],
+    },
+    {
+      label: '术语库',
+      key: 'terminology-center',
+      icon: renderMenuIcon('terminologySection', '术语库'),
+      children: terminologyChildren,
+    },
+    {
+      label: '系统管理',
+      key: 'system',
+      icon: renderMenuIcon('systemSection', '系统管理'),
+      children: [
+        { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
+        { label: '角色管理', key: '/system/roles', icon: renderMenuIcon('roles', '角色管理') },
+      ],
+    },
+  ]
+})
 
 function resolveMenuSection(path: string) {
   if (path.startsWith('/system/'))
@@ -405,7 +422,7 @@ function handleLogout() {
                 {{ route.meta.title || '语音转写系统' }}
               </div>
               <div class="hidden text-xs text-slate/70 sm:block">
-                {{ route.meta.desc || '实时转写与会议分析控制台' }}
+                {{ route.meta.desc || '语音转写与流程配置控制台' }}
               </div>
             </div>
           </div>

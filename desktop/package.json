@@ -2,7 +2,7 @@
   "name": "asr-desktop",
   "displayName": "语音速录助手",
   "type": "module",
-  "version": "0.2.3",
+  "version": "0.2.10",
   "private": true,
   "scripts": {
     "predev": "node ./scripts/sync-version.mjs",

@@ -18,6 +18,7 @@ import (
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	wfengine "github.com/lgt/asr/internal/infrastructure/workflow"
 	"github.com/lgt/asr/internal/interfaces/middleware"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
@@ -26,11 +27,12 @@ import (
 type WorkflowHandler struct {
 	service    *appwf.Service
 	asrService *appasr.Service
+	feature    featureGate
 }
 
 // NewWorkflowHandler creates a new workflow handler.
-func NewWorkflowHandler(service *appwf.Service, asrService *appasr.Service) *WorkflowHandler {
-	return &WorkflowHandler{service: service, asrService: asrService}
+func NewWorkflowHandler(service *appwf.Service, asrService *appasr.Service, features pkgconfig.ProductFeatures) *WorkflowHandler {
+	return &WorkflowHandler{service: service, asrService: asrService, feature: newFeatureGate(features)}
 }
 
 // Register registers workflow routes on the given router group.
@@ -125,6 +127,7 @@ func (h *WorkflowHandler) ListWorkflows(c *gin.Context) {
 	if !filter.RequiresPrePagination() {
 		result = h.service.FilterWorkflowList(result, filter)
 	}
+	result = h.filterWorkflowList(result)
 	response.Success(c, result)
 }
 
@@ -146,6 +149,10 @@ func (h *WorkflowHandler) CreateWorkflow(c *gin.Context) {
 			return
 		}
 		ownerType = domain.OwnerSystem
+	}
+	if req.WorkflowType != nil && !h.feature.allowWorkflowType(*req.WorkflowType) {
+		h.feature.denyFeature(c, h.workflowTypeDeniedMessage(*req.WorkflowType))
+		return
 	}
 
 	result, err := h.service.CreateWorkflow(c.Request.Context(), ownerType, userID, &req)
@@ -169,6 +176,10 @@ func (h *WorkflowHandler) GetWorkflow(c *gin.Context) {
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
 		return
 	}
+	if !h.canAccessWorkflowResponse(result) {
+		h.feature.denyWorkflowHidden(c)
+		return
+	}
 	response.Success(c, result)
 }
 
@@ -185,6 +196,9 @@ func (h *WorkflowHandler) UpdateWorkflow(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	if !h.ensureWorkflowAccessible(c, id) {
+		return
+	}
 
 	result, err := h.service.UpdateWorkflow(c.Request.Context(), id, &req)
 	if err != nil {
@@ -199,6 +213,9 @@ func (h *WorkflowHandler) DeleteWorkflow(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow id")
+		return
+	}
+	if !h.ensureWorkflowAccessible(c, id) {
 		return
 	}
 
@@ -221,6 +238,15 @@ func (h *WorkflowHandler) BatchUpdateNodes(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
+	}
+	if !h.ensureWorkflowAccessible(c, id) {
+		return
+	}
+	for _, node := range req.Nodes {
+		if !h.feature.allowNodeType(domain.NodeType(node.NodeType)) {
+			h.feature.denyFeature(c, h.nodeTypeDeniedMessage(domain.NodeType(node.NodeType)))
+			return
+		}
 	}
 
 	result, err := h.service.BatchUpdateNodes(c.Request.Context(), id, &req)
@@ -245,6 +271,9 @@ func (h *WorkflowHandler) ExecuteWorkflow(c *gin.Context) {
 		return
 	}
 	defer cleanup()
+	if !h.ensureWorkflowAccessible(c, id) {
+		return
+	}
 
 	inputText := req.InputText
 	if req.AudioFilePath != "" {
@@ -297,6 +326,9 @@ func (h *WorkflowHandler) CloneWorkflow(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow id")
 		return
 	}
+	if !h.ensureWorkflowAccessible(c, id) {
+		return
+	}
 
 	userID := middleware.UserIDFromContext(c)
 	result, err := h.service.CloneWorkflow(c.Request.Context(), id, userID)
@@ -322,6 +354,10 @@ func (h *WorkflowHandler) TestNode(c *gin.Context) {
 	}
 
 	nodeType := domain.NodeType(req.NodeType)
+	if !h.feature.allowNodeType(nodeType) {
+		h.feature.denyFeature(c, h.nodeTypeDeniedMessage(nodeType))
+		return
+	}
 	if nodeType.IsSource() && req.AudioFilePath != "" {
 		if h.asrService == nil {
 			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "asr service is not configured")
@@ -420,12 +456,23 @@ func (h *WorkflowHandler) GetNodeTypes(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
-	response.Success(c, types)
+	filtered := make([]appwf.NodeTypeInfo, 0, len(types))
+	for _, item := range types {
+		if !h.feature.allowNodeType(item.Type) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	response.Success(c, filtered)
 }
 
 // UpdateNodeDefault handles PUT /api/workflows/node-defaults/:nodeType
 func (h *WorkflowHandler) UpdateNodeDefault(c *gin.Context) {
 	nodeType := domain.NodeType(strings.TrimSpace(c.Param("nodeType")))
+	if !h.feature.allowNodeType(nodeType) {
+		h.feature.denyFeature(c, h.nodeTypeDeniedMessage(nodeType))
+		return
+	}
 	var req appwf.UpdateNodeDefaultRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
@@ -574,4 +621,75 @@ func firstEnabledNodeType(nodes []appwf.NodeResponse) *domain.NodeType {
 		}
 	}
 	return selected
+}
+
+func (h *WorkflowHandler) filterWorkflowList(list *appwf.WorkflowListResponse) *appwf.WorkflowListResponse {
+	if list == nil {
+		return &appwf.WorkflowListResponse{Items: []*appwf.WorkflowResponse{}, Total: 0}
+	}
+	filtered := make([]*appwf.WorkflowResponse, 0, len(list.Items))
+	for _, item := range list.Items {
+		if !h.canAccessWorkflowResponse(item) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if len(filtered) == len(list.Items) {
+		return &appwf.WorkflowListResponse{Items: filtered, Total: list.Total}
+	}
+	total := list.Total - int64(len(list.Items)-len(filtered))
+	if total < int64(len(filtered)) {
+		total = int64(len(filtered))
+	}
+	return &appwf.WorkflowListResponse{Items: filtered, Total: total}
+}
+
+func (h *WorkflowHandler) canAccessWorkflowResponse(item *appwf.WorkflowResponse) bool {
+	if item == nil {
+		return false
+	}
+	if !h.feature.allowWorkflowType(item.WorkflowType) {
+		return false
+	}
+	for _, node := range item.Nodes {
+		if !h.feature.allowNodeType(node.NodeType) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *WorkflowHandler) ensureWorkflowAccessible(c *gin.Context, id uint64) bool {
+	workflowResp, err := h.service.GetWorkflow(c.Request.Context(), id)
+	if err != nil {
+		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		return false
+	}
+	if !h.canAccessWorkflowResponse(workflowResp) {
+		h.feature.denyWorkflowHidden(c)
+		return false
+	}
+	return true
+}
+
+func (h *WorkflowHandler) workflowTypeDeniedMessage(workflowType domain.WorkflowType) string {
+	switch workflowType {
+	case domain.WorkflowTypeMeeting:
+		return "当前版本未开放会议纪要工作流"
+	case domain.WorkflowTypeVoice:
+		return "当前版本未开放终端语音控制工作流"
+	default:
+		return "当前版本未开放该工作流类型"
+	}
+}
+
+func (h *WorkflowHandler) nodeTypeDeniedMessage(nodeType domain.NodeType) string {
+	switch nodeType {
+	case domain.NodeMeetingSummary, domain.NodeSpeakerDiarize:
+		return "当前版本未开放会议纪要与声纹相关节点"
+	case domain.NodeVoiceWake, domain.NodeVoiceIntent:
+		return "当前版本未开放终端语音控制相关节点"
+	default:
+		return "当前版本未开放该节点"
+	}
 }

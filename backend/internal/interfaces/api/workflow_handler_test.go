@@ -14,6 +14,7 @@ import (
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/interfaces/middleware"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 )
 
 type workflowRepoHandlerStub struct {
@@ -87,7 +88,7 @@ func TestCreateWorkflowBindsSourceIDForUserRequest(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service, nil)
+	handler := NewWorkflowHandler(service, nil, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -156,7 +157,7 @@ func TestCreateWorkflowAsAdminDefaultsToUserWorkflow(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service, nil)
+	handler := NewWorkflowHandler(service, nil, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -205,7 +206,7 @@ func TestCreateWorkflowAsAdminCanExplicitlyCreateSystemWorkflow(t *testing.T) {
 
 	repo := &workflowRepoHandlerStub{}
 	service := appwf.NewService(repo, nil, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service, nil)
+	handler := NewWorkflowHandler(service, nil, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -249,7 +250,7 @@ func TestListWorkflowsAppliesFilterBeforePagination(t *testing.T) {
 		3: {{WorkflowID: 3, NodeType: domain.NodeBatchASR, Position: 1, Enabled: true}},
 	}}
 	service := appwf.NewService(repo, nodes, nil, nil, nil, nil)
-	handler := NewWorkflowHandler(service, nil)
+	handler := NewWorkflowHandler(service, nil, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

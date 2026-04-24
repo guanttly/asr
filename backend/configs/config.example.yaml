@@ -23,6 +23,11 @@ bootstrap:
   admin_password: change-me-now
   admin_display_name: System Administrator
 
+product:
+  # standard: 仅开放实时语音识别和批量转写
+  # advanced: 额外开放会议纪要、声纹库和终端语音控制
+  edition: advanced
+
 services:
   # Batch upload / task sync endpoint. Supports qwen-asr-serve task APIs and OpenAI-compatible /v1/audio/transcriptions.
   asr: http://qwen-asr-batch:8000
@@ -41,6 +46,10 @@ upload:
   dir: uploads
   public_base_url: http://localhost:10010
   max_audio_size_mb: 1024
+
+download:
+  dir: downloads
+  public_base_path: /downloads/files
 
 gateway:
   asr_api: http://asr-api:10011

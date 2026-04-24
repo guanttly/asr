@@ -7,16 +7,17 @@ import { uploadMeetingFile } from '@/api/meeting'
 import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 const router = useRouter()
 const message = useMessage()
-const meetingWorkflowCatalog = useWorkflowCatalog('meeting')
+const meetingWorkflowCatalog = useWorkflowCatalog(WORKFLOW_TYPES.MEETING)
 const {
   configuredWorkflowId,
   configuredWorkflow: selectedWorkflow,
   configuredWorkflowMissing,
   configuredWorkflowNotice: workflowConfigNotice,
-} = useWorkflowBindingStatus('meeting', meetingWorkflowCatalog, {
+} = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.MEETING, meetingWorkflowCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '当前未配置会议默认工作流，上传后会先完成转写，后续可在会议详情页继续生成摘要。',
   missingMessage: workflowId => `应用配置中的会议工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,

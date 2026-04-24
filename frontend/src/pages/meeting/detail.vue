@@ -10,6 +10,7 @@ import { useBusinessSocket } from '@/composables/useBusinessSocket'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 interface TranscriptItem {
   speaker_label: string
@@ -50,13 +51,13 @@ const summaryMarkdown = new MarkdownIt({
   linkify: true,
   breaks: true,
 })
-const meetingWorkflowCatalog = useWorkflowCatalog('meeting')
+const meetingWorkflowCatalog = useWorkflowCatalog(WORKFLOW_TYPES.MEETING)
 const {
   configuredWorkflowId,
   configuredWorkflow,
   configuredWorkflowMissing,
   configuredWorkflowNotice,
-} = useWorkflowBindingStatus('meeting', meetingWorkflowCatalog, {
+} = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.MEETING, meetingWorkflowCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '当前未设置会议默认工作流，请前往应用配置页统一配置。',
   missingMessage: workflowId => `应用配置中的会议工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,

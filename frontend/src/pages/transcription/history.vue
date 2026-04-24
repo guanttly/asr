@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { TranscriptionTaskType } from '@/constants/transcription'
+
 import { NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -11,10 +13,14 @@ import { useBusinessSocket } from '@/composables/useBusinessSocket'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { TRANSCRIPTION_TASK_TYPE_LABELS, TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
+import { useAppStore } from '@/stores/app'
+import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 interface TaskItem {
   id: number
-  type: string
+  type: TranscriptionTaskType
   status: string
   external_task_id?: string
   progress_percent?: number
@@ -39,6 +45,8 @@ interface TaskItem {
   updated_at?: string
   updatedAt?: string
 }
+
+const appStore = useAppStore()
 
 interface ExecutionNodeResult {
   id: number
@@ -75,14 +83,14 @@ const message = useMessage()
 const confirmDelete = useDeleteConfirmDialog()
 const route = useRoute()
 const router = useRouter()
-const batchWorkflowCatalog = useWorkflowCatalog('batch_transcription', 100)
+const batchWorkflowCatalog = useWorkflowCatalog(WORKFLOW_TYPES.BATCH, 100)
 const {
   configuredWorkflowId,
   configuredWorkflow: selectedWorkflowOption,
   configuredWorkflowLabel,
   configuredWorkflowMissing,
   configuredWorkflowNotice: configuredWorkflowMessage,
-} = useWorkflowBindingStatus('batch', batchWorkflowCatalog, {
+} = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.BATCH, batchWorkflowCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '当前未配置批量转写默认工作流，提交任务后只会执行 ASR，不会自动触发后处理。',
   missingMessage: workflowId => `应用配置中的批量工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,
@@ -232,11 +240,9 @@ function parseDateValue(value?: string) {
 }
 
 function formatTaskType(value?: string) {
-  const map: Record<string, string> = {
-    realtime: '实时',
-    batch: '批量',
-  }
-  return map[value || ''] || value || '-'
+  if (!value)
+    return '-'
+  return TRANSCRIPTION_TASK_TYPE_LABELS[value as TranscriptionTaskType] || value
 }
 
 function formatTaskStatus(value?: string) {
@@ -458,7 +464,7 @@ function applyTaskUpdate(task: TaskItem | null | undefined) {
 }
 
 function isTaskActive(task: TaskItem | null | undefined) {
-  if (!task || task.type !== 'batch')
+  if (!task || task.type !== TRANSCRIPTION_TASK_TYPES.BATCH)
     return false
   if (task.status === 'pending' || task.status === 'processing')
     return true
@@ -630,7 +636,7 @@ const columns = [
             onClick: () => handleDownloadAudio(row),
           }, { default: () => '音频' })
         : null,
-      row.meeting_id
+      row.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)
         ? h(NButton, {
             text: true,
             size: 'small',
@@ -641,7 +647,7 @@ const columns = [
         text: true,
         size: 'small',
         loading: syncingIds.value.includes(row.id),
-        disabled: row.type !== 'batch' || !isTaskActive(row),
+        disabled: row.type !== TRANSCRIPTION_TASK_TYPES.BATCH || !isTaskActive(row),
         onClick: () => handleSyncSingle(row.id),
       }, { default: () => '同步' }),
       isTaskDeletable(row)
@@ -674,7 +680,7 @@ const canResumePostProcessFromFailure = computed(() => {
   const task = detailTask.value
   if (!task)
     return false
-  return task.type === 'batch'
+  return task.type === TRANSCRIPTION_TASK_TYPES.BATCH
     && task.status === 'completed'
     && Boolean(task.workflow_id)
     && task.post_process_status === 'failed'
@@ -715,7 +721,7 @@ async function loadWorkflowOptions() {
 async function loadTasks(options?: { silent?: boolean }) {
   loading.value = true
   try {
-    const result = await getTranscriptionTasks({ offset: 0, limit: 100 })
+    const result = await getTranscriptionTasks({ offset: 0, limit: 100, type: TRANSCRIPTION_TASK_TYPES.BATCH })
     tasks.value = result.data.items
     await loadExecutionSummaries(result.data.items)
   }
@@ -797,7 +803,7 @@ async function handleCreateTask() {
   try {
     await createTranscriptionTask({
       audio_url: submitForm.audioUrl.trim(),
-      type: 'batch',
+      type: TRANSCRIPTION_TASK_TYPES.BATCH,
       workflow_id: configuredWorkflowId.value ?? undefined,
     })
     message.success('批量转写任务已提交到 ASR 引擎')

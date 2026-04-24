@@ -9,6 +9,7 @@ import (
 	appuser "github.com/lgt/asr/internal/application/user"
 	domain "github.com/lgt/asr/internal/domain/user"
 	"github.com/lgt/asr/internal/interfaces/middleware"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
@@ -18,11 +19,12 @@ type UserHandler struct {
 	service   *appuser.Service
 	jwtSecret string
 	expiresIn int64
+	feature   featureGate
 }
 
 // NewUserHandler creates a user handler.
-func NewUserHandler(service *appuser.Service, jwtSecret string, expiresIn int64) *UserHandler {
-	return &UserHandler{service: service, jwtSecret: jwtSecret, expiresIn: expiresIn}
+func NewUserHandler(service *appuser.Service, jwtSecret string, expiresIn int64, features pkgconfig.ProductFeatures) *UserHandler {
+	return &UserHandler{service: service, jwtSecret: jwtSecret, expiresIn: expiresIn, feature: newFeatureGate(features)}
 }
 
 // RegisterPublic registers public auth routes.
@@ -181,7 +183,7 @@ func (h *UserHandler) GetCurrentUserWorkflowBindings(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, result)
+	response.Success(c, h.feature.sanitizeWorkflowBindings(result))
 }
 
 func (h *UserHandler) UpdateCurrentUserWorkflowBindings(c *gin.Context) {
@@ -191,6 +193,10 @@ func (h *UserHandler) UpdateCurrentUserWorkflowBindings(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	if err := h.feature.constrainWorkflowBindingsRequest(&req); err != nil {
+		response.Error(c, http.StatusForbidden, errcode.CodeForbidden, err.Error())
+		return
+	}
 
 	result, err := h.service.UpdateWorkflowBindings(c.Request.Context(), userID, &req)
 	if err != nil {
@@ -198,5 +204,5 @@ func (h *UserHandler) UpdateCurrentUserWorkflowBindings(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, result)
+	response.Success(c, h.feature.sanitizeWorkflowBindings(result))
 }

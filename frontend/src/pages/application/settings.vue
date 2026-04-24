@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AxiosError } from 'axios'
 import type { VoiceControlPayload } from '@/api/appSettings'
+import type { ProductFeatureKey } from '@/constants/product'
 
 import type { WorkflowBindingKey } from '@/types/workflow'
 import { useMessage } from 'naive-ui'
@@ -11,11 +12,14 @@ import { getVoiceControl, updateVoiceControl } from '@/api/appSettings'
 import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
+import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 interface SectionMeta {
   key: WorkflowBindingKey
+  requiredFeature?: ProductFeatureKey
   title: string
   route: string
   actionLabel?: string
@@ -28,30 +32,30 @@ const router = useRouter()
 const message = useMessage()
 const appStore = useAppStore()
 const loading = ref(false)
-const realtimeCatalog = useWorkflowCatalog('realtime_transcription')
-const batchCatalog = useWorkflowCatalog('batch_transcription')
-const meetingCatalog = useWorkflowCatalog('meeting')
-const voiceCatalog = useWorkflowCatalog('voice_control')
+const realtimeCatalog = useWorkflowCatalog(WORKFLOW_TYPES.REALTIME)
+const batchCatalog = useWorkflowCatalog(WORKFLOW_TYPES.BATCH)
+const meetingCatalog = useWorkflowCatalog(WORKFLOW_TYPES.MEETING)
+const voiceCatalog = useWorkflowCatalog(WORKFLOW_TYPES.VOICE_CONTROL)
 
-const realtimeBinding = useWorkflowBindingStatus('realtime', realtimeCatalog, {
+const realtimeBinding = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.REALTIME, realtimeCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '实时语音识别当前未设置默认工作流，应用仍可使用，但不会自动触发对应后处理链路。',
   missingMessage: workflowId => `当前绑定的工作流 #${workflowId} 已不在可用列表中，通常表示它被下线或仍是 legacy 版本。请重新选择。`,
   readyMessage: workflow => `实时语音识别当前默认使用「${workflow.label}」，对应应用会自动复用这条配置。`,
 })
-const batchBinding = useWorkflowBindingStatus('batch', batchCatalog, {
+const batchBinding = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.BATCH, batchCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '批量转写当前未设置默认工作流，应用仍可使用，但不会自动触发对应后处理链路。',
   missingMessage: workflowId => `当前绑定的工作流 #${workflowId} 已不在可用列表中，通常表示它被下线或仍是 legacy 版本。请重新选择。`,
   readyMessage: workflow => `批量转写当前默认使用「${workflow.label}」，对应应用会自动复用这条配置。`,
 })
-const meetingBinding = useWorkflowBindingStatus('meeting', meetingCatalog, {
+const meetingBinding = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.MEETING, meetingCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '会议纪要当前未设置默认工作流，应用仍可使用，但不会自动触发对应后处理链路。',
   missingMessage: workflowId => `当前绑定的工作流 #${workflowId} 已不在可用列表中，通常表示它被下线或仍是 legacy 版本。请重新选择。`,
   readyMessage: workflow => `会议纪要当前默认使用「${workflow.label}」，对应应用会自动复用这条配置。`,
 })
-const voiceBinding = useWorkflowBindingStatus('voice_control', voiceCatalog, {
+const voiceBinding = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.VOICE_CONTROL, voiceCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '终端语音控制当前未设置默认工作流，命中触发词后将无法进入统一的 workflow 指令识别链路。',
   missingMessage: workflowId => `当前绑定的语音控制工作流 #${workflowId} 已不在可用列表中，请重新选择。`,
@@ -60,7 +64,7 @@ const voiceBinding = useWorkflowBindingStatus('voice_control', voiceCatalog, {
 
 const sections: SectionMeta[] = [
   {
-    key: 'realtime',
+    key: WORKFLOW_BINDING_KEYS.REALTIME,
     title: '实时语音识别',
     route: '/realtime',
     description: '录音结束后自动套用这里配置的默认工作流，不再在实时界面单独选择。',
@@ -68,7 +72,7 @@ const sections: SectionMeta[] = [
     emptyDescription: '设置后，实时录音保存任务时会自动触发对应工作流。',
   },
   {
-    key: 'batch',
+    key: WORKFLOW_BINDING_KEYS.BATCH,
     title: '批量转写',
     route: '/transcription',
     description: '上传文件或提交 URL 后，会统一使用这里配置的默认后处理工作流。',
@@ -76,7 +80,8 @@ const sections: SectionMeta[] = [
     emptyDescription: '设置后，批量任务创建时会自动携带对应工作流。',
   },
   {
-    key: 'meeting',
+    key: WORKFLOW_BINDING_KEYS.MEETING,
+    requiredFeature: PRODUCT_FEATURE_KEYS.MEETING,
     title: '会议纪要',
     route: '/meetings',
     description: '会议创建与摘要重新生成都会优先使用这里配置的默认会议工作流。',
@@ -84,7 +89,8 @@ const sections: SectionMeta[] = [
     emptyDescription: '设置后，会议相关页面不再单独暴露工作流选择器。',
   },
   {
-    key: 'voice_control',
+    key: WORKFLOW_BINDING_KEYS.VOICE_CONTROL,
+    requiredFeature: PRODUCT_FEATURE_KEYS.VOICE_CONTROL,
     title: '终端语音控制',
     route: '/workflows',
     actionLabel: '管理工作流',
@@ -94,7 +100,9 @@ const sections: SectionMeta[] = [
   },
 ]
 
-const configuredCount = computed(() => Object.values(appStore.workflowBindings).filter(value => typeof value === 'number').length)
+const availableSections = computed(() => sections.filter(section => !section.requiredFeature || appStore.hasCapability(section.requiredFeature)))
+
+const configuredCount = computed(() => availableSections.value.filter(section => typeof appStore.workflowBindings[section.key] === 'number').length)
 const bindingSaving = computed(() => appStore.workflowBindingsSaving)
 
 function extractErrorMessage(error: unknown, fallback: string) {
@@ -106,11 +114,11 @@ function extractErrorMessage(error: unknown, fallback: string) {
 
 function workflowOptionsFor(key: WorkflowBindingKey) {
   switch (key) {
-    case 'realtime':
+    case WORKFLOW_BINDING_KEYS.REALTIME:
       return realtimeCatalog.workflowOptions.value
-    case 'batch':
+    case WORKFLOW_BINDING_KEYS.BATCH:
       return batchCatalog.workflowOptions.value
-    case 'voice_control':
+    case WORKFLOW_BINDING_KEYS.VOICE_CONTROL:
       return voiceCatalog.workflowOptions.value
     default:
       return meetingCatalog.workflowOptions.value
@@ -119,11 +127,11 @@ function workflowOptionsFor(key: WorkflowBindingKey) {
 
 function selectedWorkflowFor(key: WorkflowBindingKey) {
   switch (key) {
-    case 'realtime':
+    case WORKFLOW_BINDING_KEYS.REALTIME:
       return realtimeBinding.configuredWorkflow.value
-    case 'batch':
+    case WORKFLOW_BINDING_KEYS.BATCH:
       return batchBinding.configuredWorkflow.value
-    case 'voice_control':
+    case WORKFLOW_BINDING_KEYS.VOICE_CONTROL:
       return voiceBinding.configuredWorkflow.value
     default:
       return meetingBinding.configuredWorkflow.value
@@ -132,11 +140,11 @@ function selectedWorkflowFor(key: WorkflowBindingKey) {
 
 function bindingMissing(key: WorkflowBindingKey) {
   switch (key) {
-    case 'realtime':
+    case WORKFLOW_BINDING_KEYS.REALTIME:
       return realtimeBinding.configuredWorkflowMissing.value
-    case 'batch':
+    case WORKFLOW_BINDING_KEYS.BATCH:
       return batchBinding.configuredWorkflowMissing.value
-    case 'voice_control':
+    case WORKFLOW_BINDING_KEYS.VOICE_CONTROL:
       return voiceBinding.configuredWorkflowMissing.value
     default:
       return meetingBinding.configuredWorkflowMissing.value
@@ -145,11 +153,11 @@ function bindingMissing(key: WorkflowBindingKey) {
 
 function bindingNotice(section: SectionMeta) {
   switch (section.key) {
-    case 'realtime':
+    case WORKFLOW_BINDING_KEYS.REALTIME:
       return realtimeBinding.configuredWorkflowNotice.value
-    case 'batch':
+    case WORKFLOW_BINDING_KEYS.BATCH:
       return batchBinding.configuredWorkflowNotice.value
-    case 'voice_control':
+    case WORKFLOW_BINDING_KEYS.VOICE_CONTROL:
       return voiceBinding.configuredWorkflowNotice.value
     default:
       return meetingBinding.configuredWorkflowNotice.value
@@ -160,13 +168,13 @@ async function handleBindingChange(key: WorkflowBindingKey, value: number | null
   const nextValue = typeof value === 'number' ? value : null
   try {
     switch (key) {
-      case 'realtime':
+      case WORKFLOW_BINDING_KEYS.REALTIME:
         await realtimeBinding.setConfiguredWorkflow(nextValue)
         break
-      case 'batch':
+      case WORKFLOW_BINDING_KEYS.BATCH:
         await batchBinding.setConfiguredWorkflow(nextValue)
         break
-      case 'voice_control':
+      case WORKFLOW_BINDING_KEYS.VOICE_CONTROL:
         await voiceBinding.setConfiguredWorkflow(nextValue)
         break
       default:
@@ -182,12 +190,15 @@ async function handleBindingChange(key: WorkflowBindingKey, value: number | null
 async function loadWorkflowBuckets() {
   loading.value = true
   try {
-    const results = await Promise.allSettled([
-      realtimeCatalog.loadWorkflows(),
-      batchCatalog.loadWorkflows(),
-      meetingCatalog.loadWorkflows(),
-      voiceCatalog.loadWorkflows(),
-    ])
+    const tasks: Array<Promise<unknown>> = [
+		realtimeCatalog.loadWorkflows(),
+		batchCatalog.loadWorkflows(),
+	]
+    if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING))
+		tasks.push(meetingCatalog.loadWorkflows())
+    if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+		tasks.push(voiceCatalog.loadWorkflows())
+    const results = await Promise.allSettled(tasks)
 
     if (results.some(result => result.status === 'rejected'))
       message.warning('部分工作流列表加载失败，请稍后刷新重试')
@@ -245,7 +256,10 @@ async function saveVoiceControl() {
     voiceSaving.value = false
   }
 }
-onMounted(loadVoiceControl)
+onMounted(() => {
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+    void loadVoiceControl()
+})
 </script>
 
 <template>
@@ -267,7 +281,7 @@ onMounted(loadVoiceControl)
                 已配置应用
               </div>
               <div class="mt-1.5 text-lg font-700 text-ink">
-                {{ configuredCount }}/4
+                {{ configuredCount }}/{{ availableSections.length }}
               </div>
             </div>
             <NButton quaternary @click="router.push('/workflows')">
@@ -278,7 +292,7 @@ onMounted(loadVoiceControl)
       </NCard>
 
       <div class="grid gap-5 xl:grid-cols-2 2xl:grid-cols-4">
-        <NCard v-for="section in sections" :key="section.key" class="card-main" :loading="loading || appStore.workflowBindingsLoading">
+        <NCard v-for="section in availableSections" :key="section.key" class="card-main" :loading="loading || appStore.workflowBindingsLoading">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-sm font-700 text-ink">
@@ -319,7 +333,7 @@ onMounted(loadVoiceControl)
         </NCard>
       </div>
 
-      <NCard class="card-main" :loading="voiceLoading">
+      <NCard v-if="appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL)" class="card-main" :loading="voiceLoading">
         <div class="flex items-start justify-between gap-4">
           <div>
             <div class="text-sm font-700 text-ink">

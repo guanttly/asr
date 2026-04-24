@@ -16,7 +16,11 @@ import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
+import { useAppStore } from '@/stores/app'
 import { useTranscriptionStore } from '@/stores/transcription'
+import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 interface ExecutionNodeResult {
   id: number
@@ -95,16 +99,18 @@ const DEFAULT_REALTIME_SETTINGS: RealtimeRecognitionSettings = {
   singleChunkPeakMultiplier: DEFAULT_SINGLE_CHUNK_PEAK_MULTIPLIER,
 }
 
+const appStore = useAppStore()
+
 const message = useMessage()
 const router = useRouter()
 const store = useTranscriptionStore()
-const realtimeWorkflowCatalog = useWorkflowCatalog('realtime_transcription', 100)
+const realtimeWorkflowCatalog = useWorkflowCatalog(WORKFLOW_TYPES.REALTIME, 100)
 const {
   configuredWorkflowId,
   configuredWorkflow: selectedWorkflowOption,
   configuredWorkflowMissing,
   configuredWorkflowNotice: configuredWorkflowMessage,
-} = useWorkflowBindingStatus('realtime', realtimeWorkflowCatalog, {
+} = useWorkflowBindingStatus(WORKFLOW_BINDING_KEYS.REALTIME, realtimeWorkflowCatalog, {
   emptyLabel: '未配置默认工作流',
   unsetMessage: '当前未配置实时应用默认工作流，停止后会保存转写结果，但不会自动触发后处理。',
   missingMessage: workflowId => `应用配置中的实时工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,
@@ -203,6 +209,12 @@ const transportStateDescription = computed(() => {
   if (isRecording.value)
     return `浏览器本地 VAD 分句 + HTTP 短句识别，当前能量 ${listeningLevel.value.toFixed(3)} / 触发阈值 ${speechThresholdLevel.value.toFixed(3)} / 底噪 ${noiseFloorLevel.value.toFixed(3)}`
   return '浏览器本地切句后再调用短句识别接口，不维持流式会话。'
+})
+const secureContextBlocked = computed(() => typeof window !== 'undefined' && !window.isSecureContext)
+const secureContextNotice = computed(() => {
+  if (!secureContextBlocked.value)
+    return ''
+  return '当前页面不是安全上下文。浏览器端麦克风采集通常只允许在 HTTPS 或 localhost 下使用；如果你现在是通过服务器 IP 的 HTTP 页面访问，实时录音会被浏览器直接拦截。'
 })
 
 function clamp(value: number, min: number, max: number) {
@@ -804,7 +816,7 @@ async function persistRealtimeSession() {
         segmentUploadError.value = extractErrorMessage(error, '整段录音上传失败，已回退为仅保存文本结果。')
         message.warning(segmentUploadError.value)
         result = await createTranscriptionTask({
-          type: 'realtime',
+          type: TRANSCRIPTION_TASK_TYPES.REALTIME,
           result_text: transcript,
           duration: currentDurationSeconds(),
           workflow_id: sessionWorkflowId.value ?? undefined,
@@ -813,7 +825,7 @@ async function persistRealtimeSession() {
     }
     else {
       result = await createTranscriptionTask({
-        type: 'realtime',
+        type: TRANSCRIPTION_TASK_TYPES.REALTIME,
         result_text: transcript,
         duration: currentDurationSeconds(),
         workflow_id: sessionWorkflowId.value ?? undefined,
@@ -982,11 +994,15 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-if="secureContextBlocked" class="mt-4 rounded-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-7 text-amber-800">
+          {{ secureContextNotice }}
+        </div>
+
         <div class="flex flex-wrap gap-2 xl:max-w-[520px] xl:justify-end">
           <NButton size="small" quaternary @click="router.push('/workflows/application-settings')">
             应用配置
           </NButton>
-          <NButton size="small" type="primary" color="#0f766e" :disabled="isRecording" @click="handleStart">
+          <NButton size="small" type="primary" color="#0f766e" :disabled="isRecording || secureContextBlocked" @click="handleStart">
             开始录音
           </NButton>
           <NButton size="small" :disabled="!isRecording || isPaused" @click="handlePause">
@@ -1240,7 +1256,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <NButton v-if="latestTask.meeting_id" size="small" quaternary @click="router.push(`/meetings/${latestTask.meeting_id}`)">
+          <NButton v-if="latestTask.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)" size="small" quaternary @click="router.push(`/meetings/${latestTask.meeting_id}`)">
             查看会议纪要
           </NButton>
           <NButton v-if="latestTask.id" size="small" quaternary @click="router.push({ path: '/transcription', query: { taskId: String(latestTask.id) } })">
@@ -1289,7 +1305,7 @@ onBeforeUnmount(() => {
                 {{ workflowLabel(latestTask?.workflow_id) }}
               </div>
               <div class="mt-2 text-xs leading-6 text-slate">
-                {{ latestTask?.meeting_id ? `已生成会议数据 #${latestTask.meeting_id}` : '只有包含会议纪要节点的工作流才会继续生成会议数据。' }}
+                {{ latestTask?.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING) ? `已生成会议数据 #${latestTask.meeting_id}` : '当前版本仅展示实时转写结果与复核输出。' }}
               </div>
             </div>
           </div>

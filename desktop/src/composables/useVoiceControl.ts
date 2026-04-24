@@ -1,5 +1,7 @@
 import { onBeforeUnmount } from 'vue'
+import { PRODUCT_CAPABILITY_KEYS } from '@/constants/product'
 import { useAppStore, type SceneMode } from '@/stores/app'
+import { ensureProductFeatures } from '@/utils/auth'
 import { classifyVoiceIntent, fetchVoiceControl, primeVoiceControlAssets } from '@/utils/voiceControl'
 import { resolveSceneModeFromVoiceIntent } from '@/utils/voiceCommandRegistry'
 import { debugLog } from '@/utils/debug'
@@ -106,6 +108,9 @@ export function useVoiceControl() {
     if (!text)
       return { swallow: false }
 
+    if (!appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL))
+		return { swallow: false }
+
     if (!appStore.voiceControl.enabled)
       return { swallow: false }
 
@@ -175,6 +180,11 @@ export function useVoiceControl() {
   }
 
   async function ensureLoaded(force = false) {
+    await ensureProductFeatures(force)
+    if (!appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL)) {
+		appStore.applyVoiceControl({ commandTimeoutMs: 10000, enabled: false })
+		return
+	}
     if (appStore.voiceControlLoaded && !force)
       return
     try {

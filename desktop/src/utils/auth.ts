@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { PRODUCT_API_CAPABILITY_KEYS, PRODUCT_CAPABILITY_KEYS, PRODUCT_EDITIONS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { buildServerCandidates, describeNetworkError, normalizeServerUrl } from './server'
 
@@ -30,6 +31,17 @@ interface WorkflowBindingsPayload {
   voice_control?: number | null
 }
 
+interface ProductFeaturesPayload {
+  edition: typeof PRODUCT_EDITIONS[keyof typeof PRODUCT_EDITIONS]
+  capabilities?: {
+    [PRODUCT_API_CAPABILITY_KEYS.REALTIME]?: boolean
+    [PRODUCT_API_CAPABILITY_KEYS.BATCH]?: boolean
+    [PRODUCT_API_CAPABILITY_KEYS.MEETING]?: boolean
+    [PRODUCT_API_CAPABILITY_KEYS.VOICEPRINT]?: boolean
+    [PRODUCT_API_CAPABILITY_KEYS.VOICE_CONTROL]?: boolean
+  }
+}
+
 interface AnonymousLoginPayload {
   token: string
   expires_in: number
@@ -38,6 +50,7 @@ interface AnonymousLoginPayload {
 
 let anonymousLoginPromise: Promise<AuthUser> | null = null
 let workflowBindingsPromise: Promise<WorkflowBindingsPayload | null> | null = null
+let productFeaturesPromise: Promise<ProductFeaturesPayload | null> | null = null
 
 function mergeHeaders(headers?: HeadersInit, extra?: Record<string, string>) {
   const merged = new Headers(headers)
@@ -96,6 +109,11 @@ function applyUser(user?: AuthUser | null) {
 function applyWorkflowBindings(bindings?: WorkflowBindingsPayload | null) {
   const appStore = useAppStore()
   appStore.applyWorkflowBindings(bindings)
+}
+
+function applyProductFeatures(payload?: ProductFeaturesPayload | null) {
+	const appStore = useAppStore()
+	appStore.applyProductFeatures(payload)
 }
 
 function snapshotUser(appStore = useAppStore()): AuthUser {
@@ -190,8 +208,47 @@ export async function getCurrentUserWorkflowBindings(): Promise<WorkflowBindings
   return payload.data || null
 }
 
+export async function getProductFeatures(): Promise<ProductFeaturesPayload | null> {
+  const response = await authedFetch('/api/admin/app-settings/product-features')
+  const payload = await readResponseEnvelope<ProductFeaturesPayload>(response)
+  if (!response.ok) {
+    throw new Error(payload.message || '获取产品能力失败')
+  }
+  applyProductFeatures(payload.data || null)
+  return payload.data || null
+}
+
+export async function ensureProductFeatures(force = false): Promise<ProductFeaturesPayload | null> {
+  const appStore = useAppStore()
+  if (!force && appStore.productFeaturesLoaded)
+    return {
+      edition: appStore.productEdition,
+      capabilities: {
+        [PRODUCT_API_CAPABILITY_KEYS.REALTIME]: appStore.productCapabilities[PRODUCT_CAPABILITY_KEYS.REALTIME],
+        [PRODUCT_API_CAPABILITY_KEYS.BATCH]: appStore.productCapabilities[PRODUCT_CAPABILITY_KEYS.BATCH],
+        [PRODUCT_API_CAPABILITY_KEYS.MEETING]: appStore.productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING],
+        [PRODUCT_API_CAPABILITY_KEYS.VOICEPRINT]: appStore.productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICEPRINT],
+        [PRODUCT_API_CAPABILITY_KEYS.VOICE_CONTROL]: appStore.productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL],
+      },
+    }
+
+  if (productFeaturesPromise && !force)
+    return await productFeaturesPromise
+
+  productFeaturesPromise = (async () => await getProductFeatures())()
+
+  try {
+    return await productFeaturesPromise
+  }
+  finally {
+    productFeaturesPromise = null
+  }
+}
+
 export async function ensureRealtimeWorkflowBinding(force = false): Promise<number | null> {
   const appStore = useAppStore()
+  if (!appStore.productFeaturesLoaded)
+		await ensureProductFeatures()
   if (!force && appStore.workflowBindingsLoaded)
     return appStore.realtimeWorkflowId
 
@@ -215,6 +272,10 @@ export async function ensureRealtimeWorkflowBinding(force = false): Promise<numb
 
 export async function ensureVoiceWorkflowBinding(force = false): Promise<number | null> {
   const appStore = useAppStore()
+  if (!appStore.productFeaturesLoaded)
+		await ensureProductFeatures()
+  if (!appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL))
+		return null
   if (!force && appStore.workflowBindingsLoaded)
     return appStore.voiceWorkflowId
 

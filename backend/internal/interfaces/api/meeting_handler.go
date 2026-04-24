@@ -15,6 +15,7 @@ import (
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/interfaces/middleware"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
@@ -27,17 +28,18 @@ type MeetingHandler struct {
 	uploadDir      string
 	publicBaseURL  string
 	maxAudioSizeMB int64
+	feature        featureGate
 }
 
 // NewMeetingHandler creates a meeting handler.
-func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadDir, publicBaseURL string, maxAudioSizeMB int64) *MeetingHandler {
+func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadDir, publicBaseURL string, maxAudioSizeMB int64, features pkgconfig.ProductFeatures) *MeetingHandler {
 	if strings.TrimSpace(uploadDir) == "" {
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
 		maxAudioSizeMB = 100
 	}
-	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB}
+	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB, feature: newFeatureGate(features)}
 }
 
 // Register registers meeting routes.
@@ -51,6 +53,10 @@ func (h *MeetingHandler) Register(group *gin.RouterGroup) {
 }
 
 func (h *MeetingHandler) Upload(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	audioFile, err := savePermanentUploadedAudio(c, "file", h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
@@ -110,6 +116,10 @@ func (h *MeetingHandler) Upload(c *gin.Context) {
 }
 
 func (h *MeetingHandler) Create(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	var req appmeeting.CreateMeetingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
@@ -131,6 +141,10 @@ func (h *MeetingHandler) Create(c *gin.Context) {
 }
 
 func (h *MeetingHandler) List(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	userID := middleware.UserIDFromContext(c)
@@ -145,6 +159,10 @@ func (h *MeetingHandler) List(c *gin.Context) {
 }
 
 func (h *MeetingHandler) Detail(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid meeting id")
@@ -161,6 +179,10 @@ func (h *MeetingHandler) Detail(c *gin.Context) {
 }
 
 func (h *MeetingHandler) Delete(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid meeting id")
@@ -185,6 +207,10 @@ func (h *MeetingHandler) Delete(c *gin.Context) {
 }
 
 func (h *MeetingHandler) RegenerateSummary(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid meeting id")

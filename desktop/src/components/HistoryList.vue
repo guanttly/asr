@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import TextDiffPreview from './TextDiffPreview.vue'
 
+import { TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
 import { useInjector } from '@/composables/useInjector'
 import { debugLog } from '@/utils/debug'
 import {
@@ -126,7 +127,7 @@ async function loadTasks(reset = false) {
 
   try {
     const result = await getTranscriptionTasks({
-      type: 'realtime',
+      type: TRANSCRIPTION_TASK_TYPES.REALTIME,
       offset: reset ? 0 : items.value.length,
       limit: PAGE_SIZE,
     })
@@ -222,7 +223,7 @@ async function clearAll() {
 
   clearing.value = true
   try {
-    const result = await clearTranscriptionTasks('realtime')
+    const result = await clearTranscriptionTasks(TRANSCRIPTION_TASK_TYPES.REALTIME)
     await loadTasks(true)
     setFeedback('success', `已删除 ${result.deleted_count} 条记录${result.skipped_count > 0 ? `，跳过 ${result.skipped_count} 条进行中的任务` : ''}`)
   }

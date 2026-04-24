@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
 	"github.com/lgt/asr/internal/infrastructure/diarization"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 )
 
 type voiceprintClientStub struct {
@@ -70,7 +71,7 @@ func TestVoiceprintHandlerList(t *testing.T) {
 			CreatedAt:     "2025-04-10T08:30:00",
 			UpdatedAt:     "2025-04-10T08:30:00",
 		}},
-	}), 100)
+	}), 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.GET("/voiceprints", handler.List)
@@ -121,7 +122,7 @@ func TestVoiceprintHandlerEnroll(t *testing.T) {
 			UpdatedAt:     "2025-04-10T09:00:00",
 		},
 	}
-	handler := NewVoiceprintHandler(appvoiceprint.NewService(client), 100)
+	handler := NewVoiceprintHandler(appvoiceprint.NewService(client), 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.POST("/voiceprints", handler.Enroll)
@@ -182,7 +183,7 @@ func TestVoiceprintHandlerReturnsServiceUnavailableWhenUnconfigured(t *testing.T
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	handler := NewVoiceprintHandler(appvoiceprint.NewService(&voiceprintClientStub{}), 100)
+	handler := NewVoiceprintHandler(appvoiceprint.NewService(&voiceprintClientStub{}), 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.GET("/voiceprints", handler.List)

@@ -21,12 +21,17 @@ const form = reactive({
 
 const loading = ref(false)
 
+function openDownloads() {
+  router.push('/downloads')
+}
+
 async function handleLogin() {
   loading.value = true
   try {
     const result = await login(form)
     userStore.setToken(result.data.token)
     await userStore.bootstrap()
+    await appStore.bootstrapProductFeatures()
     await appStore.bootstrapWorkflowBindings()
     message.success('登录成功')
     router.push('/dashboard')
@@ -105,6 +110,9 @@ async function handleLogin() {
           </div>
           <NButton block type="primary" color="#0f766e" size="large" :loading="loading" @click="handleLogin">
             进入系统
+          </NButton>
+          <NButton block class="mt-3" tertiary size="large" @click="openDownloads">
+            打开终端下载页
           </NButton>
         </NForm>
       </section>

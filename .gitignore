@@ -39,4 +39,7 @@ backend/configs/config.yaml
 # Runtime data
 backend/uploads/
 
+# All-in-one release artifacts
+deploy/all-in-one/dist/
+
 speaker-diarization-offline.tar.gz

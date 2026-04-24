@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DataTableColumns } from 'naive-ui'
-import type { ActiveWorkflowType } from '@/types/workflow'
+import type { ActiveWorkflowType, WorkflowOwnerType, WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
 
 import { NButton, NTag, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref, watch } from 'vue'
@@ -9,18 +9,21 @@ import { useRouter } from 'vue-router'
 import { cloneWorkflow, createWorkflow, deleteWorkflow, getWorkflows, updateWorkflow } from '@/api/workflow'
 import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
+import { WORKFLOW_OWNER_TYPES, WORKFLOW_SOURCE_KINDS, WORKFLOW_TARGET_KINDS, WORKFLOW_TYPES } from '@/types/workflow'
 
 interface WorkflowItem {
   id: number
   name: string
   description?: string
-  workflow_type: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control'
-  source_kind: 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake'
-  target_kind: 'transcript' | 'meeting_summary' | 'voice_command'
+  workflow_type: WorkflowType
+  source_kind: WorkflowSourceKind
+  target_kind: WorkflowTargetKind
   is_legacy: boolean
   validation_message?: string
-  owner_type: 'system' | 'user'
+  owner_type: WorkflowOwnerType
   owner_id: number
   source_id?: number
   is_published: boolean
@@ -30,6 +33,7 @@ interface WorkflowItem {
 }
 
 const router = useRouter()
+const appStore = useAppStore()
 const userStore = useUserStore()
 const message = useMessage()
 const confirmAction = useConfirmActionDialog()
@@ -49,41 +53,53 @@ const userWorkflows = ref<WorkflowItem[]>([])
 const form = reactive({
   name: '',
   description: '',
-  owner_type: 'user' as 'system' | 'user',
-  workflow_type: 'batch_transcription' as ActiveWorkflowType,
+  owner_type: WORKFLOW_OWNER_TYPES.USER as WorkflowOwnerType,
+  workflow_type: WORKFLOW_TYPES.BATCH as ActiveWorkflowType,
 })
 
-const workflowScenarioOptions: Array<{ value: ActiveWorkflowType, label: string, description: string }> = [
+const workflowScenarioOptions = computed<Array<{ value: ActiveWorkflowType, label: string, description: string }>>(() => {
+  const options: Array<{ value: ActiveWorkflowType, label: string, description: string }> = [
   {
-    value: 'batch_transcription',
+    value: WORKFLOW_TYPES.BATCH,
     label: '批量转写整理',
     description: '自动固化非实时 ASR 源节点，后续只编辑中间处理链路。',
   },
   {
-    value: 'realtime_transcription',
+    value: WORKFLOW_TYPES.REALTIME,
     label: '实时转写整理',
     description: '自动固化实时 ASR 源节点，适合实时识别后的整理链路。',
   },
-  {
-    value: 'meeting',
-    label: '会议纪要',
-    description: '自动固化首个 ASR 节点和末尾会议纪要节点。',
-  },
-  {
-    value: 'voice_control',
-    label: '语音控制',
-    description: '固化唤醒词识别源节点与意图识别输出节点，用于终端语音控制。',
-  },
-]
+  ]
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)) {
+    options.push({
+      value: WORKFLOW_TYPES.MEETING,
+      label: '会议纪要',
+      description: '自动固化首个 ASR 节点和末尾会议纪要节点。',
+    })
+  }
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL)) {
+    options.push({
+      value: WORKFLOW_TYPES.VOICE_CONTROL,
+      label: '语音控制',
+      description: '固化唤醒词识别源节点与意图识别输出节点，用于终端语音控制。',
+    })
+  }
+  return options
+})
 
-const workflowFilterOptions: Array<{ value: 'all' | ActiveWorkflowType | 'legacy', label: string }> = [
-  { value: 'all', label: '全部场景' },
-  { value: 'batch_transcription', label: '批量转写' },
-  { value: 'realtime_transcription', label: '实时转写' },
-  { value: 'meeting', label: '会议纪要' },
-  { value: 'voice_control', label: '语音控制' },
-  { value: 'legacy', label: 'Legacy' },
-]
+const workflowFilterOptions = computed<Array<{ value: 'all' | ActiveWorkflowType | 'legacy', label: string }>>(() => {
+  const options: Array<{ value: 'all' | ActiveWorkflowType | 'legacy', label: string }> = [
+    { value: 'all', label: '全部场景' },
+    { value: WORKFLOW_TYPES.BATCH, label: '批量转写' },
+    { value: WORKFLOW_TYPES.REALTIME, label: '实时转写' },
+  ]
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING))
+    options.push({ value: WORKFLOW_TYPES.MEETING, label: '会议纪要' })
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+    options.push({ value: WORKFLOW_TYPES.VOICE_CONTROL, label: '语音控制' })
+  options.push({ value: WORKFLOW_TYPES.LEGACY, label: 'Legacy' })
+  return options
+})
 
 const isAdmin = computed(() => userStore.profile?.role === 'admin')
 const workflowLookup = computed(() => {
@@ -130,11 +146,11 @@ function formatDateTime(value?: string) {
 
 function workflowTypeLabel(value?: WorkflowItem['workflow_type']) {
   const map: Record<string, string> = {
-    legacy: '旧版',
-    batch_transcription: '批量转写',
-    realtime_transcription: '实时转写',
-    meeting: '会议纪要',
-    voice_control: '语音控制',
+    [WORKFLOW_TYPES.LEGACY]: '旧版',
+    [WORKFLOW_TYPES.BATCH]: '批量转写',
+    [WORKFLOW_TYPES.REALTIME]: '实时转写',
+    [WORKFLOW_TYPES.MEETING]: '会议纪要',
+    [WORKFLOW_TYPES.VOICE_CONTROL]: '语音控制',
   }
   return map[value || ''] || value || '-'
 }
@@ -144,15 +160,15 @@ function workflowProfileLabel(row: WorkflowItem) {
     return 'Legacy 文本后处理'
 
   const sourceMap: Record<string, string> = {
-    legacy_text: '文本',
-    batch_asr: '批量 ASR',
-    realtime_asr: '实时 ASR',
-    voice_wake: '唤醒词',
+    [WORKFLOW_SOURCE_KINDS.LEGACY_TEXT]: '文本',
+    [WORKFLOW_SOURCE_KINDS.BATCH_ASR]: '批量 ASR',
+    [WORKFLOW_SOURCE_KINDS.REALTIME_ASR]: '实时 ASR',
+    [WORKFLOW_SOURCE_KINDS.VOICE_WAKE]: '唤醒词',
   }
   const targetMap: Record<string, string> = {
-    transcript: '整理文本',
-    meeting_summary: '会议纪要',
-    voice_command: '控制指令',
+    [WORKFLOW_TARGET_KINDS.TRANSCRIPT]: '整理文本',
+    [WORKFLOW_TARGET_KINDS.MEETING_SUMMARY]: '会议纪要',
+    [WORKFLOW_TARGET_KINDS.VOICE_COMMAND]: '控制指令',
   }
   return `${sourceMap[row.source_kind] || row.source_kind} -> ${targetMap[row.target_kind] || row.target_kind}`
 }
@@ -177,7 +193,7 @@ function resetCreateForm() {
   form.name = ''
   form.description = ''
   form.owner_type = 'user'
-  form.workflow_type = 'batch_transcription'
+  form.workflow_type = WORKFLOW_TYPES.BATCH
 }
 
 async function loadWorkflows() {
@@ -451,6 +467,16 @@ watch(scope, () => {
 watch(createVisible, (visible) => {
   if (!visible)
     resetCreateForm()
+})
+
+watch(workflowScenarioOptions, (options) => {
+  if (!options.some(option => option.value === form.workflow_type))
+    form.workflow_type = WORKFLOW_TYPES.BATCH
+})
+
+watch(workflowFilterOptions, (options) => {
+  if (!options.some(option => option.value === scenario.value))
+    scenario.value = 'all'
 })
 
 onMounted(loadWorkflows)

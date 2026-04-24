@@ -411,9 +411,10 @@ func main() {
 	router := api.NewRouter(logger)
 	router.Static("/uploads", cfg.Upload.Dir)
 	protected := router.Group("/api", middleware.AuthRequired(cfg.JWT.Secret))
+	productFeatures := cfg.Product.Features()
 	api.NewASRHandler(asrService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/asr"))
-	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/meetings"))
-	api.NewVoiceprintHandler(voiceprintService, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/meetings/voiceprints"))
+	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, productFeatures).Register(protected.Group("/meetings"))
+	api.NewVoiceprintHandler(voiceprintService, cfg.Upload.MaxAudioSizeMB, productFeatures).Register(protected.Group("/meetings/voiceprints"))
 	router.GET("/ws/events", middleware.AuthRequired(cfg.JWT.Secret), businessHub.Handle)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.ASRAPIPort)

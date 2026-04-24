@@ -4,6 +4,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import BlankLayout from '@/layouts/BlankLayout.vue'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
+import { PRODUCT_FEATURE_KEYS, isProductFeatureKey } from '@/constants/product'
+import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
 const routes: RouteRecordRaw[] = [
@@ -16,6 +18,19 @@ const routes: RouteRecordRaw[] = [
         path: '',
         name: 'login',
         component: () => import('@/pages/login.vue'),
+      },
+    ],
+  },
+  {
+    path: '/downloads',
+    component: BlankLayout,
+    meta: { public: true, allowAuthenticated: true },
+    children: [
+      {
+        path: '',
+        name: 'public-downloads',
+        meta: { title: '终端下载', desc: '公开分发桌面端安装包，下载目录来自容器外挂载路径。' },
+        component: () => import('@/pages/system/downloads.vue'),
       },
     ],
   },
@@ -53,13 +68,13 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'workflows/application-settings',
         name: 'application-settings',
-        meta: { pageManagedScroll: true, title: '应用配置', desc: '在工作流目录下统一配置实时、批量、会议纪要和语音控制应用默认绑定的工作流。' },
+        meta: { pageManagedScroll: true, title: '应用配置', desc: '在工作流目录下统一配置各应用默认绑定的工作流。' },
         component: () => import('@/pages/application/settings.vue'),
       },
       {
         path: 'workflows',
         name: 'workflows',
-        meta: { pageManagedScroll: true, title: '工作流管理', desc: '管理系统模板与个人工作流，编排纠错、过滤、纪要等节点。' },
+        meta: { pageManagedScroll: true, title: '工作流管理', desc: '管理系统模板与个人工作流，编排纠错、过滤和转写后处理节点。' },
         component: () => import('@/pages/workflow/index.vue'),
       },
       {
@@ -77,25 +92,25 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'meetings',
         name: 'meetings',
-        meta: { title: '会议纪要', desc: '上传会议录音、查看说话人标注，并按应用配置生成结构化纪要。' },
+        meta: { requiredFeature: PRODUCT_FEATURE_KEYS.MEETING, title: '会议纪要', desc: '上传会议录音、查看说话人标注，并按应用配置生成结构化纪要。' },
         component: () => import('@/pages/meeting/index.vue'),
       },
       {
         path: 'meetings/upload',
         name: 'meeting-upload',
-        meta: { title: '新建会议', desc: '创建会议任务，摘要生成工作流由应用配置页统一维护。' },
+        meta: { requiredFeature: PRODUCT_FEATURE_KEYS.MEETING, title: '新建会议', desc: '创建会议任务，摘要生成工作流由应用配置页统一维护。' },
         component: () => import('@/pages/meeting/upload.vue'),
       },
       {
         path: 'meetings/voiceprints',
         name: 'meeting-voiceprints',
-        meta: { pageManagedScroll: true, title: '声纹库', desc: '管理会议纪要中 speaker_diarize 节点使用的已注册说话人声纹样本。' },
+        meta: { requiredFeature: PRODUCT_FEATURE_KEYS.VOICEPRINT, pageManagedScroll: true, title: '声纹库', desc: '管理会议纪要中 speaker_diarize 节点使用的已注册说话人声纹样本。' },
         component: () => import('@/pages/meeting/voiceprints.vue'),
       },
       {
         path: 'meetings/:id',
         name: 'meeting-detail',
-        meta: { title: '会议详情', desc: '查看逐字稿、说话人片段与会议摘要，并按应用配置重新生成。' },
+        meta: { requiredFeature: PRODUCT_FEATURE_KEYS.MEETING, title: '会议详情', desc: '查看逐字稿、说话人片段与会议摘要，并按应用配置重新生成。' },
         component: () => import('@/pages/meeting/detail.vue'),
       },
       {
@@ -125,7 +140,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'terminology/voice-commands',
         name: 'terminology-voice-commands',
-        meta: { pageManagedScroll: true, title: '控制指令库', desc: '维护语音控制工作流里可识别的控制指令组、候选话术与有效分组。' },
+        meta: { requiredFeature: PRODUCT_FEATURE_KEYS.VOICE_CONTROL, pageManagedScroll: true, title: '控制指令库', desc: '维护语音控制工作流里可识别的控制指令组、候选话术与有效分组。' },
         component: () => import('@/pages/terminology/voice-commands.vue'),
       },
       {
@@ -151,12 +166,16 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const userStore = useUserStore()
-  if (to.meta.public && userStore.token)
+  const appStore = useAppStore()
+  if (to.meta.public && userStore.token && !to.meta.allowAuthenticated)
     return '/dashboard'
   if (to.meta.public)
     return true
   if (!userStore.token)
     return '/login'
+  const requiredFeature = to.meta.requiredFeature
+  if (isProductFeatureKey(requiredFeature) && !appStore.hasCapability(requiredFeature))
+    return '/dashboard'
   return true
 })
 

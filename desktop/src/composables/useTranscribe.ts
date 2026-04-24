@@ -1,8 +1,9 @@
 import { ref } from 'vue'
+import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
-import { authedFetch, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
+import { authedFetch, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
 
@@ -18,6 +19,7 @@ export function useTranscribe() {
   const appStore = useAppStore()
   const { injectText } = useInjector()
   const voiceControl = useVoiceControl()
+  void ensureProductFeatures().catch(() => undefined)
   void voiceControl.ensureLoaded()
 
   const listeningLevel = ref(0)
@@ -295,7 +297,7 @@ export function useTranscribe() {
     saveSessionPromise = (async () => {
       const duration = sessionAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
 
-      if (scene === 'meeting') {
+      if (scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)) {
         await persistMeetingSession(transcript, duration)
         return
       }

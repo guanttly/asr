@@ -1,0 +1,40 @@
+version: '3.9'
+
+services:
+  asr-suite:
+    image: ${ASR_RELEASE_IMAGE:-asr-all-in-one:latest}
+    container_name: ${ASR_CONTAINER_NAME:-asr-all-in-one}
+    restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '${ASR_HTTP_PORT:-80}:80'
+      - '${ASR_HTTPS_PORT:-443}:443'
+    environment:
+      ASR_ENABLE_HTTPS: ${ASR_ENABLE_HTTPS:-1}
+      ASR_HTTP_REDIRECT_TO_HTTPS: ${ASR_HTTP_REDIRECT_TO_HTTPS:-0}
+      ASR_TLS_COMMON_NAME: ${ASR_TLS_COMMON_NAME:-localhost}
+      ASR_TLS_ALT_NAMES: ${ASR_TLS_ALT_NAMES:-DNS:localhost,IP:127.0.0.1}
+      ASR_MYSQL_ROOT_PASSWORD: ${ASR_MYSQL_ROOT_PASSWORD:-change-me}
+      ASR_MYSQL_DATABASE: ${ASR_MYSQL_DATABASE:-asr}
+      ASR_BOOTSTRAP_ADMIN_USERNAME: ${ASR_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      ASR_BOOTSTRAP_ADMIN_PASSWORD: ${ASR_BOOTSTRAP_ADMIN_PASSWORD:-change-me-now}
+      ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME: ${ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME:-系统管理员}
+      ASR_JWT_SECRET: ${ASR_JWT_SECRET:-replace-with-random-secret}
+      ASR_SERVICES_ASR: ${ASR_SERVICES_ASR:-http://host.docker.internal:8000}
+      ASR_SERVICES_ASR_STREAM: ${ASR_SERVICES_ASR_STREAM:-}
+      ASR_SERVICES_DIARIZATION_URL: ${ASR_SERVICES_DIARIZATION_URL:-}
+      ASR_SERVICES_SPEAKER_ANALYSIS_URL: ${ASR_SERVICES_SPEAKER_ANALYSIS_URL:-}
+      ASR_SERVICES_SUMMARY_MODEL: ${ASR_SERVICES_SUMMARY_MODEL:-qwen3-4b}
+    volumes:
+      - ./runtime/mysql:/var/lib/asr/mysql
+      - ./runtime/certs:/var/lib/asr/certs
+      - ./runtime/downloads:/var/lib/asr/downloads
+      - ./runtime/tmp:/var/lib/asr/tmp
+      - ./runtime/uploads:/var/lib/asr/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "/app/scripts/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s

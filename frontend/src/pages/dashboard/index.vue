@@ -5,6 +5,8 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { clearDashboardRetryHistory, deleteDashboardRetryHistoryItem, getDashboardOverview, retryDashboardPostProcessTasks, syncDashboardTask } from '@/api/dashboard'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { useAppStore } from '@/stores/app'
 
 interface SyncAlertItem {
   task_id: number
@@ -59,6 +61,7 @@ interface DashboardOverview {
 const message = useMessage()
 const route = useRoute()
 const router = useRouter()
+const appStore = useAppStore()
 const confirmDelete = useDeleteConfirmDialog()
 const loading = ref(false)
 const bulkRetrying = ref(false)
@@ -524,7 +527,7 @@ const alertColumns = [
         size: 'small',
         onClick: () => goToTask(row.task_id),
       }, { default: () => '任务' }),
-      row.meeting_id
+      row.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)
         ? h(NButton, {
             text: true,
             size: 'small',
@@ -566,7 +569,7 @@ const retryResultColumns = [
         size: 'small',
         onClick: () => goToTask(row.task_id),
       }, { default: () => '任务' }),
-      row.meeting_id
+      row.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)
         ? h(NButton, {
             text: true,
             size: 'small',

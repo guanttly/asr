@@ -6,16 +6,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	appvoicecommand "github.com/lgt/asr/internal/application/voicecommand"
+	pkgconfig "github.com/lgt/asr/pkg/config"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
 
 type VoiceCommandHandler struct {
 	service *appvoicecommand.Service
+	feature featureGate
 }
 
-func NewVoiceCommandHandler(service *appvoicecommand.Service) *VoiceCommandHandler {
-	return &VoiceCommandHandler{service: service}
+func NewVoiceCommandHandler(service *appvoicecommand.Service, features pkgconfig.ProductFeatures) *VoiceCommandHandler {
+	return &VoiceCommandHandler{service: service, feature: newFeatureGate(features)}
 }
 
 func (h *VoiceCommandHandler) Register(group *gin.RouterGroup) {
@@ -30,6 +32,10 @@ func (h *VoiceCommandHandler) Register(group *gin.RouterGroup) {
 }
 
 func (h *VoiceCommandHandler) ListDicts(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	items, total, err := h.service.ListDicts(c.Request.Context(), offset, limit)
@@ -41,6 +47,10 @@ func (h *VoiceCommandHandler) ListDicts(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) CreateDict(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	var req appvoicecommand.CreateDictRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
@@ -55,6 +65,10 @@ func (h *VoiceCommandHandler) CreateDict(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) UpdateDict(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
@@ -74,6 +88,10 @@ func (h *VoiceCommandHandler) UpdateDict(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) DeleteDict(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
@@ -87,6 +105,10 @@ func (h *VoiceCommandHandler) DeleteDict(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) ListEntries(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
@@ -101,6 +123,10 @@ func (h *VoiceCommandHandler) ListEntries(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) CreateEntry(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
@@ -121,6 +147,10 @@ func (h *VoiceCommandHandler) CreateEntry(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) UpdateEntry(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
@@ -147,6 +177,10 @@ func (h *VoiceCommandHandler) UpdateEntry(c *gin.Context) {
 }
 
 func (h *VoiceCommandHandler) DeleteEntry(c *gin.Context) {
+	if !h.feature.voiceControl() {
+		h.feature.denyFeature(c, "当前版本未开放控制指令库")
+		return
+	}
 	entryID, err := strconv.ParseUint(c.Param("entryId"), 10, 64)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid entry id")

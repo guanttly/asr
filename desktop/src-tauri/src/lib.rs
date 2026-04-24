@@ -97,6 +97,25 @@ fn log_runtime(message: &str) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn should_ignore_certificate_errors() -> bool {
+    matches!(
+        option_env!("ASR_DESKTOP_IGNORE_CERT_ERRORS"),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn append_webview2_argument(arguments: &mut String, argument: &str) {
+    if arguments.split_whitespace().any(|item| item == argument) {
+        return;
+    }
+    if !arguments.trim().is_empty() {
+        arguments.push(' ');
+    }
+    arguments.push_str(argument);
+}
+
 fn tray_enabled() -> bool {
     true
 }
@@ -271,16 +290,17 @@ pub fn run() {
         log_runtime(&format!("panic: {panic_info}"));
     }));
 
-    // Allow fetching HTTP resources from the HTTPS webview origin (mixed content).
-    // Must be set before Tauri creates the WebView2 environment.
+    // WebView2 browser arguments must be set before Tauri creates the environment.
     #[cfg(target_os = "windows")]
     {
-        if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-            std::env::set_var(
-                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                "--allow-running-insecure-content",
-            );
+        let mut webview2_arguments = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .unwrap_or_default();
+        append_webview2_argument(&mut webview2_arguments, "--allow-running-insecure-content");
+        if should_ignore_certificate_errors() {
+            append_webview2_argument(&mut webview2_arguments, "--ignore-certificate-errors");
+            log_runtime("configured WebView2 to ignore certificate errors");
         }
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webview2_arguments);
     }
 
     let exe_path = std::env::current_exe()

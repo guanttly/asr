@@ -95,6 +95,6 @@ declare global {
   export type { SegmentHandleResult } from './composables/useVoiceControl'
   import('./composables/useVoiceControl')
   // @ts-ignore
-  export type { SceneMode, VoiceControlConfig } from './stores/app'
+  export type { SceneMode, ProductCapabilities, VoiceControlConfig } from './stores/app'
   import('./stores/app')
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { SCENE_MODES } from '@/constants/product'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useTranscribe } from '@/composables/useTranscribe'
 import { useAppStore } from '@/stores/app'
@@ -20,11 +21,11 @@ type VisualState = 'idle' | 'command' | 'meeting' | 'report'
 const visualState = computed<VisualState>(() => {
   if (!isActive.value) return 'idle'
   if (isCommandMode.value) return 'command'
-  return appStore.sceneMode === 'meeting' ? 'meeting' : 'report'
+  return appStore.sceneMode === SCENE_MODES.MEETING ? SCENE_MODES.MEETING : SCENE_MODES.REPORT
 })
 
-const sceneLabel = computed(() => appStore.sceneMode === 'meeting' ? '会议模式' : '报告模式')
-const sceneIcon = computed(() => appStore.sceneMode === 'meeting' ? '会' : '报')
+const sceneLabel = computed(() => appStore.sceneMode === SCENE_MODES.MEETING ? '会议模式' : '报告模式')
+const sceneIcon = computed(() => appStore.sceneMode === SCENE_MODES.MEETING ? '会' : '报')
 
 const statusLabel = computed(() => {
   if (!isActive.value) return `点击开始 · ${sceneLabel.value}`

@@ -18,6 +18,7 @@ async function bootstrap() {
   const userStore = useUserStore(pinia)
   const appStore = useAppStore(pinia)
   await userStore.bootstrap()
+  await appStore.bootstrapProductFeatures()
   await appStore.bootstrapWorkflowBindings()
 
   app.mount('#app')

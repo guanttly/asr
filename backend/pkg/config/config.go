@@ -14,8 +14,10 @@ type Config struct {
 	Database  DatabaseConfig  `mapstructure:"database"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
+	Product   ProductConfig   `mapstructure:"product"`
 	Services  ServiceConfig   `mapstructure:"services"`
 	Upload    UploadConfig    `mapstructure:"upload"`
+	Download  DownloadConfig  `mapstructure:"download"`
 	Gateway   GatewayConfig   `mapstructure:"gateway"`
 }
 
@@ -61,6 +63,52 @@ type BootstrapConfig struct {
 	AdminDisplayName string `mapstructure:"admin_display_name"`
 }
 
+type ProductEdition string
+
+const (
+	ProductEditionStandard ProductEdition = "standard"
+	ProductEditionAdvanced ProductEdition = "advanced"
+)
+
+type ProductFeatures struct {
+	Edition      ProductEdition `json:"edition"`
+	Realtime     bool           `json:"realtime"`
+	Batch        bool           `json:"batch"`
+	Meeting      bool           `json:"meeting"`
+	Voiceprint   bool           `json:"voiceprint"`
+	VoiceControl bool           `json:"voice_control"`
+}
+
+type ProductConfig struct {
+	Edition ProductEdition `mapstructure:"edition"`
+}
+
+func (c ProductConfig) NormalizedEdition() ProductEdition {
+	switch ProductEdition(strings.ToLower(strings.TrimSpace(string(c.Edition)))) {
+	case ProductEditionAdvanced:
+		return ProductEditionAdvanced
+	default:
+		return ProductEditionStandard
+	}
+}
+
+func (c ProductConfig) Features() ProductFeatures {
+	features := ProductFeatures{
+		Edition:      c.NormalizedEdition(),
+		Realtime:     true,
+		Batch:        true,
+		Meeting:      false,
+		Voiceprint:   false,
+		VoiceControl: false,
+	}
+	if features.Edition == ProductEditionAdvanced {
+		features.Meeting = true
+		features.Voiceprint = true
+		features.VoiceControl = true
+	}
+	return features
+}
+
 // ServiceConfig holds downstream service endpoints.
 type ServiceConfig struct {
 	ASR                         string `mapstructure:"asr"`
@@ -81,6 +129,12 @@ type UploadConfig struct {
 	Dir            string `mapstructure:"dir"`
 	PublicBaseURL  string `mapstructure:"public_base_url"`
 	MaxAudioSizeMB int64  `mapstructure:"max_audio_size_mb"`
+}
+
+// DownloadConfig holds local downloadable package storage settings.
+type DownloadConfig struct {
+	Dir            string `mapstructure:"dir"`
+	PublicBasePath string `mapstructure:"public_base_path"`
 }
 
 // GatewayConfig holds upstream addresses for the gateway app.
@@ -115,6 +169,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("bootstrap.admin_username", "admin")
 	v.SetDefault("bootstrap.admin_password", "123456")
 	v.SetDefault("bootstrap.admin_display_name", "系统管理员")
+	v.SetDefault("product.edition", string(ProductEditionStandard))
 	v.SetDefault("services.asr", "http://127.0.0.1:9000")
 	v.SetDefault("services.asr_max_audio_size_mb", 25)
 	v.SetDefault("services.asr_stream", "")
@@ -129,6 +184,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("upload.dir", "uploads")
 	v.SetDefault("upload.public_base_url", "")
 	v.SetDefault("upload.max_audio_size_mb", 1024)
+	v.SetDefault("download.dir", "downloads")
+	v.SetDefault("download.public_base_path", "/downloads/files")
 	v.SetDefault("gateway.asr_api", "http://127.0.0.1:10011")
 	v.SetDefault("gateway.admin_api", "http://127.0.0.1:10012")
 	v.SetDefault("gateway.nlp_api", "http://127.0.0.1:10013")

@@ -1,6 +1,24 @@
+import type { TranscriptionTaskType } from '@/constants/transcription'
+
 import request from './request'
 
-export function createTranscriptionTask(payload: { audio_url?: string, stream_session_id?: string, type: 'realtime' | 'batch', dict_id?: number, workflow_id?: number, result_text?: string, duration?: number }) {
+export interface CreateTranscriptionTaskPayload {
+  audio_url?: string
+  stream_session_id?: string
+  type: TranscriptionTaskType
+  dict_id?: number
+  workflow_id?: number
+  result_text?: string
+  duration?: number
+}
+
+export interface GetTranscriptionTasksParams {
+  offset?: number
+  limit?: number
+  type?: TranscriptionTaskType
+}
+
+export function createTranscriptionTask(payload: CreateTranscriptionTaskPayload) {
   return request.post('/api/asr/tasks', payload)
 }
 
@@ -52,7 +70,7 @@ export function finishRealtimeStreamSession(sessionId: string | number) {
   return request.post(`/api/asr/stream-sessions/${sessionId}/finish`)
 }
 
-export function getTranscriptionTasks(params?: { offset?: number, limit?: number }) {
+export function getTranscriptionTasks(params?: GetTranscriptionTasksParams) {
   return request.get('/api/asr/tasks', { params })
 }
 

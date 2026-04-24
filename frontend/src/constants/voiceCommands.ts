@@ -7,6 +7,11 @@ export const VOICE_COMMAND_INTENT_KEYS = {
   sceneMeetingSwitch: 'scene_meeting_switch',
 } as const
 
+export const VOICE_COMMAND_LEGACY_INTENT_KEYS = {
+  sceneReportSwitch: 'report',
+  sceneMeetingSwitch: 'meeting',
+} as const
+
 export type VoiceCommandGroupKey = typeof VOICE_COMMAND_GROUP_KEYS[keyof typeof VOICE_COMMAND_GROUP_KEYS]
 export type VoiceCommandIntentKey = typeof VOICE_COMMAND_INTENT_KEYS[keyof typeof VOICE_COMMAND_INTENT_KEYS]
 
@@ -36,14 +41,14 @@ export const BUILTIN_VOICE_COMMAND_GROUPS: readonly BuiltinVoiceCommandGroupSpec
         handlerName: '切换到报告模式',
         defaultLabel: '报告模式',
         description: '把桌面端切换到报告模式。',
-        legacyKeys: ['report'],
+        legacyKeys: [VOICE_COMMAND_LEGACY_INTENT_KEYS.sceneReportSwitch],
       },
       {
         key: VOICE_COMMAND_INTENT_KEYS.sceneMeetingSwitch,
         handlerName: '切换到会议模式',
         defaultLabel: '会议模式',
         description: '把桌面端切换到会议模式。',
-        legacyKeys: ['meeting'],
+        legacyKeys: [VOICE_COMMAND_LEGACY_INTENT_KEYS.sceneMeetingSwitch],
       },
     ],
   },

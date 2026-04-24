@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
+import type { WorkflowOwnerType, WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
 
 import { useMessage } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -23,6 +24,7 @@ import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
 import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { WORKFLOW_SOURCE_KINDS, WORKFLOW_TARGET_KINDS, WORKFLOW_TYPES } from '@/types/workflow'
 import { buildNodeConfigOverrides, formatConfigText, getNodeDefaultConfig, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 import { getWorkflowTemplateMeta } from '@/utils/workflowTemplateMeta'
 
@@ -43,9 +45,9 @@ interface TemplateOption {
   label: string
   value: number
   description?: string
-  workflow_type?: 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control'
-  source_kind?: 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake'
-  target_kind?: 'transcript' | 'meeting_summary' | 'voice_command'
+  workflow_type?: WorkflowType
+  source_kind?: WorkflowSourceKind
+  target_kind?: WorkflowTargetKind
   is_legacy?: boolean
 }
 
@@ -141,13 +143,13 @@ const executeResult = ref<WorkflowExecutionResult | null>(null)
 const workflow = reactive({
   name: '',
   description: '',
-  workflow_type: 'legacy' as 'legacy' | 'batch_transcription' | 'realtime_transcription' | 'meeting' | 'voice_control',
-  source_kind: 'legacy_text' as 'legacy_text' | 'batch_asr' | 'realtime_asr' | 'voice_wake',
-  target_kind: 'transcript' as 'transcript' | 'meeting_summary' | 'voice_command',
+  workflow_type: WORKFLOW_TYPES.LEGACY as WorkflowType,
+  source_kind: WORKFLOW_SOURCE_KINDS.LEGACY_TEXT as WorkflowSourceKind,
+  target_kind: WORKFLOW_TARGET_KINDS.TRANSCRIPT as WorkflowTargetKind,
   is_legacy: true,
   validation_message: '',
   is_published: false,
-  owner_type: '',
+  owner_type: '' as WorkflowOwnerType | '',
   source_id: null as number | null,
 })
 const saveAsForm = reactive({

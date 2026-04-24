@@ -1,26 +1,63 @@
 import type { WorkflowBindingKey, WorkflowBindings } from '@/types/workflow'
+import type { ProductCapabilitiesPayload, ProductFeaturesPayload } from '@/api/appSettings'
+import type { ProductFeatureKey } from '@/constants/product'
 
 import { defineStore } from 'pinia'
 
 import { getCurrentUserWorkflowBindings, updateCurrentUserWorkflowBindings } from '@/api/user'
+import { getProductFeatures } from '@/api/appSettings'
+import { PRODUCT_EDITIONS, PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { WORKFLOW_BINDING_KEYS } from '@/types/workflow'
 
 const LEGACY_WORKFLOW_BINDINGS_STORAGE_KEY = 'asr_app_workflow_bindings'
 
+function defaultProductFeatures(): ProductFeaturesPayload {
+  return {
+    edition: PRODUCT_EDITIONS.STANDARD,
+    capabilities: {
+      [PRODUCT_FEATURE_KEYS.REALTIME]: true,
+      [PRODUCT_FEATURE_KEYS.BATCH]: true,
+      [PRODUCT_FEATURE_KEYS.MEETING]: false,
+      [PRODUCT_FEATURE_KEYS.VOICEPRINT]: false,
+      [PRODUCT_FEATURE_KEYS.VOICE_CONTROL]: false,
+    },
+  }
+}
+
+function normalizeProductFeatures(raw?: Partial<ProductFeaturesPayload> | null): ProductFeaturesPayload {
+  const defaults = defaultProductFeatures()
+  const capabilities: Partial<ProductCapabilitiesPayload> = raw?.capabilities || {}
+  return {
+    edition: raw?.edition === PRODUCT_EDITIONS.ADVANCED ? PRODUCT_EDITIONS.ADVANCED : defaults.edition,
+    capabilities: {
+      [PRODUCT_FEATURE_KEYS.REALTIME]: capabilities[PRODUCT_FEATURE_KEYS.REALTIME] !== false,
+      [PRODUCT_FEATURE_KEYS.BATCH]: capabilities[PRODUCT_FEATURE_KEYS.BATCH] !== false,
+      [PRODUCT_FEATURE_KEYS.MEETING]: capabilities[PRODUCT_FEATURE_KEYS.MEETING] === true,
+      [PRODUCT_FEATURE_KEYS.VOICEPRINT]: capabilities[PRODUCT_FEATURE_KEYS.VOICEPRINT] === true,
+      [PRODUCT_FEATURE_KEYS.VOICE_CONTROL]: capabilities[PRODUCT_FEATURE_KEYS.VOICE_CONTROL] === true,
+    },
+  }
+}
+
 function defaultWorkflowBindings(): WorkflowBindings {
   return {
-    realtime: null,
-    batch: null,
-    meeting: null,
-    voice_control: null,
+    [WORKFLOW_BINDING_KEYS.REALTIME]: null,
+    [WORKFLOW_BINDING_KEYS.BATCH]: null,
+    [WORKFLOW_BINDING_KEYS.MEETING]: null,
+    [WORKFLOW_BINDING_KEYS.VOICE_CONTROL]: null,
   }
 }
 
 function normalizeWorkflowBindings(raw?: Partial<Record<WorkflowBindingKey, unknown>> | null): WorkflowBindings {
+  const realtime = raw?.[WORKFLOW_BINDING_KEYS.REALTIME]
+  const batch = raw?.[WORKFLOW_BINDING_KEYS.BATCH]
+  const meeting = raw?.[WORKFLOW_BINDING_KEYS.MEETING]
+  const voiceControl = raw?.[WORKFLOW_BINDING_KEYS.VOICE_CONTROL]
   return {
-    realtime: typeof raw?.realtime === 'number' ? raw.realtime : null,
-    batch: typeof raw?.batch === 'number' ? raw.batch : null,
-    meeting: typeof raw?.meeting === 'number' ? raw.meeting : null,
-    voice_control: typeof raw?.voice_control === 'number' ? raw.voice_control : null,
+    [WORKFLOW_BINDING_KEYS.REALTIME]: typeof realtime === 'number' ? realtime : null,
+    [WORKFLOW_BINDING_KEYS.BATCH]: typeof batch === 'number' ? batch : null,
+    [WORKFLOW_BINDING_KEYS.MEETING]: typeof meeting === 'number' ? meeting : null,
+    [WORKFLOW_BINDING_KEYS.VOICE_CONTROL]: typeof voiceControl === 'number' ? voiceControl : null,
   }
 }
 
@@ -50,9 +87,21 @@ function hasWorkflowBindingValue(bindings: WorkflowBindings) {
   return Object.values(bindings).some(value => typeof value === 'number')
 }
 
+function sanitizeWorkflowBindings(bindings: WorkflowBindings, capabilities: ProductCapabilitiesPayload): WorkflowBindings {
+  return {
+    [WORKFLOW_BINDING_KEYS.REALTIME]: bindings[WORKFLOW_BINDING_KEYS.REALTIME],
+    [WORKFLOW_BINDING_KEYS.BATCH]: bindings[WORKFLOW_BINDING_KEYS.BATCH],
+    [WORKFLOW_BINDING_KEYS.MEETING]: capabilities[PRODUCT_FEATURE_KEYS.MEETING] ? bindings[WORKFLOW_BINDING_KEYS.MEETING] : null,
+    [WORKFLOW_BINDING_KEYS.VOICE_CONTROL]: capabilities[PRODUCT_FEATURE_KEYS.VOICE_CONTROL] ? bindings[WORKFLOW_BINDING_KEYS.VOICE_CONTROL] : null,
+  }
+}
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     siderCollapsed: false,
+    productEdition: defaultProductFeatures().edition,
+    productCapabilities: defaultProductFeatures().capabilities,
+    productFeaturesReady: false,
     workflowBindings: defaultWorkflowBindings(),
     workflowBindingsReady: false,
     workflowBindingsLoading: false,
@@ -62,8 +111,32 @@ export const useAppStore = defineStore('app', {
     toggleSider() {
       this.siderCollapsed = !this.siderCollapsed
     },
+    hasCapability(key: ProductFeatureKey) {
+      return Boolean(this.productCapabilities[key])
+    },
+    applyProductFeatures(payload?: ProductFeaturesPayload | null) {
+    const normalized = normalizeProductFeatures(payload)
+    this.productEdition = normalized.edition
+    this.productCapabilities = normalized.capabilities
+    this.productFeaturesReady = true
+    this.workflowBindings = sanitizeWorkflowBindings(this.workflowBindings, normalized.capabilities)
+  },
+    async bootstrapProductFeatures() {
+    if (typeof window === 'undefined' || !localStorage.getItem('asr_token')) {
+      this.applyProductFeatures(null)
+      return
+    }
+
+    try {
+      const result = await getProductFeatures()
+      this.applyProductFeatures(result.data)
+    }
+    catch {
+      this.applyProductFeatures(null)
+    }
+  },
     resetWorkflowBindings() {
-      this.workflowBindings = defaultWorkflowBindings()
+      this.workflowBindings = sanitizeWorkflowBindings(defaultWorkflowBindings(), this.productCapabilities)
       this.workflowBindingsReady = true
       this.workflowBindingsLoading = false
       this.workflowBindingsSaving = false
@@ -73,13 +146,13 @@ export const useAppStore = defineStore('app', {
       const legacyBindings = loadLegacyWorkflowBindings()
 
       if (typeof window === 'undefined') {
-        this.workflowBindings = legacyBindings
+        this.workflowBindings = sanitizeWorkflowBindings(legacyBindings, this.productCapabilities)
         this.workflowBindingsReady = true
         return
       }
 
       if (!localStorage.getItem('asr_token')) {
-        this.workflowBindings = defaultWorkflowBindings()
+        this.workflowBindings = sanitizeWorkflowBindings(defaultWorkflowBindings(), this.productCapabilities)
         this.workflowBindingsReady = true
         this.workflowBindingsLoading = false
         return
@@ -91,18 +164,22 @@ export const useAppStore = defineStore('app', {
         const remoteBindings = normalizeWorkflowBindings(result.data)
 
         if (!hasWorkflowBindingValue(remoteBindings) && hasWorkflowBindingValue(legacyBindings)) {
-          await updateCurrentUserWorkflowBindings(legacyBindings)
-          this.workflowBindings = legacyBindings
+          const nextBindings = sanitizeWorkflowBindings(legacyBindings, this.productCapabilities)
+          await updateCurrentUserWorkflowBindings(nextBindings)
+          this.workflowBindings = nextBindings
           clearLegacyWorkflowBindings()
         }
         else {
-          this.workflowBindings = remoteBindings
+          this.workflowBindings = sanitizeWorkflowBindings(remoteBindings, this.productCapabilities)
           if (hasWorkflowBindingValue(remoteBindings))
             clearLegacyWorkflowBindings()
         }
       }
       catch {
-        this.workflowBindings = hasWorkflowBindingValue(legacyBindings) ? legacyBindings : defaultWorkflowBindings()
+        this.workflowBindings = sanitizeWorkflowBindings(
+				hasWorkflowBindingValue(legacyBindings) ? legacyBindings : defaultWorkflowBindings(),
+				this.productCapabilities,
+			)
       }
       finally {
         this.workflowBindingsLoading = false
@@ -111,11 +188,12 @@ export const useAppStore = defineStore('app', {
     },
     async replaceWorkflowBindings(bindings: WorkflowBindings) {
       const previousBindings = this.workflowBindings
-      this.workflowBindings = bindings
+      const nextBindings = sanitizeWorkflowBindings(bindings, this.productCapabilities)
+      this.workflowBindings = nextBindings
       this.workflowBindingsSaving = true
 
       try {
-        await updateCurrentUserWorkflowBindings(bindings)
+        await updateCurrentUserWorkflowBindings(nextBindings)
         clearLegacyWorkflowBindings()
       }
       catch (error) {

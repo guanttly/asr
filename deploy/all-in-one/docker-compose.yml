@@ -1,0 +1,43 @@
+version: '3.9'
+
+services:
+  asr-suite:
+    build:
+      context: ../..
+      dockerfile: deploy/all-in-one/Dockerfile
+    image: asr-all-in-one:latest
+    container_name: asr-all-in-one
+    restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      ASR_ENABLE_HTTPS: '1'
+      ASR_HTTP_REDIRECT_TO_HTTPS: '0'
+      ASR_TLS_COMMON_NAME: localhost
+      ASR_TLS_ALT_NAMES: DNS:localhost,IP:127.0.0.1
+      ASR_MYSQL_ROOT_PASSWORD: change-me
+      ASR_MYSQL_DATABASE: asr
+      ASR_BOOTSTRAP_ADMIN_USERNAME: admin
+      ASR_BOOTSTRAP_ADMIN_PASSWORD: change-me-now
+      ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME: 系统管理员
+      ASR_JWT_SECRET: replace-with-random-secret
+      ASR_SERVICES_ASR: http://host.docker.internal:8000
+      ASR_SERVICES_ASR_STREAM: ''
+      ASR_SERVICES_DIARIZATION_URL: ''
+      ASR_SERVICES_SPEAKER_ANALYSIS_URL: ''
+      ASR_SERVICES_SUMMARY_MODEL: qwen3-4b
+    volumes:
+      - ./runtime/mysql:/var/lib/asr/mysql
+      - ./runtime/certs:/var/lib/asr/certs
+      - ./runtime/downloads:/var/lib/asr/downloads
+      - ./runtime/tmp:/var/lib/asr/tmp
+      - ./runtime/uploads:/var/lib/asr/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "/app/scripts/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s

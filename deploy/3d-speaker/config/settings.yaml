@@ -35,6 +35,8 @@ models:
 diarization:
   # 聚类算法: "spectral" (< 30min, < 6人) 或 "umap_hdbscan" (长音频, 多人)
   clustering_method: "spectral"
+  # 服务启动时预热原生分离流水线，避免首个请求触发冷启动。
+  preload_native_pipeline: true
   # 3D-Speaker 原生 diarization 的独立 ModelScope 缓存目录。
   # 运行时使用可写 data 目录；容器启动时会自动从只读 models/native_cache 预热过去。
   native_model_cache_dir: "./data/native_cache"

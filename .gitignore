@@ -43,3 +43,5 @@ backend/uploads/
 deploy/all-in-one/dist/
 
 speaker-diarization-offline.tar.gz
+
+**/**/__pycache__

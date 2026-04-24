@@ -20,7 +20,7 @@ set -e
 
 # 镜像与离线包命名。
 IMAGE_NAME="speaker-analysis-service"
-IMAGE_TAG="1.1.0"
+IMAGE_TAG="1.1.7"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 EXPORT_FILE="speaker-analysis-service-offline.tar.gz"
 MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
@@ -436,6 +436,7 @@ runtime_wheels_ready() {
 # 构建镜像前校验必须的本地模型目录是否存在。
 check_models() {
     local missing=0
+    local native_cache_required_file="campplus_cn_en_common.pt"
     if { [ ! -d "${MODEL_DIR}/eres2netv2" ] || [ -z "$(ls -A "${MODEL_DIR}/eres2netv2" 2>/dev/null)" ]; } \
         && { [ ! -d "${MODEL_DIR}/campplus" ] || [ -z "$(ls -A "${MODEL_DIR}/campplus" 2>/dev/null)" ]; }; then
         warn "嵌入模型缺失: 需要准备 models/eres2netv2 或 models/campplus"
@@ -445,6 +446,11 @@ check_models() {
     if [ ! -d "${MODEL_DIR}/fsmn_vad" ] || [ -z "$(ls -A "${MODEL_DIR}/fsmn_vad" 2>/dev/null)" ]; then
         warn "VAD 模型缺失: ${MODEL_DIR}/fsmn_vad"
         missing=1
+    fi
+
+    if ! find "${MODEL_DIR}/native_cache" -type f -name "${native_cache_required_file}" 2>/dev/null | grep -q .; then
+        warn "native diarization 缓存缺失: ${MODEL_DIR}/native_cache 未找到 ${native_cache_required_file}"
+        warn "镜像仍可构建，但 speakerlab 原生流水线会回退兼容模式；如需原生分离，请先执行 ./build.sh download-models 并同步 models/native_cache"
     fi
 
     if [ ${missing} -ne 0 ]; then

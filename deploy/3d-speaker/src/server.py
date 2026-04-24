@@ -193,6 +193,13 @@ async def lifespan(app: FastAPI):
         native_python_bin=diar_cfg.get("native_python_bin") or os.getenv("PYTHON_BIN") or "python3",
     )
 
+    if diar_cfg.get("preload_native_pipeline", True):
+        try:
+            if _engine.warmup_native_pipeline():
+                logger.info("启动阶段已预热 speakerlab 原生分离流水线")
+        except Exception as exc:
+            logger.warning(f"启动阶段预热 speakerlab 原生分离流水线失败，将在请求时重试: {exc}")
+
     logger.info(f"服务初始化完成 (声纹库: {_voiceprint_mgr.count} 条记录)")
     yield
     logger.info("服务关闭")

@@ -17,12 +17,12 @@ fi
 if ! find "${TARGET_DIR}" -type f -name "${REQUIRED_FILE}" | grep -q .; then
     if [ -d "${SOURCE_DIR}" ]; then
         if find "${SOURCE_DIR}" -type f | grep -q .; then
-            echo "[WARN] native diarization 预热后仍缺少 ${REQUIRED_FILE}: source=${SOURCE_DIR}, target=${TARGET_DIR}" >&2
+            echo "[WARN] native diarization 预热后仍缺少 ${REQUIRED_FILE}: source=${SOURCE_DIR}, target=${TARGET_DIR}；启动阶段只会预热本地 seed cache，不会自动下载" >&2
         else
-            echo "[WARN] native diarization 种子目录为空: ${SOURCE_DIR}" >&2
+            echo "[WARN] native diarization 种子目录为空: ${SOURCE_DIR}；启动阶段只会预热本地 seed cache，不会自动下载，请先准备 models/native_cache" >&2
         fi
     else
-        echo "[WARN] native diarization 种子目录不存在: ${SOURCE_DIR}" >&2
+        echo "[WARN] native diarization 种子目录不存在: ${SOURCE_DIR}；启动阶段只会预热本地 seed cache，不会自动下载，请先准备 models/native_cache" >&2
     fi
 fi
 

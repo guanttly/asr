@@ -97,21 +97,17 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 		return inputText, detail, nil
 	}
 
-	// Format segments with speaker labels
-	var lines []string
-	for _, seg := range segments {
-		lines = append(lines, fmt.Sprintf("[%s %.1f-%.1f] %s", seg.Speaker, seg.StartTime, seg.EndTime, ""))
-	}
-
-	// If we have segments, prepend speaker info to text
+	normalizeWorkflowSpeakerSegments(segments)
 	if len(segments) > 0 {
-		var sb strings.Builder
-		for _, seg := range segments {
-			sb.WriteString(fmt.Sprintf("[%s %.1fs-%.1fs]\n", seg.Speaker, seg.StartTime, seg.EndTime))
+		parts := diarization.SplitTranscriptByDurations(inputText, workflowSpeakerSegmentDurations(segments))
+		if strings.TrimSpace(inputText) != "" {
+			filteredSegments, filteredParts := filterSpeakerDiarizeSegments(segments, parts)
+			if len(filteredSegments) > 0 {
+				segments = filteredSegments
+				parts = filteredParts
+			}
 		}
-		sb.WriteString("\n")
-		sb.WriteString(inputText)
-		inputText = sb.String()
+		inputText = buildSpeakerDiarizeOutput(segments, parts)
 	}
 
 	detail, _ := json.Marshal(map[string]interface{}{
@@ -121,4 +117,67 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 		"diarization_service_url": effectiveServiceURL,
 	})
 	return inputText, detail, nil
+}
+
+func normalizeWorkflowSpeakerSegments(segments []diarization.Segment) {
+	labels := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		if label := strings.TrimSpace(seg.Speaker); label != "" {
+			labels = append(labels, label)
+		}
+	}
+	zeroBased := diarization.AnonymousSpeakerLabelsUseZeroBased(labels)
+	for index := range segments {
+		segments[index].Speaker = diarization.NormalizeAnonymousSpeakerLabel(segments[index].Speaker, zeroBased)
+	}
+}
+
+func buildSpeakerDiarizeOutput(segments []diarization.Segment, parts []string) string {
+	if len(segments) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for index, seg := range segments {
+		if index > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("[%s %.1fs-%.1fs]", seg.Speaker, seg.StartTime, seg.EndTime))
+		if index < len(parts) {
+			if text := strings.TrimSpace(parts[index]); text != "" {
+				sb.WriteString(" ")
+				sb.WriteString(text)
+			}
+		}
+	}
+	return sb.String()
+}
+
+func filterSpeakerDiarizeSegments(segments []diarization.Segment, parts []string) ([]diarization.Segment, []string) {
+	filteredSegments := make([]diarization.Segment, 0, len(segments))
+	filteredParts := make([]string, 0, len(segments))
+	for index, seg := range segments {
+		if index >= len(parts) {
+			continue
+		}
+		text := strings.TrimSpace(parts[index])
+		if text == "" {
+			continue
+		}
+		filteredSegments = append(filteredSegments, seg)
+		filteredParts = append(filteredParts, text)
+	}
+	return filteredSegments, filteredParts
+}
+
+func workflowSpeakerSegmentDurations(segments []diarization.Segment) []float64 {
+	durations := make([]float64, 0, len(segments))
+	for _, seg := range segments {
+		duration := seg.EndTime - seg.StartTime
+		if duration < 0 {
+			duration = 0
+		}
+		durations = append(durations, duration)
+	}
+	return durations
 }

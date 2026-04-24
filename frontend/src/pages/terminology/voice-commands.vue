@@ -444,7 +444,7 @@ onMounted(loadDicts)
               <NButton quaternary size="small" @click="loadDicts">
                 刷新
               </NButton>
-              <NButton size="small" type="primary" color="#2563eb" @click="openCreateDictModal">
+      			  <NButton size="small" type="primary" color="#0f766e" @click="openCreateDictModal">
                 新建分组
               </NButton>
             </div>
@@ -510,7 +510,7 @@ onMounted(loadDicts)
           <NButton @click="showDictModal = false">
             取消
           </NButton>
-          <NButton type="primary" color="#2563eb" :loading="dictSaving" @click="handleSubmitDict">
+    		  <NButton type="primary" color="#0f766e" :loading="dictSaving" @click="handleSubmitDict">
             {{ editingDictId ? '保存' : '创建' }}
           </NButton>
         </div>
@@ -554,7 +554,7 @@ onMounted(loadDicts)
           <NButton @click="showEntryModal = false">
             取消
           </NButton>
-          <NButton type="primary" color="#2563eb" :loading="entrySaving" @click="handleSubmitEntry">
+    		  <NButton type="primary" color="#0f766e" :loading="entrySaving" @click="handleSubmitEntry">
             {{ editingEntryId ? '保存' : '创建' }}
           </NButton>
         </div>

@@ -14,6 +14,11 @@ const MAX_SPEECH_RMS = 0.08
 const NOISE_FLOOR_SMOOTHING = 0.08
 const PRE_ROLL_CHUNKS = 1
 const MAX_SEGMENT_CHUNKS = 40
+// 防止用户在会议/报告模式间误切换或者误录产生无意义任务：
+// 1) 录音时长低于 MIN_MEETING_DURATION_SECONDS 时直接丢弃；
+// 2) 没有任何识别文本时直接丢弃。
+const MIN_MEETING_DURATION_SECONDS = 5
+const MIN_REALTIME_DURATION_SECONDS = 1
 
 export function useTranscribe() {
   const appStore = useAppStore()
@@ -286,8 +291,12 @@ export function useTranscribe() {
 
   async function persistRealtimeSession() {
     const transcript = sessionRecognizedTexts.join('\n').trim()
-    if (!transcript)
+    if (!transcript) {
+      await debugLog('transcribe.session', 'skip persistence: empty transcript', {
+        scene: appStore.sceneMode,
+      })
       return
+    }
 
     if (saveSessionPromise)
       return saveSessionPromise
@@ -298,7 +307,24 @@ export function useTranscribe() {
       const duration = sessionAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
 
       if (scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)) {
+        if (duration < MIN_MEETING_DURATION_SECONDS) {
+          await debugLog('transcribe.session', 'skip meeting persistence: duration too short', {
+            duration,
+            minimum: MIN_MEETING_DURATION_SECONDS,
+          })
+          saveSessionPromise = null
+          return
+        }
         await persistMeetingSession(transcript, duration)
+        return
+      }
+
+      if (duration < MIN_REALTIME_DURATION_SECONDS) {
+        await debugLog('transcribe.session', 'skip realtime persistence: duration too short', {
+          duration,
+          minimum: MIN_REALTIME_DURATION_SECONDS,
+        })
+        saveSessionPromise = null
         return
       }
 

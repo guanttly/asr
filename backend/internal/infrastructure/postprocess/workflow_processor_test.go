@@ -313,3 +313,69 @@ func TestWorkflowAwareProcessorMaterializesSpeakerSegmentsIntoMeetingTranscripts
 		t.Fatalf("expected summary persisted, got %+v", summaryRepo.created)
 	}
 }
+
+func TestWorkflowAwareProcessorNormalizesAnonymousSpeakerLabels(t *testing.T) {
+	workflowID := uint64(32)
+	speakerDetail, err := json.Marshal(map[string]any{
+		"segments_count": 2,
+		"segments": []map[string]any{
+			{"speaker": "speaker_0", "start_time": 0, "end_time": 8},
+			{"speaker": "speaker_1", "start_time": 8, "end_time": 16},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal speaker detail: %v", err)
+	}
+	summaryDetail, err := json.Marshal(map[string]string{"model_version": "summary-v2"})
+	if err != nil {
+		t.Fatalf("marshal summary detail: %v", err)
+	}
+
+	meetingRepo := &meetingRepoStub{}
+	transcriptRepo := &transcriptRepoStub{}
+	summaryRepo := &summaryRepoStub{}
+	processor := NewWorkflowAwareProcessor(
+		nil,
+		&workflowExecutorStub{resp: &appwf.ExecutionResponse{
+			WorkflowID: workflowID,
+			FinalText:  "第一部分内容。第二部分内容。",
+			NodeResults: []appwf.NodeResultResponse{
+				{
+					NodeType:   wfdomain.NodeSpeakerDiarize,
+					Status:     wfdomain.NodeResultSuccess,
+					OutputText: "[说话人1 0.0s-8.0s]\n[说话人2 8.0s-16.0s]\n\n第一部分内容。第二部分内容。",
+					Detail:     speakerDetail,
+				},
+				{
+					NodeType:   wfdomain.NodeMeetingSummary,
+					Status:     wfdomain.NodeResultSuccess,
+					InputText:  "第一部分内容。第二部分内容。",
+					OutputText: "摘要内容",
+					Detail:     summaryDetail,
+				},
+			},
+		}},
+		meetingRepo,
+		transcriptRepo,
+		summaryRepo,
+	)
+
+	task := &asrdomain.TranscriptionTask{
+		ID:         101,
+		UserID:     6,
+		AudioURL:   "https://example.com/lesson.wav",
+		Duration:   16,
+		ResultText: "原始逐字稿",
+		WorkflowID: &workflowID,
+	}
+
+	if err := processor.ProcessCompletedTask(context.Background(), task); err != nil {
+		t.Fatalf("ProcessCompletedTask returned error: %v", err)
+	}
+	if len(transcriptRepo.created) != 2 {
+		t.Fatalf("expected 2 transcript rows, got %+v", transcriptRepo.created)
+	}
+	if transcriptRepo.created[0].SpeakerLabel != "说话人1" || transcriptRepo.created[1].SpeakerLabel != "说话人2" {
+		t.Fatalf("expected normalized speaker labels, got %+v", transcriptRepo.created)
+	}
+}

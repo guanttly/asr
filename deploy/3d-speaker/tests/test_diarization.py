@@ -2,6 +2,8 @@
 说话人分离引擎测试
 """
 
+import threading
+
 from src.engine import DiarizationEngine, _clean_subprocess_output, _summarize_subprocess_output
 from src.utils import segments_to_rttm
 
@@ -116,6 +118,82 @@ class TestNativeModelCache:
         engine.native_model_cache_dir = str(tmp_path)
         assert engine._native_model_cache_ready() is True
 
+    def test_native_model_cache_ready_hydrates_runtime_cache_from_seed(self, tmp_path, monkeypatch):
+        runtime_cache = tmp_path / "runtime"
+        seed_cache = tmp_path / "seed"
+        checkpoint = seed_cache / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(b"ok")
+
+        monkeypatch.setenv("NATIVE_MODEL_CACHE_SEED_DIR", str(seed_cache))
+
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine.native_model_cache_dir = str(runtime_cache)
+
+        assert engine._native_model_cache_ready() is True
+        assert any(runtime_cache.rglob("campplus_cn_en_common.pt"))
+
+    def test_diarize_native_reuses_initialized_pipeline(self, monkeypatch):
+        class DummyExtractor:
+            device = "cpu"
+
+        class DummyPipeline:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, audio_path, speaker_num=None):
+                self.calls.append((audio_path, speaker_num))
+                return [[0.0, 1.2, 0]]
+
+        created = []
+        pipeline = DummyPipeline()
+
+        def fake_create_diarization_pipeline(**kwargs):
+            created.append(kwargs)
+            return pipeline
+
+        def fake_load_audio(*args, **kwargs):
+            return np.zeros(16000, dtype=np.float32), 16000
+
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine.extractor = DummyExtractor()
+        engine.target_sr = 16000
+        engine.native_model_cache_dir = None
+        engine._native_pipeline = None
+        engine._native_pipeline_lock = threading.Lock()
+        engine._native_inference_lock = threading.Lock()
+
+        monkeypatch.setattr("src.speakerlab_entry.create_diarization_pipeline", fake_create_diarization_pipeline)
+        monkeypatch.setattr("src.engine.load_audio", fake_load_audio)
+        monkeypatch.setattr(engine, "_extract_cluster_embeddings", lambda waveform, sr, segments: {"speaker_0": np.ones(3, dtype=np.float32)})
+
+        first_segments, _ = engine._diarize_native("/tmp/a.wav", None, None, "spectral")
+        second_segments, _ = engine._diarize_native("/tmp/b.wav", None, None, "spectral")
+
+        assert len(created) == 1
+        assert pipeline.calls == [("/tmp/a.wav", None), ("/tmp/b.wav", None)]
+        assert first_segments[0]["speaker_id"] == "speaker_0"
+        assert second_segments[0]["speaker_id"] == "speaker_0"
+
+    def test_warmup_native_pipeline_initializes_pipeline_when_ready(self, monkeypatch):
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine._native_available = True
+
+        warmups = []
+
+        monkeypatch.setattr(engine, "_native_model_cache_ready", lambda: True)
+        monkeypatch.setattr(engine, "_get_native_pipeline", lambda: warmups.append("ready") or object())
+
+        assert engine.warmup_native_pipeline() is True
+        assert warmups == ["ready"]
+
+    def test_warmup_native_pipeline_skips_when_unavailable(self):
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine._native_available = False
+
+        assert engine.warmup_native_pipeline() is False
+
 
 # 需要 pytest
+import numpy as np
 import pytest

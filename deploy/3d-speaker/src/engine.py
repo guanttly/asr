@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -138,6 +140,9 @@ class DiarizationEngine:
         self.segment_step = segment_step
         self.native_model_cache_dir = native_model_cache_dir
         self.native_python_bin = native_python_bin
+        self._native_pipeline = None
+        self._native_pipeline_lock = threading.Lock()
+        self._native_inference_lock = threading.Lock()
 
         self._native_available = self._check_native()
 
@@ -147,6 +152,19 @@ class DiarizationEngine:
         cache_dir = os.path.abspath(self.native_model_cache_dir)
         os.makedirs(cache_dir, exist_ok=True)
         return cache_dir
+
+    @staticmethod
+    def _find_missing_native_cache_files(cache_dir: str, required_files: tuple[str, ...]) -> list[str]:
+        return [
+            file_name for file_name in required_files
+            if not any(Path(cache_dir).rglob(file_name))
+        ]
+
+    @staticmethod
+    def _hydrate_native_model_cache(seed_cache_dir: str, cache_dir: str) -> None:
+        if os.path.abspath(seed_cache_dir) == os.path.abspath(cache_dir):
+            return
+        shutil.copytree(seed_cache_dir, cache_dir, dirs_exist_ok=True)
 
     def _native_model_cache_ready(self) -> bool:
         cache_dir = self._resolve_native_model_cache_dir()
@@ -158,15 +176,29 @@ class DiarizationEngine:
         )
 
         required_files = ("campplus_cn_en_common.pt",)
-        missing_files = [
-            file_name for file_name in required_files
-            if not any(Path(cache_dir).rglob(file_name))
-        ]
+        missing_files = self._find_missing_native_cache_files(cache_dir, required_files)
         if missing_files:
-            seed_missing_files = [
-                file_name for file_name in required_files
-                if not any(Path(seed_cache_dir).rglob(file_name))
-            ]
+            seed_missing_files = self._find_missing_native_cache_files(seed_cache_dir, required_files)
+            if Path(seed_cache_dir).exists() and not seed_missing_files:
+                try:
+                    self._hydrate_native_model_cache(seed_cache_dir, cache_dir)
+                except Exception as exc:
+                    logger.warning(
+                        "native diarization 运行时缓存预热失败，继续回退兼容模式: {} (seed_cache_dir={}, cache_dir={})",
+                        exc,
+                        seed_cache_dir,
+                        cache_dir,
+                    )
+                else:
+                    missing_files = self._find_missing_native_cache_files(cache_dir, required_files)
+                    if not missing_files:
+                        logger.info(
+                            "native diarization 运行时缓存已从 seed 目录预热: {} -> {}",
+                            seed_cache_dir,
+                            cache_dir,
+                        )
+                        return True
+
             seed_state = (
                 f"seed_cache_dir={seed_cache_dir}, seed_missing={', '.join(seed_missing_files)}"
                 if Path(seed_cache_dir).exists()
@@ -194,6 +226,46 @@ class DiarizationEngine:
 
         logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
         return False
+
+    @staticmethod
+    def _resolve_native_speaker_num(
+        min_speakers: Optional[int],
+        max_speakers: Optional[int],
+    ) -> Optional[int]:
+        if min_speakers is not None and max_speakers is not None and min_speakers == max_speakers:
+            return min_speakers
+        return None
+
+    def _get_native_pipeline(self):
+        if self._native_pipeline is not None:
+            return self._native_pipeline
+
+        with self._native_pipeline_lock:
+            if self._native_pipeline is not None:
+                return self._native_pipeline
+
+            from src.speakerlab_entry import create_diarization_pipeline
+
+            logger.info("初始化 speakerlab 原生分离流水线")
+            self._native_pipeline = create_diarization_pipeline(
+                device=getattr(self.extractor, "device", None),
+                model_cache_dir=self._resolve_native_model_cache_dir(),
+            )
+            logger.info("speakerlab 原生分离流水线初始化完成")
+        return self._native_pipeline
+
+    def warmup_native_pipeline(self) -> bool:
+        """在服务启动阶段预热原生分离流水线，避免首个请求触发冷启动。"""
+        if not self._native_available:
+            logger.info("跳过原生分离流水线预热: speakerlab 当前不可用")
+            return False
+
+        if not self._native_model_cache_ready():
+            logger.info("跳过原生分离流水线预热: native cache 尚未就绪")
+            return False
+
+        self._get_native_pipeline()
+        return True
 
     def diarize(
         self,
@@ -321,43 +393,30 @@ class DiarizationEngine:
         method: str,
     ) -> tuple[list[dict], dict[str, np.ndarray]]:
         """使用 3D-Speaker 原生流水线"""
-        import tempfile
+        if method != "spectral":
+            logger.warning("speakerlab 原生流水线当前固定使用 spectral 聚类，忽略请求方法: {}", method)
 
-        out_dir = tempfile.mkdtemp(prefix="diar_")
+        speaker_num = self._resolve_native_speaker_num(min_speakers, max_speakers)
+        diarization = self._get_native_pipeline()
 
-        cmd = [
-            self.native_python_bin or sys.executable or "python3", "-m", "src.speakerlab_entry",
-            "--wav", audio_path,
-            "--out_dir", out_dir,
-        ]
+        logger.info("执行 speakerlab 原生分离流水线")
+        with self._native_inference_lock:
+            try:
+                output_field_labels = diarization(audio_path, speaker_num=speaker_num)
+            except Exception as exc:
+                logger.error(f"3D-Speaker 分离失败: {exc}")
+                raise RuntimeError(f"分离失败: {exc}") from exc
 
-        native_cache_dir = self._resolve_native_model_cache_dir()
-        env_overrides = {}
-        if native_cache_dir:
-            env_overrides["MODELSCOPE_CACHE"] = native_cache_dir
-
-        logger.info("启动 speakerlab 原生分离流水线")
-        return_code, combined_output = _stream_subprocess_logs(
-            cmd,
-            timeout=600,
-            env_overrides=env_overrides,
-        )
-        if return_code != 0:
-            error_summary = _summarize_subprocess_output(combined_output)
-            if not error_summary:
-                error_summary = f"speakerlab 进程退出码 {return_code}"
-            logger.error(f"3D-Speaker 分离失败: {error_summary}")
-            raise RuntimeError(f"分离失败: {error_summary}")
-
-        # 解析 RTTM 输出
-        rttm_files = list(
-            f for f in os.listdir(out_dir)
-            if f.endswith(".rttm")
-        )
-        if not rttm_files:
-            raise RuntimeError(f"未找到 RTTM 输出: {out_dir}")
-
-        raw_segments = self._parse_rttm(os.path.join(out_dir, rttm_files[0]))
+        raw_segments = []
+        for start_time, end_time, speaker_id in output_field_labels:
+            duration = max(0.0, float(end_time) - float(start_time))
+            raw_segments.append(
+                {
+                    "speaker_id": f"speaker_{speaker_id}",
+                    "start_time": float(start_time),
+                    "duration": duration,
+                }
+            )
 
         # 提取各聚类的代表性嵌入（用于声纹匹配）
         waveform, sr = load_audio(audio_path, target_sr=self.target_sr)

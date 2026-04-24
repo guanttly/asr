@@ -68,6 +68,7 @@ declare global {
   const useAppStore: typeof import('./stores/app')['useAppStore']
   const useAttrs: typeof import('vue')['useAttrs']
   const useAudioRecorder: typeof import('./composables/useAudioRecorder')['useAudioRecorder']
+  const useConfirm: typeof import('./composables/useConfirm')['useConfirm']
   const useCssModule: typeof import('vue')['useCssModule']
   const useCssVars: typeof import('vue')['useCssVars']
   const useId: typeof import('vue')['useId']
@@ -88,6 +89,9 @@ declare global {
   // @ts-ignore
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
+  // @ts-ignore
+  export type { ConfirmTone, ConfirmOptions } from './composables/useConfirm'
+  import('./composables/useConfirm')
   // @ts-ignore
   export type { RecognitionSettings } from './composables/useSettings'
   import('./composables/useSettings')

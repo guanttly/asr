@@ -35,6 +35,24 @@ append_latest_nvm_bin() {
   [[ -n "$latest_nvm_bin" ]] && append_path_if_dir "$latest_nvm_bin"
 }
 
+check_output_ownership() {
+  local output_dir="$1"
+  [[ -d "$output_dir" ]] || return 0
+
+  local current_uid current_user offending_path
+  current_uid="$(id -u)"
+  current_user="$(id -un)"
+  offending_path=$(find "$output_dir" ! -uid "$current_uid" -print -quit 2>/dev/null || true)
+  [[ -z "$offending_path" ]] && return 0
+
+  printf "${RED}MISS${NC} %s contains files not owned by %s\n" "$output_dir" "$current_user"
+  printf "      Example: %s\n" "$offending_path"
+  printf "      Fix with one of:\n"
+  printf "      sudo chown -R %s:%s %s/%s\n" "$current_user" "$current_user" "$PWD" "$output_dir"
+  printf "      sudo rm -rf %s/%s\n" "$PWD" "$output_dir"
+  missing=1
+}
+
 EFFECTIVE_HOME="$(resolve_effective_home)"
 export HOME="$EFFECTIVE_HOME"
 export CARGO_HOME="${CARGO_HOME:-$EFFECTIVE_HOME/.cargo}"
@@ -103,6 +121,9 @@ fi
 if [[ ! -f src-tauri/icons/icon.png ]]; then
   printf "${YELLOW}WARN${NC} src-tauri/icons/icon.png not found\n"
 fi
+
+check_output_ownership "dist"
+check_output_ownership "src-tauri/target"
 
 if [[ $missing -ne 0 ]]; then
   printf "\n${RED}Windows cross-build environment is not ready.${NC}\n"

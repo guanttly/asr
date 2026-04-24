@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import TextDiffPreview from './TextDiffPreview.vue'
+import DictPickerDialog from './DictPickerDialog.vue'
 
 import { TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
+import { useConfirm } from '@/composables/useConfirm'
 import { useInjector } from '@/composables/useInjector'
 import { debugLog } from '@/utils/debug'
 import {
@@ -16,15 +17,15 @@ import {
 } from '@/utils/transcription'
 
 const { injectText } = useInjector()
+const { confirm } = useConfirm()
 
 const PAGE_SIZE = 10
 
 interface HistoryRecord extends TranscriptionTaskItem {
-  expanded: boolean
+  finalText: string
+  loadingFinalText: boolean
+  finalTextLoaded: boolean
   deleting: boolean
-  loadingExecutions: boolean
-  executionsLoaded: boolean
-  executions: WorkflowExecutionItem[]
 }
 
 const listRef = ref<HTMLElement | null>(null)
@@ -35,6 +36,10 @@ const loadingMore = ref(false)
 const clearing = ref(false)
 const feedbackText = ref('')
 const feedbackType = ref<'error' | 'info' | 'success'>('info')
+
+const dialogVisible = ref(false)
+const dialogKind = ref<'term' | 'sensitive'>('term')
+const dialogText = ref('')
 
 const hasMore = computed(() => items.value.length < total.value)
 
@@ -50,17 +55,39 @@ function normalizeText(value?: string) {
 function createHistoryRecord(task: TranscriptionTaskItem): HistoryRecord {
   return {
     ...task,
-    expanded: false,
+    finalText: normalizeText(task.result_text),
+    loadingFinalText: Boolean(task.workflow_id),
+    finalTextLoaded: !task.workflow_id,
     deleting: false,
-    loadingExecutions: false,
-    executionsLoaded: false,
-    executions: [],
+  }
+}
+
+async function loadFinalText(item: HistoryRecord) {
+  if (item.finalTextLoaded || !item.workflow_id)
+    return
+  try {
+    const executions: WorkflowExecutionItem[] = await getTranscriptionTaskExecutions(item.id)
+    const latest = executions[0]
+    const finalCandidate = normalizeText(latest?.final_text)
+    if (finalCandidate)
+      item.finalText = finalCandidate
+    item.finalTextLoaded = true
+  }
+  catch (error) {
+    item.finalTextLoaded = true
+    void debugLog('history.execution', 'failed to load final text', error instanceof Error ? {
+      taskId: item.id, message: error.message, stack: error.stack,
+    } : { taskId: item.id, error })
+  }
+  finally {
+    item.loadingFinalText = false
   }
 }
 
 function mergeTaskPage(nextItems: TranscriptionTaskItem[], reset: boolean) {
   if (reset) {
     items.value = nextItems.map(createHistoryRecord)
+    items.value.forEach(item => void loadFinalText(item))
     return
   }
 
@@ -69,27 +96,7 @@ function mergeTaskPage(nextItems: TranscriptionTaskItem[], reset: boolean) {
     .filter(item => !seen.has(item.id))
     .map(createHistoryRecord)
   items.value = items.value.concat(appended)
-}
-
-function latestExecution(item: HistoryRecord) {
-  return item.executions[0] || null
-}
-
-function finalOutputText(item: HistoryRecord) {
-  return normalizeText(latestExecution(item)?.final_text) || normalizeText(item.result_text)
-}
-
-function workflowStatusMeta(item: HistoryRecord) {
-  const execution = latestExecution(item)
-  if (!item.workflow_id)
-    return { label: '原始输出', tone: 'plain' }
-  if (execution?.status === 'completed')
-    return { label: '工作流已完成', tone: 'success' }
-  if (execution?.status === 'failed' || item.post_process_status === 'failed')
-    return { label: '工作流失败', tone: 'danger' }
-  if (item.post_process_status === 'processing')
-    return { label: '工作流处理中', tone: 'pending' }
-  return { label: '等待工作流', tone: 'pending' }
+  appended.forEach(item => void loadFinalText(item))
 }
 
 function formatDate(value?: string) {
@@ -140,7 +147,7 @@ async function loadTasks(reset = false) {
   }
   catch (error) {
     setFeedback('error', error instanceof Error ? error.message : '加载转写记录失败')
-    await debugLog('history.list', 'failed to load history list', error instanceof Error ? {
+    void debugLog('history.list', 'failed to load history list', error instanceof Error ? {
       message: error.message,
       stack: error.stack,
     } : error)
@@ -151,53 +158,63 @@ async function loadTasks(reset = false) {
   }
 }
 
-async function loadExecutions(item: HistoryRecord) {
-  if (item.loadingExecutions || item.executionsLoaded)
-    return
-
-  item.loadingExecutions = true
-  try {
-    item.executions = await getTranscriptionTaskExecutions(item.id)
-    item.executionsLoaded = true
-  }
-  catch (error) {
-    setFeedback('error', error instanceof Error ? error.message : '加载处理链路失败')
-    await debugLog('history.execution', 'failed to load task executions', error instanceof Error ? {
-      taskId: item.id,
-      message: error.message,
-      stack: error.stack,
-    } : { taskId: item.id, error })
-  }
-  finally {
-    item.loadingExecutions = false
-  }
-}
-
-async function toggleExpanded(item: HistoryRecord) {
-  item.expanded = !item.expanded
-  if (item.expanded)
-    await loadExecutions(item)
-}
-
 async function injectRecord(item: HistoryRecord) {
-  const text = finalOutputText(item)
-  if (!text) {
-    setFeedback('info', '当前记录没有可注入的输出文本')
+  if (!item.finalText) {
+    setFeedback('info', '当前记录没有可注入的文本')
     return
   }
 
-  const result = await injectText(text)
+  const result = await injectText(item.finalText)
   if (!result.success) {
     setFeedback('error', result.message)
     return
   }
-  setFeedback('success', '已将最终输出注入到当前光标位置')
+  setFeedback('success', '已将转写文本注入到当前光标位置')
+}
+
+async function copyRecord(item: HistoryRecord) {
+  if (!item.finalText)
+    return
+  try {
+    await navigator.clipboard.writeText(item.finalText)
+    setFeedback('success', '已复制到剪贴板')
+  }
+  catch (error) {
+    setFeedback('error', error instanceof Error ? error.message : '复制失败')
+  }
+}
+
+function openTermDialog(item: HistoryRecord) {
+  dialogKind.value = 'term'
+  dialogText.value = item.finalText
+  dialogVisible.value = true
+}
+
+function openSensitiveDialog(item: HistoryRecord) {
+  dialogKind.value = 'sensitive'
+  dialogText.value = item.finalText
+  dialogVisible.value = true
+}
+
+function handleDictSuccess(payload: { kind: 'term' | 'sensitive', dictName: string, value: string }) {
+  setFeedback(
+    'success',
+    payload.kind === 'term'
+      ? `已添加术语「${payload.value}」到「${payload.dictName}」`
+      : `已添加敏感词「${payload.value}」到「${payload.dictName}」`,
+  )
 }
 
 async function removeRecord(item: HistoryRecord) {
   if (item.deleting)
     return
-  if (!window.confirm('确认删除这条转写记录吗？'))
+  const ok = await confirm({
+    title: '删除转写记录',
+    message: '确认删除这条转写记录吗？',
+    confirmText: '删除',
+    tone: 'danger',
+  })
+  if (!ok)
     return
 
   item.deleting = true
@@ -218,7 +235,13 @@ async function removeRecord(item: HistoryRecord) {
 async function clearAll() {
   if (clearing.value)
     return
-  if (!window.confirm('确认清空当前账号下的实时转写记录吗？'))
+  const ok = await confirm({
+    title: '清空记录',
+    message: '确认清空当前账号下的实时转写记录吗？',
+    confirmText: '清空',
+    tone: 'danger',
+  })
+  if (!ok)
     return
 
   clearing.value = true
@@ -256,16 +279,18 @@ onMounted(() => {
         <span class="list-count">已加载 {{ items.length }} / {{ total }} 条</span>
       </div>
       <div class="list-actions">
-        <button class="ghost-btn" @click="loadTasks(true)">刷新</button>
-        <button class="clear-btn" :disabled="clearing || initialLoading" @click="clearAll">
+        <button class="ghost-btn" :disabled="initialLoading" @click="loadTasks(true)">刷新</button>
+        <button class="clear-btn" :disabled="clearing || initialLoading || items.length === 0" @click="clearAll">
           {{ clearing ? '清空中...' : '清空' }}
         </button>
       </div>
     </div>
 
-    <p v-if="feedbackText" class="feedback" :class="feedbackType">
-      {{ feedbackText }}
-    </p>
+    <Transition name="feedback">
+      <p v-if="feedbackText" :key="feedbackText" class="feedback" :class="feedbackType">
+        {{ feedbackText }}
+      </p>
+    </Transition>
 
     <div ref="listRef" class="history-scroller" @scroll="handleScroll">
       <div v-if="initialLoading" class="empty-state">
@@ -280,91 +305,35 @@ onMounted(() => {
         :key="item.id"
         class="history-card"
       >
-        <div class="history-card__summary" @click="toggleExpanded(item)">
-          <div class="summary-top">
-            <div class="summary-meta">
-              <span>{{ formatDate(item.created_at) }}</span>
-              <span class="summary-sep">·</span>
-              <span>{{ formatDuration(item.duration) }}</span>
-            </div>
-            <span class="status-pill" :class="workflowStatusMeta(item).tone">
-              {{ workflowStatusMeta(item).label }}
-            </span>
-          </div>
-
-          <div class="summary-block">
-            <div class="summary-label">原始识别</div>
-            <div class="summary-text">{{ normalizeText(item.result_text) || '暂无原始文本' }}</div>
-          </div>
-
-          <div class="summary-block summary-block--output">
-            <div class="summary-label">最终输出</div>
-            <div class="summary-text">{{ finalOutputText(item) || '暂无最终输出' }}</div>
-          </div>
-
-          <div class="summary-footer">
-            <span>任务 #{{ item.id }}</span>
-            <span>{{ item.expanded ? '收起详情' : '展开详情' }}</span>
-          </div>
+        <div class="card-meta">
+          <span>{{ formatDate(item.created_at) }}</span>
+          <span class="meta-sep">·</span>
+          <span>{{ formatDuration(item.duration) }}</span>
         </div>
 
-        <div v-if="item.expanded" class="history-card__detail">
-          <div class="detail-actions">
-            <button class="ghost-btn" @click="injectRecord(item)">注入输出</button>
-            <button class="danger-btn" :disabled="item.deleting" @click="removeRecord(item)">
-              {{ item.deleting ? '删除中...' : '删除记录' }}
-            </button>
-          </div>
+        <p v-if="item.loadingFinalText && !item.finalText" class="card-text placeholder">
+          正在生成最终输出...
+        </p>
+        <p v-else class="card-text">
+          {{ item.finalText || '（空）' }}
+        </p>
 
-          <TextDiffPreview
-            before-label="原始识别"
-            after-label="最终输出"
-            :before-text="normalizeText(item.result_text)"
-            :after-text="finalOutputText(item)"
-          />
-
-          <div v-if="item.loadingExecutions" class="execution-empty">
-            正在加载处理链路...
-          </div>
-          <template v-else-if="latestExecution(item)">
-            <div class="execution-head">
-              <div>
-                <div class="execution-title">整段复核链路</div>
-                <div class="execution-meta">
-                  {{ formatDate(latestExecution(item)?.created_at) }}
-                  <span v-if="latestExecution(item)?.error_message">
-                    · {{ latestExecution(item)?.error_message }}
-                  </span>
-                </div>
-              </div>
-              <span class="status-pill" :class="latestExecution(item)?.status === 'completed' ? 'success' : 'danger'">
-                {{ latestExecution(item)?.status === 'completed' ? '执行完成' : '执行异常' }}
-              </span>
-            </div>
-
-            <div v-if="latestExecution(item)?.node_results?.length" class="node-list">
-              <section v-for="node in latestExecution(item)?.node_results" :key="node.id" class="node-card">
-                <div class="node-head">
-                  <div>
-                    <div class="node-title">{{ node.label }}</div>
-                    <div class="node-meta">节点 {{ node.position }} · {{ node.duration_ms }} ms</div>
-                  </div>
-                  <span class="status-pill" :class="node.status === 'success' ? 'success' : (node.status === 'failed' ? 'danger' : 'plain')">
-                    {{ node.status }}
-                  </span>
-                </div>
-                <TextDiffPreview
-                  before-label="节点输入"
-                  after-label="节点输出"
-                  :before-text="normalizeText(node.input_text)"
-                  :after-text="normalizeText(node.output_text)"
-                />
-              </section>
-            </div>
-          </template>
-          <div v-else class="execution-empty">
-            {{ item.workflow_id ? (item.post_process_error || '整段工作流尚未返回执行详情') : '当前记录未绑定整段工作流，最终输出即为原始识别文本。' }}
-          </div>
+        <div class="card-actions">
+          <button class="card-btn" :disabled="!item.finalText" @click="injectRecord(item)">
+            <span class="btn-icon">↳</span> 注入
+          </button>
+          <button class="card-btn" :disabled="!item.finalText" @click="copyRecord(item)">
+            <span class="btn-icon">⧉</span> 复制
+          </button>
+          <button class="card-btn" :disabled="!item.finalText" @click="openTermDialog(item)">
+            <span class="btn-icon">+</span> 收录术语
+          </button>
+          <button class="card-btn" :disabled="!item.finalText" @click="openSensitiveDialog(item)">
+            <span class="btn-icon">!</span> 加敏感词
+          </button>
+          <button class="card-btn danger" :disabled="item.deleting" @click="removeRecord(item)">
+            <span class="btn-icon">×</span> 删除
+          </button>
         </div>
       </article>
 
@@ -378,6 +347,14 @@ onMounted(() => {
         已加载全部记录
       </div>
     </div>
+
+    <DictPickerDialog
+      :visible="dialogVisible"
+      :kind="dialogKind"
+      :default-text="dialogText"
+      @close="dialogVisible = false"
+      @success="handleDictSuccess"
+    />
   </div>
 </template>
 
@@ -405,13 +382,13 @@ onMounted(() => {
 }
 
 .list-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #16202c;
 }
 
 .list-count {
-  font-size: 12px;
+  font-size: 11px;
   color: #94a3b8;
 }
 
@@ -422,10 +399,9 @@ onMounted(() => {
 
 .clear-btn,
 .ghost-btn,
-.danger-btn,
 .load-more {
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 6px 14px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -436,31 +412,23 @@ onMounted(() => {
   border: 0;
 }
 
-.ghost-btn,
-.danger-btn {
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  background: rgba(255, 255, 255, 0.82);
+.ghost-btn {
+  border: 1px solid rgba(148, 163, 184, 0.36);
+  background: rgba(255, 255, 255, 0.92);
   color: #475569;
-}
-
-.danger-btn {
-  color: #b91c1c;
-  border-color: rgba(248, 113, 113, 0.25);
-  background: rgba(254, 242, 242, 0.92);
 }
 
 .clear-btn:disabled,
 .ghost-btn:disabled,
-.danger-btn:disabled,
 .load-more:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .feedback {
   margin: 0;
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 12px;
 }
 
@@ -479,149 +447,121 @@ onMounted(() => {
   background: rgba(254, 242, 242, 0.92);
 }
 
+.feedback-enter-active,
+.feedback-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.feedback-enter-from,
+.feedback-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
 .history-scroller {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   padding-right: 2px;
 }
 
 .history-card {
-  border-radius: 18px;
+  border-radius: 16px;
   border: 1px solid rgba(226, 232, 240, 0.84);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)),
-    radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 34%);
-  box-shadow: 0 14px 30px rgba(148, 163, 184, 0.12);
-  overflow: hidden;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 18px rgba(148, 163, 184, 0.10);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 
-.history-card + .history-card {
-  margin-top: 12px;
+.history-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(148, 163, 184, 0.18);
 }
 
-.history-card__summary {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  cursor: pointer;
-}
-
-.history-card__detail {
-  display: grid;
-  gap: 14px;
-  padding: 0 14px 14px;
-}
-
-.summary-top,
-.summary-footer,
-.detail-actions,
-.execution-head,
-.node-head {
+.card-meta {
+  font-size: 11px;
+  color: #94a3b8;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
-.summary-meta,
-.execution-meta,
-.node-meta,
-.summary-footer {
-  color: #64748b;
-  font-size: 12px;
+.meta-sep {
+  margin: 0 6px;
 }
 
-.summary-sep {
-  margin: 0 4px;
+.card-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #0f172a;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.summary-block {
-  border-radius: 14px;
-  background: rgba(248, 250, 252, 0.86);
-  border: 1px solid rgba(226, 232, 240, 0.82);
-  padding: 12px;
+.card-text.placeholder {
+  color: #94a3b8;
+  font-style: italic;
 }
 
-.summary-block--output {
-  background: rgba(240, 253, 250, 0.84);
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.summary-label,
-.execution-title,
-.node-title {
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 600;
+.card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(248, 250, 252, 0.96);
+  color: #334155;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.card-btn:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: #0f766e;
   color: #0f766e;
 }
 
-.summary-text {
-  color: #16202c;
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.card-btn.danger:hover:not(:disabled) {
+  border-color: #dc2626;
+  color: #dc2626;
 }
 
-.status-pill {
-  flex-shrink: 0;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 11px;
-  font-weight: 600;
+.card-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
-.status-pill.success {
-  background: rgba(220, 252, 231, 0.9);
-  color: #166534;
+.btn-icon {
+  font-size: 12px;
+  line-height: 1;
 }
 
-.status-pill.pending {
-  background: rgba(254, 249, 195, 0.92);
-  color: #854d0e;
-}
-
-.status-pill.danger {
-  background: rgba(254, 242, 242, 0.92);
-  color: #b91c1c;
-}
-
-.status-pill.plain {
-  background: rgba(241, 245, 249, 0.94);
-  color: #475569;
-}
-
-.execution-empty,
 .load-state {
   color: #64748b;
   font-size: 12px;
   text-align: center;
-  padding: 10px 0;
-}
-
-.node-list {
-  display: grid;
-  gap: 12px;
-}
-
-.node-card {
-  display: grid;
-  gap: 12px;
-  border-radius: 16px;
-  background: rgba(248, 250, 252, 0.78);
-  border: 1px solid rgba(226, 232, 240, 0.84);
-  padding: 12px;
+  padding: 8px 0;
 }
 
 .load-more {
   width: 100%;
-  margin-top: 12px;
-  border: 1px dashed rgba(15, 118, 110, 0.28);
+  border: 1px dashed rgba(15, 118, 110, 0.32);
   background: rgba(240, 253, 250, 0.74);
   color: #0f766e;
 }

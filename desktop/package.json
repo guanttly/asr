@@ -2,7 +2,7 @@
   "name": "asr-desktop",
   "displayName": "语音速录助手",
   "type": "module",
-  "version": "0.2.10",
+  "version": "0.3.2",
   "private": true,
   "scripts": {
     "predev": "node ./scripts/sync-version.mjs",
@@ -23,6 +23,8 @@
     "@tauri-apps/plugin-store": "^2.2.0",
     "@vueuse/core": "^13.0.0",
     "axios": "^1.9.0",
+    "html2pdf.js": "^0.14.0",
+    "marked": "^18.0.2",
     "pinia": "^3.0.1",
     "vue": "^3.5.13"
   },

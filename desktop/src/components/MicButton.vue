@@ -294,9 +294,10 @@ watch(() => appStore.isRecording, async (recording) => {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  border: 2px solid rgba(67, 82, 102, 0.2);
-  background: rgba(67, 82, 102, 0.06);
-  color: #435266;
+  border: 1.5px solid rgba(15, 118, 110, 0.32);
+  background:
+    linear-gradient(160deg, #ffffff 0%, #f0fdfa 55%, #ccfbf1 100%);
+  color: #0f766e;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -304,11 +305,20 @@ watch(() => appStore.isRecording, async (recording) => {
   transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease, transform 0.2s ease;
   position: relative;
   z-index: 1;
+  box-shadow:
+    0 4px 12px rgba(15, 118, 110, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
 }
 
 .mic-btn:hover {
-  background: rgba(67, 82, 102, 0.12);
-  transform: scale(1.04);
+  background:
+    linear-gradient(160deg, #ffffff 0%, #ccfbf1 60%, #99f6e4 100%);
+  border-color: rgba(15, 118, 110, 0.55);
+  color: #0f766e;
+  transform: scale(1.05);
+  box-shadow:
+    0 6px 18px rgba(15, 118, 110, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
 }
 
 .mic-btn.recording {

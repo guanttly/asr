@@ -2,7 +2,7 @@
   "name": "asr-desktop",
   "displayName": "巨鲨语音助手",
   "type": "module",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "private": true,
   "scripts": {
     "predev": "node ./scripts/sync-version.mjs",

@@ -86,6 +86,7 @@ const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCod
 <style scoped>
 .settings-window {
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -220,7 +221,7 @@ const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCod
 .settings-overlay {
   position: absolute;
   inset: 0;
-  z-index: 4000;
+  z-index: 9000;
   background: rgba(15, 23, 42, 0.42);
   backdrop-filter: blur(6px);
   display: flex;

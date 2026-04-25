@@ -21,6 +21,7 @@ import (
 
 var ErrMeetingNotFound = errors.New("meeting not found")
 var ErrMeetingDeleteNotAllowed = errors.New("processing meeting cannot be deleted")
+var ErrMeetingTitleRequired = errors.New("meeting title is required")
 
 const (
 	baseSyncBackoff    = 30 * time.Second
@@ -210,6 +211,72 @@ func (s *Service) GetMeeting(ctx context.Context, id uint64) (*MeetingDetailResp
 	}
 
 	return resp, nil
+}
+
+// UpdateMeeting persists user-edited meeting metadata and Markdown summary content.
+func (s *Service) UpdateMeeting(ctx context.Context, meetingID uint64, userID uint64, req *UpdateMeetingRequest) (*MeetingDetailResponse, error) {
+	meeting, err := s.meetingRepo.GetByID(ctx, meetingID)
+	if err != nil {
+		return nil, ErrMeetingNotFound
+	}
+	if meeting.UserID != userID {
+		return nil, ErrMeetingNotFound
+	}
+	if req == nil {
+		return s.GetMeeting(ctx, meetingID)
+	}
+
+	meetingChanged := false
+	if req.Title != nil {
+		title := strings.TrimSpace(*req.Title)
+		if title == "" {
+			return nil, ErrMeetingTitleRequired
+		}
+		if meeting.Title != title {
+			meeting.Title = title
+			meetingChanged = true
+		}
+	}
+	if meetingChanged {
+		if err := s.meetingRepo.Update(ctx, meeting); err != nil {
+			return nil, err
+		}
+	}
+
+	if req.SummaryContent != nil {
+		if s.summaryRepo == nil {
+			return nil, fmt.Errorf("summary repository unavailable")
+		}
+		content := strings.TrimSpace(*req.SummaryContent)
+		existing, err := s.summaryRepo.GetByMeeting(ctx, meetingID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		if existing != nil {
+			if existing.Content != content {
+				existing.Content = content
+				if strings.TrimSpace(existing.ModelVersion) == "" {
+					existing.ModelVersion = "manual"
+				}
+				if err := s.summaryRepo.Update(ctx, existing); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			if err := s.summaryRepo.Create(ctx, &domain.Summary{
+				MeetingID:    meetingID,
+				Content:      content,
+				ModelVersion: "manual",
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if meetingChanged || req.SummaryContent != nil {
+		s.publishMeetingUpdated(meeting)
+	}
+	return s.GetMeeting(ctx, meetingID)
 }
 
 // ListMeetings returns a paginated list for a user.

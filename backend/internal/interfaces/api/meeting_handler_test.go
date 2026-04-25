@@ -91,6 +91,41 @@ func (s *summaryRepoHandlerStub) DeleteByMeeting(_ context.Context, _ uint64) er
 	return nil
 }
 
+type summaryRepoHandlerMemoryStub struct {
+	current *meetingdomain.Summary
+	created *meetingdomain.Summary
+	updated *meetingdomain.Summary
+}
+
+func (s *summaryRepoHandlerMemoryStub) Create(_ context.Context, summary *meetingdomain.Summary) error {
+	summary.ID = 101
+	summary.CreatedAt = time.Now()
+	copy := *summary
+	s.created = &copy
+	s.current = &copy
+	return nil
+}
+
+func (s *summaryRepoHandlerMemoryStub) GetByMeeting(_ context.Context, _ uint64) (*meetingdomain.Summary, error) {
+	if s.current == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	copy := *s.current
+	return &copy, nil
+}
+
+func (s *summaryRepoHandlerMemoryStub) Update(_ context.Context, summary *meetingdomain.Summary) error {
+	copy := *summary
+	s.updated = &copy
+	s.current = &copy
+	return nil
+}
+
+func (s *summaryRepoHandlerMemoryStub) DeleteByMeeting(_ context.Context, _ uint64) error {
+	s.current = nil
+	return nil
+}
+
 func TestCreateMeetingRejectsNonMeetingWorkflow(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -238,5 +273,53 @@ func TestDeleteMeetingRejectsProcessingMeeting(t *testing.T) {
 	}
 	if meetingRepo.deleted != 0 {
 		t.Fatalf("expected meeting not deleted, got %d", meetingRepo.deleted)
+	}
+}
+
+func TestUpdateMeetingPersistsUserEdits(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	meetingRepo := &meetingRepoHandlerStub{meeting: &meetingdomain.Meeting{
+		ID:        9,
+		UserID:    8,
+		Title:     "旧标题",
+		AudioURL:  "https://example.com/a.wav",
+		Status:    meetingdomain.MeetingStatusCompleted,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}}
+	summaryRepo := &summaryRepoHandlerMemoryStub{current: &meetingdomain.Summary{ID: 19, MeetingID: 9, Content: "旧纪要", ModelVersion: "qwen"}}
+	service := appmeeting.NewService(meetingRepo, &transcriptRepoHandlerStub{}, summaryRepo, nil, nil, nil)
+	handler := NewMeetingHandler(service, nil, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("auth_claims", &middleware.Claims{UserID: 8, Role: "user"})
+		c.Next()
+	})
+	router.PUT("/meetings/:id", handler.Update)
+
+	body, err := json.Marshal(map[string]any{
+		"title":           "新标题",
+		"summary_content": "# 新纪要",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/meetings/9", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if meetingRepo.meeting == nil || meetingRepo.meeting.Title != "新标题" {
+		t.Fatalf("expected meeting title update, got %+v", meetingRepo.meeting)
+	}
+	if summaryRepo.updated == nil || summaryRepo.updated.Content != "# 新纪要" {
+		t.Fatalf("expected summary update, got %+v", summaryRepo.updated)
 	}
 }

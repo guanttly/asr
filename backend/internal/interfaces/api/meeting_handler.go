@@ -48,6 +48,7 @@ func (h *MeetingHandler) Register(group *gin.RouterGroup) {
 	group.POST("", h.Create)
 	group.GET("", h.List)
 	group.GET("/:id", h.Detail)
+	group.PUT("/:id", h.Update)
 	group.DELETE("/:id", h.Delete)
 	group.POST("/:id/summary", h.RegenerateSummary)
 }
@@ -204,6 +205,40 @@ func (h *MeetingHandler) Delete(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"deleted": true})
+}
+
+func (h *MeetingHandler) Update(c *gin.Context) {
+	if !h.feature.meeting() {
+		h.feature.denyFeature(c, "当前版本未开放会议纪要")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid meeting id")
+		return
+	}
+
+	var req appmeeting.UpdateMeetingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	userID := middleware.UserIDFromContext(c)
+	result, err := h.service.UpdateMeeting(c.Request.Context(), id, userID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, appmeeting.ErrMeetingNotFound):
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		case errors.Is(err, appmeeting.ErrMeetingTitleRequired):
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		default:
+			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		}
+		return
+	}
+
+	response.Success(c, result)
 }
 
 func (h *MeetingHandler) RegenerateSummary(c *gin.Context) {

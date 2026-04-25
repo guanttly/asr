@@ -233,6 +233,7 @@ onBeforeUnmount(() => {
       :meeting-id="selectedId"
       @close="selectedId = null"
       @deleted="() => { selectedId = null; void loadMeetings() }"
+      @saved="() => { void loadMeetings({ silent: true }) }"
     />
   </div>
 </template>

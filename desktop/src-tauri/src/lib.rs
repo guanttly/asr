@@ -7,10 +7,11 @@ use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use serde::Serialize;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -68,17 +69,23 @@ fn install_windows_permission_handler<R: tauri::Runtime>(window: &tauri::Webview
 }
 
 fn runtime_log_path() -> PathBuf {
+    let root_dir = runtime_root_dir();
+    root_dir.join("logs").join("startup.log")
+}
+
+fn runtime_root_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(local_app_data)
-                .join("asr-desktop")
-                .join("logs")
-                .join("startup.log");
+            return PathBuf::from(local_app_data).join("asr-desktop");
         }
     }
 
-    std::env::temp_dir().join("asr-desktop-startup.log")
+    std::env::temp_dir().join("asr-desktop")
+}
+
+fn main_window_state_path() -> PathBuf {
+    runtime_root_dir().join("main-window-state.json")
 }
 
 fn log_runtime(message: &str) {
@@ -94,6 +101,93 @@ fn log_runtime(message: &str) {
 
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{timestamp} pid={}] {message}", std::process::id());
+    }
+}
+
+fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("failed to open Explorer: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map_err(|err| format!("failed to reveal file in Finder: {err}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target_dir = path.parent().unwrap_or(path);
+        std::process::Command::new("xdg-open")
+            .arg(target_dir)
+            .spawn()
+            .map_err(|err| format!("failed to open file manager: {err}"))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("opening the file manager is not supported on this platform".to_string())
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+struct MainWindowState {
+    x: i32,
+    y: i32,
+}
+
+fn load_main_window_state() -> Option<MainWindowState> {
+    let raw = fs::read_to_string(main_window_state_path()).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn persist_main_window_state(state: MainWindowState) {
+    let path = main_window_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    match serde_json::to_vec(&state) {
+        Ok(bytes) => {
+            if let Err(err) = fs::write(path, bytes) {
+                log_runtime(&format!("failed to persist main window state: {err}"));
+            }
+        }
+        Err(err) => log_runtime(&format!("failed to serialize main window state: {err}")),
+    }
+}
+
+fn persist_main_window_position(position: &tauri::PhysicalPosition<i32>) {
+    persist_main_window_state(MainWindowState {
+        x: position.x,
+        y: position.y,
+    });
+}
+
+fn persist_main_window_position_from_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    match window.outer_position() {
+        Ok(position) => persist_main_window_position(&position),
+        Err(err) => log_runtime(&format!("failed to read main window position: {err}")),
+    }
+}
+
+fn restore_main_window_position<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    let Some(state) = load_main_window_state() else {
+        return;
+    };
+
+    let position = tauri::Position::Physical(tauri::PhysicalPosition::new(state.x, state.y));
+    if let Err(err) = window.set_position(position) {
+        log_runtime(&format!("failed to restore main window position: {err}"));
     }
 }
 
@@ -212,6 +306,42 @@ fn get_runtime_log_path() -> String {
 }
 
 #[tauri::command]
+async fn save_pdf_file(suggested_name: String, pdf_base64: String) -> Result<bool, String> {
+    let Some(file_handle) = rfd::AsyncFileDialog::new()
+        .add_filter("PDF", &["pdf"])
+        .set_file_name(&suggested_name)
+        .save_file()
+        .await
+    else {
+        return Ok(false);
+    };
+
+    let pdf_bytes = BASE64_STANDARD
+        .decode(pdf_base64)
+        .map_err(|err| format!("failed to decode pdf bytes: {err}"))?;
+
+    let mut target_path = file_handle.path().to_path_buf();
+    if target_path.extension().is_none() {
+        target_path.set_extension("pdf");
+    }
+
+    fs::write(&target_path, pdf_bytes)
+        .map_err(|err| format!("failed to write pdf file: {err}"))?;
+
+    log_runtime(&format!("saved pdf file to {}", target_path.display()));
+
+    if let Err(err) = reveal_in_file_manager(&target_path) {
+        log_runtime(&format!(
+            "saved pdf file but failed to open containing folder for {}: {}",
+            target_path.display(),
+            err
+        ));
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
 fn open_devtools(app: tauri::AppHandle, window: tauri::WebviewWindow) {
     // 优先打开调用者所在窗口的 DevTools
     window.open_devtools();
@@ -228,6 +358,7 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
 
+    restore_main_window_position(&window);
     window.show().map_err(|err| err.to_string())?;
     window.unminimize().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
@@ -322,7 +453,8 @@ pub fn run() {
             open_devtools,
             append_runtime_log,
             read_runtime_log_tail,
-            get_runtime_log_path
+            get_runtime_log_path,
+            save_pdf_file
         ])
         .setup(move |app| {
             if enable_tray {
@@ -339,6 +471,7 @@ pub fn run() {
                 install_windows_permission_handler(&window);
 
                 let _ = window.set_always_on_top(true);
+                restore_main_window_position(&window);
 
                 if let Some(icon) = app.default_window_icon().cloned() {
                     let _ = window.set_icon(icon);
@@ -346,11 +479,16 @@ pub fn run() {
 
                 let window_clone = window.clone();
                 window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Moved(position) = event {
+                        persist_main_window_position(position);
+                    }
+
                     if enable_tray && matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                         let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                             return;
                         };
                         api.prevent_close();
+                        persist_main_window_position_from_window(&window_clone);
                         let _ = window_clone.hide();
                     }
                 });

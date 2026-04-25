@@ -31,6 +31,12 @@ type RegenerateSummaryRequest struct {
 	WorkflowID *uint64 `json:"workflow_id,omitempty"`
 }
 
+// UpdateMeetingRequest updates user-editable meeting metadata and summary content.
+type UpdateMeetingRequest struct {
+	Title          *string `json:"title,omitempty"`
+	SummaryContent *string `json:"summary_content,omitempty"`
+}
+
 // MeetingDetailResponse includes transcripts and summary.
 type MeetingDetailResponse struct {
 	MeetingResponse

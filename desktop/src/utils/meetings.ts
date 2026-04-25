@@ -37,6 +37,11 @@ export interface MeetingListResult {
   total: number
 }
 
+export interface UpdateMeetingPayload {
+  title?: string
+  summary_content?: string
+}
+
 function buildQuery(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -72,6 +77,18 @@ export async function deleteMeeting(id: number): Promise<void> {
   const payload = await readResponseEnvelope<{ deleted?: boolean }>(response)
   if (!response.ok)
     throw new Error(payload.message || '删除会议失败')
+}
+
+export async function updateMeeting(id: number, payload: UpdateMeetingPayload): Promise<MeetingDetailResponse> {
+  const response = await authedFetch(`/api/meetings/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const result = await readResponseEnvelope<MeetingDetailResponse>(response)
+  if (!response.ok || !result.data)
+    throw new Error(result.message || '保存会议纪要失败')
+  return result.data
 }
 
 export async function regenerateMeetingSummary(id: number, workflowId?: number | null): Promise<void> {

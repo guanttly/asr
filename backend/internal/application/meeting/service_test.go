@@ -262,6 +262,60 @@ func TestCreateMeetingDefaultsTitleFromAudioSource(t *testing.T) {
 	}
 }
 
+func TestUpdateMeetingPersistsTitleAndSummary(t *testing.T) {
+	meetingRepo := &meetingRepoServiceStub{meeting: &domain.Meeting{
+		ID:       21,
+		UserID:   9,
+		Title:    "原始标题",
+		AudioURL: "https://example.com/a.wav",
+		Status:   domain.MeetingStatusCompleted,
+	}}
+	summaryRepo := &summaryRepoServiceStub{current: &domain.Summary{ID: 31, MeetingID: 21, Content: "旧纪要", ModelVersion: "qwen-summary"}}
+	service := NewService(meetingRepo, &transcriptRepoServiceStub{}, summaryRepo, nil, nil, nil)
+
+	title := "放射科病例讨论会"
+	content := "# 放射科病例讨论会\n\n主持人：李医生"
+	result, err := service.UpdateMeeting(context.Background(), 21, 9, &UpdateMeetingRequest{
+		Title:          &title,
+		SummaryContent: &content,
+	})
+	if err != nil {
+		t.Fatalf("UpdateMeeting returned error: %v", err)
+	}
+	if meetingRepo.updated == nil || meetingRepo.updated.Title != title {
+		t.Fatalf("expected title update %q, got %+v", title, meetingRepo.updated)
+	}
+	if summaryRepo.updated == nil || summaryRepo.updated.Content != content {
+		t.Fatalf("expected summary content update, got %+v", summaryRepo.updated)
+	}
+	if summaryRepo.updated.ModelVersion != "qwen-summary" {
+		t.Fatalf("expected model version preserved, got %q", summaryRepo.updated.ModelVersion)
+	}
+	if result.Title != title || result.Summary == nil || result.Summary.Content != content {
+		t.Fatalf("expected refreshed detail response, got %+v", result)
+	}
+}
+
+func TestUpdateMeetingRejectsOtherUser(t *testing.T) {
+	meetingRepo := &meetingRepoServiceStub{meeting: &domain.Meeting{
+		ID:       22,
+		UserID:   9,
+		Title:    "会诊",
+		AudioURL: "https://example.com/a.wav",
+		Status:   domain.MeetingStatusCompleted,
+	}}
+	service := NewService(meetingRepo, &transcriptRepoServiceStub{}, &summaryRepoServiceStub{}, nil, nil, nil)
+	title := "不能改"
+
+	_, err := service.UpdateMeeting(context.Background(), 22, 10, &UpdateMeetingRequest{Title: &title})
+	if !errors.Is(err, ErrMeetingNotFound) {
+		t.Fatalf("expected ErrMeetingNotFound, got %v", err)
+	}
+	if meetingRepo.updated != nil {
+		t.Fatalf("expected no update, got %+v", meetingRepo.updated)
+	}
+}
+
 func TestDeleteMeetingRemovesRelatedData(t *testing.T) {
 	meetingRepo := &meetingRepoServiceStub{meeting: &domain.Meeting{
 		ID:       11,

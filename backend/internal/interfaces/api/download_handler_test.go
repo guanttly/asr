@@ -17,7 +17,7 @@ func TestDownloadHandlerListReturnsSortedFiles(t *testing.T) {
 
 	downloadDir := t.TempDir()
 	older := filepath.Join(downloadDir, "older.exe")
-	newer := filepath.Join(downloadDir, "语音速录助手_0.2.5_x64-setup.exe")
+	newer := filepath.Join(downloadDir, "巨鲨语音助手_0.2.5_x64-setup.exe")
 	archive := filepath.Join(downloadDir, "asr-terminal-0.2.5.run")
 	readme := filepath.Join(downloadDir, "README.txt")
 	hidden := filepath.Join(downloadDir, ".hidden")

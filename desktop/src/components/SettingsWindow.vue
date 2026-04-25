@@ -24,7 +24,7 @@ const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCod
       <img src="/logo.png" alt="ASR" class="hero-logo">
       <div class="hero-copy">
         <p class="hero-tag">Desktop Voice Dictation</p>
-        <h1>语音速录助手</h1>
+        <h1>巨鲨语音助手</h1>
         <p class="hero-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
       </div>
       <button

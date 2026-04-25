@@ -14,7 +14,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
-        .tooltip("语音速录助手")
+        .tooltip("巨鲨语音助手")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {

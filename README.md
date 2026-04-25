@@ -319,7 +319,7 @@ runtime/downloads
 例如：
 
 ```bash
-cp /data/语音速录助手_0.2.6_x64-setup.exe runtime/downloads/
+cp /data/巨鲨语音助手_0.2.6_x64-setup.exe runtime/downloads/
 ```
 
 这个目录会在网页的公共下载页中直接显示。

@@ -384,7 +384,7 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     // 在任何页面 JS 之前注入窗口标记——比 getCurrentWindow() 更可靠，
     // 因为 __TAURI_INTERNALS__ 在动态创建的窗口中可能存在初始化时序问题。
     .initialization_script("Object.defineProperty(window,'__ASR_WINDOW__',{value:'settings'})")
-    .title("语音速录助手设置")
+    .title("巨鲨语音助手设置")
     .inner_size(440.0, 680.0)
     .min_inner_size(400.0, 560.0)
     .resizable(true)

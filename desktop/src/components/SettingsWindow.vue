@@ -16,6 +16,8 @@ const activeTab = ref<MainTab>('history')
 
 const userLabel = computed(() => appStore.displayName || appStore.username || '未连接')
 const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCode.slice(0, 12) : '未生成')
+const buildLabel = `版本 ${__APP_VERSION__}-${__APP_BUILD_CODE__}`
+const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
 </script>
 
 <template>
@@ -26,6 +28,7 @@ const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCod
         <p class="hero-tag">Desktop Voice Dictation</p>
         <h1>巨鲨语音助手</h1>
         <p class="hero-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
+        <p class="hero-version" :title="buildTitle">{{ buildLabel }}</p>
       </div>
       <button
         class="hero-gear"
@@ -138,6 +141,19 @@ const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCod
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hero-version {
+  display: inline-flex;
+  align-items: center;
+  margin: 8px 0 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .hero-gear {

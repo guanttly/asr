@@ -3,8 +3,12 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import AutoImport from 'unplugin-auto-import/vite'
 import { defineConfig } from 'vite'
+import { resolveBuildMeta } from '../scripts/build-meta'
 
 const host = process.env.TAURI_DEV_HOST
+const buildMeta = resolveBuildMeta({
+  packageJsonCandidates: [fileURLToPath(new URL('./package.json', import.meta.url))],
+})
 
 export default defineConfig({
   plugins: [
@@ -22,6 +26,11 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  define: {
+    __APP_VERSION__: JSON.stringify(buildMeta.version),
+    __APP_BUILD_CODE__: JSON.stringify(buildMeta.buildCode),
+    __APP_BUILD_DATE__: JSON.stringify(buildMeta.buildDate),
+  },
   server: {
     host: host || '0.0.0.0',
     port: 1420,

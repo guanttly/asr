@@ -10,12 +10,19 @@ import AutoImport from 'unplugin-auto-import/vite'
 import { NaiveUiResolver } from 'unplugin-vue-components/resolvers'
 import Components from 'unplugin-vue-components/vite'
 import { defineConfig, loadEnv } from 'vite'
+import { resolveBuildMeta } from '../scripts/build-meta'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const useHttps = env.VITE_DEV_HTTPS !== 'false'
   const certPath = env.VITE_DEV_HTTPS_CERT ? resolve(process.cwd(), env.VITE_DEV_HTTPS_CERT) : ''
   const keyPath = env.VITE_DEV_HTTPS_KEY ? resolve(process.cwd(), env.VITE_DEV_HTTPS_KEY) : ''
+  const buildMeta = resolveBuildMeta({
+    packageJsonCandidates: [
+      fileURLToPath(new URL('../desktop/package.json', import.meta.url)),
+      fileURLToPath(new URL('./package.json', import.meta.url)),
+    ],
+  })
 
   const httpsOptions = certPath && keyPath && existsSync(certPath) && existsSync(keyPath)
     ? {
@@ -51,6 +58,11 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
+    },
+    define: {
+      __APP_VERSION__: JSON.stringify(buildMeta.version),
+      __APP_BUILD_CODE__: JSON.stringify(buildMeta.buildCode),
+      __APP_BUILD_DATE__: JSON.stringify(buildMeta.buildDate),
     },
     server: {
       host: '0.0.0.0',

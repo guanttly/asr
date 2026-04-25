@@ -16,11 +16,17 @@ RUN CGO_ENABLED=0 go build -o /out/gateway ./cmd/gateway \
 
 FROM node:22-bookworm AS frontend-builder
 
+ARG ASR_APP_VERSION
+ARG ASR_BUILD_DATE
+ENV ASR_APP_VERSION=${ASR_APP_VERSION}
+ENV ASR_BUILD_DATE=${ASR_BUILD_DATE}
+
 WORKDIR /src/frontend
 
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN corepack enable && pnpm install --frozen-lockfile
 
+COPY scripts/build-meta.ts /src/scripts/build-meta.ts
 COPY frontend ./
 RUN pnpm build
 

@@ -21,7 +21,7 @@
 打包机执行：
 
 ```bash
-make release-all-in-one VERSION=0.2.7 SERVER_HOST=192.168.40.223 HTTP_PORT=11010 ADMIN_PASSWORD='Admin@123456'
+make release-all-in-one VERSION=0.3.10 SERVER_HOST=192.168.40.221 HTTP_PORT=11010 ADMIN_PASSWORD='jusha1996'
 ```
 
 服务器执行：

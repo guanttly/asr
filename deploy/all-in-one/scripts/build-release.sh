@@ -305,6 +305,7 @@ build_desktop_installer() {
     if ! (
       cd "$DESKTOP_DIR"
       ASR_DESKTOP_IGNORE_CERT_ERRORS=1 \
+      ASR_BUILD_DATE="$BUILD_DATE" \
       VITE_DEFAULT_SERVER_URL="$DEFAULT_CLIENT_URL" \
       run_pnpm build:win
     ) >&2; then
@@ -437,6 +438,8 @@ if [ -z "$VERSION" ]; then
   fi
 fi
 
+BUILD_DATE=${ASR_BUILD_DATE:-$(date +%Y-%m-%d)}
+
 SERVER_HOST=$(normalize_server_host "$SERVER_HOST")
 validate_port "$HTTP_PORT" "HTTP 端口"
 if [ -z "$HTTPS_PORT" ]; then
@@ -536,7 +539,7 @@ if [ "$SKIP_DOCKER" -eq 0 ]; then
   fi
 
   echo "构建 Docker 镜像: $IMAGE_TAG"
-  docker build -f "$DEPLOY_DIR/Dockerfile" -t "$IMAGE_TAG" "$REPO_ROOT"
+  docker build --build-arg ASR_APP_VERSION="$VERSION" --build-arg ASR_BUILD_DATE="$BUILD_DATE" -f "$DEPLOY_DIR/Dockerfile" -t "$IMAGE_TAG" "$REPO_ROOT"
   docker tag "$IMAGE_TAG" asr-all-in-one:latest
 
   echo "导出离线镜像..."

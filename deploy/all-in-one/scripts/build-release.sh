@@ -6,6 +6,9 @@ DEPLOY_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$DEPLOY_DIR/../.." && pwd)
 DESKTOP_DIR="$REPO_ROOT/desktop"
 DESKTOP_INSTALLER_DIR="$DESKTOP_DIR/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+CURRENT_UID=$(id -u)
+CURRENT_USER=$(id -un)
+CURRENT_GROUP=$(id -gn)
 
 VERSION=""
 OUTPUT_ROOT="$DEPLOY_DIR/dist"
@@ -19,11 +22,13 @@ ADMIN_PASSWORD="change-me-now"
 ADMIN_DISPLAY_NAME="系统管理员"
 MYSQL_PASSWORD=""
 JWT_SECRET=""
-ASR_SERVICE_URL="http://host.docker.internal:8000"
+ASR_SERVICE_URL="http://host.docker.internal:11001"
+SPEAKER_SERVICE_URL="http://host.docker.internal:11002"
 DESKTOP_INSTALLER_OVERRIDE=""
 DESKTOP_PACKAGE_OWNER=""
 DESKTOP_CARGO_TOML_OWNER=""
 DESKTOP_CARGO_LOCK_OWNER=""
+OUTPUT_OWNER=""
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -107,7 +112,9 @@ usage() {
   --jwt-secret <secret> | jwt-secret <secret>
                                      JWT 密钥，默认自动生成
   --asr-service-url <url> | asr-service-url <url>
-                                     外部 ASR 服务地址，默认 http://host.docker.internal:8000
+                                     外部 ASR 服务地址，默认 http://host.docker.internal:11001
+  --speaker-service-url <url> | speaker-service-url <url>
+                                     统一的人声服务地址，默认 http://host.docker.internal:11002
   --desktop-installer <path> | desktop-installer <path>
                                      直接使用现成桌面端安装包，不自动构建
   --dry-run | dry-run               跳过 Docker 镜像构建和桌面端自动构建
@@ -213,8 +220,46 @@ find_desktop_installer() {
 maybe_restore_owner() {
   OWNER="$1"
   TARGET_PATH="$2"
+  if [ "$CURRENT_UID" -ne 0 ]; then
+    return 0
+  fi
   if [ -n "$OWNER" ] && [ -e "$TARGET_PATH" ]; then
     chown "$OWNER" "$TARGET_PATH"
+  fi
+}
+
+maybe_restore_tree_owner() {
+  OWNER="$1"
+  TARGET_PATH="$2"
+  if [ "$CURRENT_UID" -ne 0 ]; then
+    return 0
+  fi
+  if [ -n "$OWNER" ] && [ -e "$TARGET_PATH" ]; then
+    chown -R "$OWNER" "$TARGET_PATH"
+  fi
+}
+
+resolve_path_owner() {
+  TARGET_PATH="$1"
+  if [ -e "$TARGET_PATH" ]; then
+    stat -c '%u:%g' "$TARGET_PATH"
+    return 0
+  fi
+  TARGET_PARENT=$(dirname "$TARGET_PATH")
+  stat -c '%u:%g' "$TARGET_PARENT"
+}
+
+ensure_output_owner_matches_current_user() {
+  TARGET_PATH="$1"
+  if [ "$CURRENT_UID" -eq 0 ] || [ ! -e "$TARGET_PATH" ]; then
+    return 0
+  fi
+
+  FOREIGN_PATH=$(find "$TARGET_PATH" ! -user "$CURRENT_USER" -print -quit 2>/dev/null || true)
+  if [ -n "$FOREIGN_PATH" ]; then
+    echo "当前发布目标路径存在非当前用户属主的旧产物，无法安全覆盖: $FOREIGN_PATH" >&2
+    echo "请先执行: sudo chown -R $CURRENT_USER:$CURRENT_GROUP $TARGET_PATH" >&2
+    exit 1
   fi
 }
 
@@ -411,6 +456,18 @@ while [ "$#" -gt 0 ]; do
       ASR_SERVICE_URL="$2"
       shift 2
       ;;
+    --speaker-service-url|speaker-service-url)
+      SPEAKER_SERVICE_URL="$2"
+      shift 2
+      ;;
+    --diarization-service-url|diarization-service-url)
+      echo "--diarization-service-url 已移除，请改用 --speaker-service-url" >&2
+      exit 1
+      ;;
+    --speaker-analysis-service-url|speaker-analysis-service-url)
+      echo "--speaker-analysis-service-url 已移除，请改用 --speaker-service-url" >&2
+      exit 1
+      ;;
     --desktop-installer|desktop-installer)
       DESKTOP_INSTALLER_OVERRIDE="$2"
       shift 2
@@ -466,6 +523,11 @@ ARCHIVE_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.tar.gz"
 RUN_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.run"
 DEFAULT_CLIENT_URL=$(build_https_origin "$SERVER_HOST" "$HTTPS_PORT")
 TLS_ALT_NAMES=$(build_tls_alt_names "$SERVER_HOST")
+OUTPUT_OWNER=$(resolve_path_owner "$OUTPUT_ROOT")
+
+ensure_output_owner_matches_current_user "$STAGING_DIR"
+ensure_output_owner_matches_current_user "$ARCHIVE_PATH"
+ensure_output_owner_matches_current_user "$RUN_PATH"
 
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads"
@@ -495,8 +557,7 @@ ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME=$ADMIN_DISPLAY_NAME
 ASR_JWT_SECRET=$JWT_SECRET
 ASR_SERVICES_ASR=$ASR_SERVICE_URL
 ASR_SERVICES_ASR_STREAM=
-ASR_SERVICES_DIARIZATION_URL=
-ASR_SERVICES_SPEAKER_ANALYSIS_URL=
+ASR_SERVICES_SPEAKER_SERVICE_URL=$SPEAKER_SERVICE_URL
 ASR_SERVICES_SUMMARY_MODEL=qwen3-4b
 EOF
 
@@ -552,6 +613,9 @@ rm -f "$ARCHIVE_PATH"
 rm -f "$RUN_PATH"
 tar -czf "$ARCHIVE_PATH" -C "$OUTPUT_ROOT" "$PACKAGE_ROOT_NAME"
 create_self_extract_run "$RUN_PATH" "$ARCHIVE_PATH"
+maybe_restore_tree_owner "$OUTPUT_OWNER" "$STAGING_DIR"
+maybe_restore_owner "$OUTPUT_OWNER" "$ARCHIVE_PATH"
+maybe_restore_owner "$OUTPUT_OWNER" "$RUN_PATH"
 
 echo "发布目录: $STAGING_DIR"
 echo "压缩包: $ARCHIVE_PATH"

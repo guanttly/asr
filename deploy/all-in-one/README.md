@@ -65,4 +65,8 @@
 ## 外部依赖
 
 - ASR 服务地址通过 ASR_SERVICES_ASR 配置。
+- 如果外部 ASR 或 3D-Speaker 就部署在同一台宿主机上，all-in-one 容器内可以直接填写 `http://host.docker.internal:<端口>`；这是容器内访问宿主机的别名，不要求服务器 shell 自己能 `ping host.docker.internal`。
+- 这里的 `<端口>` 必须是宿主机对外暴露的端口；如果外部容器是 `11001 -> 8000`，all-in-one 里就应该写 `http://host.docker.internal:11001`，而不是 `:8000`。
+- 如果 3D-Speaker 同时承担说话人分离和声纹能力，发布脚本层现在只传一个统一的 `SPEAKER_SERVICE_URL`；生成的发布包会把后端内部的 diarization 和 speaker-analysis 地址都写成同一个值。
+- 如果外部服务部署在另一台机器上，应填写那台机器的实际内网 IP 或域名，例如 `http://192.168.40.223:10002`。
 - 说话人分析与分离服务可选；未配置时相关能力保持当前后端已有降级行为。

@@ -19,15 +19,11 @@ type SpeakerDiarizeConfig struct {
 // SpeakerDiarizeHandler calls an external diarization service and merges
 // speaker labels into the text. This node requires audio context from ExecutionMeta.
 type SpeakerDiarizeHandler struct {
-	defaultClient           *diarization.Client
-	voiceprintDefaultClient *diarization.Client
+	defaultClient *diarization.Client
 }
 
-func NewSpeakerDiarizeHandler(defaultClient, voiceprintDefaultClient *diarization.Client) *SpeakerDiarizeHandler {
-	return &SpeakerDiarizeHandler{
-		defaultClient:           defaultClient,
-		voiceprintDefaultClient: voiceprintDefaultClient,
-	}
+func NewSpeakerDiarizeHandler(defaultClient *diarization.Client) *SpeakerDiarizeHandler {
+	return &SpeakerDiarizeHandler{defaultClient: defaultClient}
 }
 
 func (h *SpeakerDiarizeHandler) Validate(config json.RawMessage) error {
@@ -54,9 +50,6 @@ func (h *SpeakerDiarizeHandler) Execute(ctx context.Context, config json.RawMess
 	}
 
 	client := h.defaultClient
-	if cfg.EnableVoiceprintMatch && h.voiceprintDefaultClient != nil {
-		client = h.voiceprintDefaultClient
-	}
 	if cfg.ServiceURL != "" {
 		client = diarization.NewClient(cfg.ServiceURL)
 	}

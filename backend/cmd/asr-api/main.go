@@ -379,19 +379,12 @@ func main() {
 	engine.RegisterHandler(wfdomain.NodeVoiceIntent, wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	engine.RegisterHandler(wfdomain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
-	var diarizeClient *diarization.Client
-	if cfg.Services.DiarizationURL != "" {
-		diarizeClient = diarization.NewClient(cfg.Services.DiarizationURL)
+	speakerServiceURL := strings.TrimSpace(cfg.Services.SpeakerServiceURL)
+	var speakerServiceClient *diarization.Client
+	if speakerServiceURL != "" {
+		speakerServiceClient = diarization.NewClient(speakerServiceURL)
 	}
-	speakerAnalysisURL := strings.TrimSpace(cfg.Services.SpeakerAnalysisURL)
-	if speakerAnalysisURL == "" {
-		speakerAnalysisURL = strings.TrimSpace(cfg.Services.DiarizationURL)
-	}
-	var speakerAnalysisClient *diarization.Client
-	if speakerAnalysisURL != "" {
-		speakerAnalysisClient = diarization.NewClient(speakerAnalysisURL)
-	}
-	engine.RegisterHandler(wfdomain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient, speakerAnalysisClient))
+	engine.RegisterHandler(wfdomain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(speakerServiceClient))
 
 	workflowService := appwf.NewService(workflowRepo, workflowNodeRepo, persistence.NewWorkflowNodeDefaultRepo(db), workflowExecRepo, workflowResultRepo, engine)
 	workflowExecutor := &workflowExecutorAdapter{svc: workflowService}
@@ -400,7 +393,7 @@ func main() {
 	asrService := appasr.NewService(taskRepo, &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, businessHub)
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 	meetingService := appmeeting.NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExecutor, &meetingBatchEngineAdapter{client: asrEngineClient}, businessHub)
-	voiceprintService := appvoiceprint.NewService(diarization.NewClient(speakerAnalysisURL))
+	voiceprintService := appvoiceprint.NewService(speakerServiceClient)
 	startBatchSyncLoop(logger, asrService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize, cfg.Services.ASRBatchSyncWarnThreshold)
 	startMeetingSyncLoop(logger, meetingService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize)
 

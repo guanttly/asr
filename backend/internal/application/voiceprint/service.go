@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrServiceUnavailable = errors.New("未配置 Speaker Analysis Service 地址，请设置 services.speaker_analysis_url")
+	ErrServiceUnavailable = errors.New("未配置人声服务地址，请设置 services.speaker_service_url")
 	ErrMissingSpeakerName = errors.New("speaker_name is required")
 	ErrMissingAudioFile   = errors.New("voiceprint audio file is required")
 	ErrMissingRecordID    = errors.New("voiceprint id is required")

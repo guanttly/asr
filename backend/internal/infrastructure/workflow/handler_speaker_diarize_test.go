@@ -21,7 +21,7 @@ func TestSpeakerDiarizeHandlerFallsBackOnServiceError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL), nil)
+	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL))
 	output, detail, err := handler.Execute(context.Background(), json.RawMessage(`{"fail_on_error":false}`), "原始文本", &ExecutionMeta{AudioURL: "http://example.com/audio.wav"})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -60,7 +60,7 @@ func TestSpeakerDiarizeHandlerUsesVoiceprintIdentifyEndpoint(t *testing.T) {
 		t.Fatalf("write temp audio: %v", err)
 	}
 
-	handler := NewSpeakerDiarizeHandler(nil, nil)
+	handler := NewSpeakerDiarizeHandler(nil)
 	output, detail, err := handler.Execute(context.Background(), json.RawMessage(`{"service_url":"`+server.URL+`","enable_voiceprint_match":true}`), "会议文本", &ExecutionMeta{AudioFilePath: audioPath})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -73,7 +73,7 @@ func TestSpeakerDiarizeHandlerUsesVoiceprintIdentifyEndpoint(t *testing.T) {
 	}
 }
 
-func TestSpeakerDiarizeHandlerUsesVoiceprintDefaultClientWhenEnabled(t *testing.T) {
+func TestSpeakerDiarizeHandlerUsesDefaultClientWhenVoiceprintMatchEnabled(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +98,7 @@ func TestSpeakerDiarizeHandlerUsesVoiceprintDefaultClientWhenEnabled(t *testing.
 		t.Fatalf("write temp audio: %v", err)
 	}
 
-	handler := NewSpeakerDiarizeHandler(nil, diarization.NewClient(server.URL))
+	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL))
 	output, detail, err := handler.Execute(context.Background(), json.RawMessage(`{"enable_voiceprint_match":true}`), "会议文本", &ExecutionMeta{AudioFilePath: audioPath})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -134,7 +134,7 @@ func TestSpeakerDiarizeHandlerNormalizesAnonymousSpeakerLabels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL), nil)
+	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL))
 	output, detail, err := handler.Execute(context.Background(), nil, "会议文本", &ExecutionMeta{AudioURL: "http://example.com/audio.wav"})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -185,7 +185,7 @@ func TestSpeakerDiarizeHandlerKeepsTranscriptTextPerSegment(t *testing.T) {
 	}))
 	defer server.Close()
 
-	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL), nil)
+	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL))
 	output, _, err := handler.Execute(context.Background(), nil, "第一句。第二句。", &ExecutionMeta{AudioURL: "http://example.com/audio.wav"})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -218,7 +218,7 @@ func TestSpeakerDiarizeHandlerDropsEmptyTranscriptSegments(t *testing.T) {
 	}))
 	defer server.Close()
 
-	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL), nil)
+	handler := NewSpeakerDiarizeHandler(diarization.NewClient(server.URL))
 	output, detail, err := handler.Execute(context.Background(), nil, "甲。乙。", &ExecutionMeta{AudioURL: "http://example.com/audio.wav"})
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)

@@ -37,9 +37,8 @@ services:
   asr_batch_sync_batch_size: 20
   asr_batch_sync_warn_threshold: 3
   dashboard_retry_history_limit: 5
-  diarization_url: http://pyannote:8001
-  # Speaker Analysis Service / 3D-Speaker 地址，用于声纹注册、列表和 diarize-identify。
-  speaker_analysis_url: http://speaker-analysis:8100
+  # 统一的人声服务地址（3D-Speaker），同时用于说话人分离、声纹注册、列表和 diarize-identify。
+  speaker_service_url: http://speaker-analysis:8100
   summary_model: qwen3-4b
 
 upload:

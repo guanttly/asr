@@ -167,7 +167,7 @@ def format_meeting_transcript(merged_result: list[dict]) -> str:
 
 def process_meeting_audio(
     audio_path: str,
-    diarization_url: str = "http://localhost:8080",
+    service_url: str = "http://localhost:8080",
     asr_url: str = "http://localhost:8000",
 ):
     """
@@ -183,7 +183,7 @@ def process_meeting_audio(
 
     # 第一步：说话人分离
     print("\n[1/3] 调用说话人分离服务...")
-    diar_result = diarize_audio(audio_path, diarization_url)
+    diar_result = diarize_audio(audio_path, service_url)
     print(f"  检测到 {diar_result['num_speakers']} 位说话人")
     print(f"  共 {len(diar_result['segments'])} 个分段")
     print(f"  耗时: {diar_result['process_time']}s")

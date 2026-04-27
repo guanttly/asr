@@ -29,10 +29,9 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./config:/app/config:ro
       # 默认挂载宿主机模型目录，适配打包环境与部署环境分离。
       - ./models:/app/models:ro
-      # 如果需要从外部挂载配置
-      # - ./config/settings.yaml:/app/config/settings.yaml:ro
 
     deploy:
       resources:

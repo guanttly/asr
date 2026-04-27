@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
           当前声纹分析服务
         </div>
         <div class="mt-1 break-all">
-          {{ serviceURL || '首次成功连通后会显示当前服务地址。若一直为空，请检查后端 services.speaker_analysis_url 配置。' }}
+          {{ serviceURL || '首次成功连通后会显示当前服务地址。若一直为空，请检查后端 services.speaker_service_url 配置。' }}
         </div>
       </div>
     </NCard>

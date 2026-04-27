@@ -149,7 +149,8 @@ make release-all-in-one \
 	ADMIN_DISPLAY_NAME='系统管理员' \
 	MYSQL_PASSWORD='Mysql@123456' \
 	JWT_SECRET='your-jwt-secret' \
-	ASR_SERVICE_URL='http://host.docker.internal:8000'
+	ASR_SERVICE_URL='http://host.docker.internal:8000' \
+	SPEAKER_SERVICE_URL='http://host.docker.internal:10002'
 ```
 
 说明：
@@ -159,6 +160,12 @@ make release-all-in-one \
 - 如果你没有显式传 `HTTPS_PORT`，脚本会自动取 `HTTP_PORT + 1`
 - `ADMIN_PASSWORD` 会直接写入发布包里的 `.env`
 - 如果不传 `MYSQL_PASSWORD` 和 `JWT_SECRET`，脚本会自动生成随机值
+- `ASR_SERVICE_URL` 和 `SPEAKER_SERVICE_URL` 都是“从 all-in-one 容器内部看出去”的地址
+- 如果外部服务和 all-in-one 部署在同一台宿主机上，推荐填 `http://host.docker.internal:<端口>`；服务器 shell 里 `ping host.docker.internal` 不通是正常的
+- 这里的 `<端口>` 必须写“宿主机实际暴露出来的端口”，不是外部容器自己的内部监听端口；例如外部 ASR 如果是 `-p 11001:8000`，那这里应填 `http://host.docker.internal:11001`
+- 如果外部服务部署在另一台机器上，就填那台机器的实际内网 IP 或域名
+- 如果 3D-Speaker 同时承担说话人分离和声纹能力，优先只传 `SPEAKER_SERVICE_URL`
+- 当前发布脚本不再单独暴露 `DIARIZATION_SERVICE_URL` 和 `SPEAKER_ANALYSIS_SERVICE_URL` 参数；发布包会把后端内部这两个地址统一写成同一个 `SPEAKER_SERVICE_URL`
 - 如果你已经提前构建好了桌面安装包，也可以传 `DESKTOP_INSTALLER=/path/to/setup.exe` 直接复用
 
 生成物在：
@@ -267,12 +274,35 @@ admin 账号初始化说明：
 - 这个自动植入逻辑是“确保存在”，不是“每次强制覆盖”
 - 如果数据库里已经存在同名 admin，后续再次安装或升级不会自动重置它的密码和显示名
 
-如果你有说话人分离或说话人分析服务，再改：
+如果你有外部人声服务，再改：
 
 ```bash
-ASR_SERVICES_DIARIZATION_URL=http://你的分离服务地址
-ASR_SERVICES_SPEAKER_ANALYSIS_URL=http://你的声纹服务地址
+ASR_SERVICES_SPEAKER_SERVICE_URL=http://你的3D-Speaker地址
 ```
+
+如果说话人分离和声纹能力都由同一套 3D-Speaker 提供，例如它和 all-in-one 跑在同一台宿主机、对外端口是 `10002`，可填写：
+
+```bash
+ASR_SERVICES_SPEAKER_SERVICE_URL=http://host.docker.internal:10002
+```
+
+注意：`host.docker.internal` 是给容器内部访问宿主机用的别名，不要求服务器本机 shell 能直接解析；如果你的 3D-Speaker 部署在另一台服务器，就改成那台机器的实际 IP 或域名。
+
+同理，如果你的 ASR 或 3D-Speaker 本身也是 Docker 容器，并且端口映射类似：
+
+```text
+11001 -> 8000
+11002 -> 8100
+```
+
+那么 all-in-one 里应填写：
+
+```bash
+ASR_SERVICES_ASR=http://host.docker.internal:11001
+ASR_SERVICES_SPEAKER_SERVICE_URL=http://host.docker.internal:11002
+```
+
+而不是填写容器内部端口 `8000` 或 `8100`。
 
 ### 3. 自签名 HTTPS 配置
 

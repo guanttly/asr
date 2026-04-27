@@ -60,7 +60,7 @@ docker-build:
 	cd deploy && docker compose build
 
 release-all-in-one:
-	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DRY_RUN),--dry-run,)
+	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DRY_RUN),--dry-run,)
 
 # --- Utilities ---
 clean:

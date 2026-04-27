@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	appappsettings "github.com/lgt/asr/internal/application/appsettings"
@@ -169,19 +170,12 @@ func main() {
 	engine.RegisterHandler(domain.NodeVoiceIntent, wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo))
 	engine.RegisterHandler(domain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
 	engine.RegisterHandler(domain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
-	var diarizeClient *diarization.Client
-	if cfg.Services.DiarizationURL != "" {
-		diarizeClient = diarization.NewClient(cfg.Services.DiarizationURL)
+	speakerServiceURL := strings.TrimSpace(cfg.Services.SpeakerServiceURL)
+	var speakerServiceClient *diarization.Client
+	if speakerServiceURL != "" {
+		speakerServiceClient = diarization.NewClient(speakerServiceURL)
 	}
-	var speakerAnalysisClient *diarization.Client
-	speakerAnalysisURL := cfg.Services.SpeakerAnalysisURL
-	if speakerAnalysisURL == "" {
-		speakerAnalysisURL = cfg.Services.DiarizationURL
-	}
-	if speakerAnalysisURL != "" {
-		speakerAnalysisClient = diarization.NewClient(speakerAnalysisURL)
-	}
-	engine.RegisterHandler(domain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(diarizeClient, speakerAnalysisClient))
+	engine.RegisterHandler(domain.NodeSpeakerDiarize, wfengine.NewSpeakerDiarizeHandler(speakerServiceClient))
 
 	workflowService := appwf.NewService(
 		workflowRepo,

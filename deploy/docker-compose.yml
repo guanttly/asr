@@ -46,7 +46,7 @@ services:
       ASR_DATABASE_HOST: mysql
       # Batch upload / task sync endpoint. Point this to qwen-asr-serve when enabled.
       ASR_SERVICES_ASR: http://qwen-asr:8000
-      ASR_SERVICES_SPEAKER_ANALYSIS_URL: http://speaker-analysis:8100
+      ASR_SERVICES_SPEAKER_SERVICE_URL: http://speaker-analysis:8100
     ports:
       - '10011:10011'
 
@@ -75,7 +75,6 @@ services:
       - mysql
     environment:
       ASR_DATABASE_HOST: mysql
-      ASR_SERVICES_DIARIZATION_URL: http://pyannote:8001
     ports:
       - '10013:10013'
 

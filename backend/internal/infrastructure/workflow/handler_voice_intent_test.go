@@ -5,8 +5,24 @@ import (
 	"encoding/json"
 	"testing"
 
+	openplatformdomain "github.com/lgt/asr/internal/domain/openplatform"
 	voicecommand "github.com/lgt/asr/internal/domain/voicecommand"
 )
+
+type openSkillInvokerStub struct {
+	result *openplatformdomain.SkillInvokeResult
+	err    error
+	called bool
+	userID uint64
+	taskID uint64
+}
+
+func (s *openSkillInvokerStub) MatchAndInvokeSkill(_ context.Context, ownerUserID uint64, _ string, taskID, _ uint64) (*openplatformdomain.SkillInvokeResult, error) {
+	s.called = true
+	s.userID = ownerUserID
+	s.taskID = taskID
+	return s.result, s.err
+}
 
 type voiceIntentDictRepoStub struct {
 	items []*voicecommand.Dict
@@ -105,5 +121,51 @@ func TestVoiceIntentExecuteMatchesCatalogWhenLLMDisabled(t *testing.T) {
 	}
 	if payload["command_id"] != float64(2) {
 		t.Fatalf("expected command id 2, got %+v", payload["command_id"])
+	}
+}
+
+func TestVoiceIntentExecuteFallsBackToOpenSkill(t *testing.T) {
+	invoker := &openSkillInvokerStub{result: &openplatformdomain.SkillInvokeResult{
+		SkillID:        "skl_voice_assistant",
+		SkillName:      "book_meeting_room",
+		MatchedPattern: "预订会议室",
+		Status:         openplatformdomain.InvocationStatusSuccess,
+		ResponseJSON:   `{"accepted":true}`,
+	}}
+	handler := NewVoiceIntentHandler(nil, nil)
+	handler.SetOpenSkillInvoker(invoker)
+
+	output, detail, err := handler.Execute(context.Background(), json.RawMessage(`{"enable_llm":false,"include_base":false,"dict_ids":[]}`), "请帮我预订会议室", &ExecutionMeta{
+		UserID: openplatformdomain.OwnerUserIDForApp(9),
+		TaskID: 42,
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !invoker.called {
+		t.Fatal("expected open skill invoker to be called")
+	}
+	if invoker.userID != openplatformdomain.OwnerUserIDForApp(9) || invoker.taskID != 42 {
+		t.Fatalf("unexpected invocation context: user=%d task=%d", invoker.userID, invoker.taskID)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if result["matched"] != true || result["group_key"] != "open_skill" {
+		t.Fatalf("expected open_skill match, got %+v", result)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(detail, &payload); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if payload["match_mode"] != "open_skill" {
+		t.Fatalf("expected open_skill match mode, got %+v", payload["match_mode"])
+	}
+	callbackResponse, ok := payload["callback_response"].(map[string]any)
+	if !ok || callbackResponse["accepted"] != true {
+		t.Fatalf("expected callback response payload, got %+v", payload["callback_response"])
 	}
 }

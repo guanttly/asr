@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { useDesktopHotkeys } from './composables/useDesktopHotkeys'
 import RecorderWindow from './components/RecorderWindow.vue'
 import SettingsWindow from './components/SettingsWindow.vue'
 import { useAppStore } from './stores/app'
 import { ensureProductFeatures } from './utils/auth'
 import { appendRuntimeLog, debugLog } from './utils/debug'
+import { serializeHotkeyBindings } from './utils/hotkeys'
 
 const appStore = useAppStore()
-const shortcut = 'CmdOrCtrl+Shift+Space'
+const desktopHotkeys = useDesktopHotkeys()
 
 // getCurrentWindow() 在 settings 窗口可能因 IPC 初始化时序而失败，
 // 必须用 try-catch 兜底，否则整个 Vue 无法挂载导致白屏。
@@ -24,7 +26,7 @@ try {
 if (!isSettingsWindow) {
   isSettingsWindow = (window as any).__ASR_WINDOW__ === 'settings'
 }
-let unregisterShortcut: null | (() => Promise<void>) = null
+let stopHotkeyWatcher: null | (() => void) = null
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyD') {
@@ -42,24 +44,22 @@ onMounted(() => {
   if (isSettingsWindow)
     return
 
-  import('@tauri-apps/plugin-global-shortcut').then(async ({ register, unregister }) => {
-    await unregister(shortcut).catch(() => undefined)
-    await register(shortcut, () => {
-      appStore.isRecording = !appStore.isRecording
-      void debugLog('shortcut', 'toggled recording from global shortcut', { recording: appStore.isRecording })
-    })
-    unregisterShortcut = () => unregister(shortcut)
-    void debugLog('shortcut', 'registered global shortcut', { shortcut })
+  void desktopHotkeys.listenToHotkeyActions().catch((error) => {
+    console.warn(error)
+    void appendRuntimeLog('frontend.shortcut', error instanceof Error ? error.stack || error.message : String(error))
   })
-    .catch((error) => {
+
+  stopHotkeyWatcher = watch(() => serializeHotkeyBindings(appStore.hotkeys), () => {
+    void desktopHotkeys.syncHotkeys('main-window').catch((error) => {
       console.warn(error)
       void appendRuntimeLog('frontend.shortcut', error instanceof Error ? error.stack || error.message : String(error))
     })
+  }, { immediate: true })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
-  void unregisterShortcut?.().catch(() => undefined)
+  stopHotkeyWatcher?.()
 })
 </script>
 

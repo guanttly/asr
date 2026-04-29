@@ -412,7 +412,7 @@ func TestCommitStreamSegmentReturnsCommittedDelta(t *testing.T) {
 		t.Fatalf("StartStreamSession returned error: %v", err)
 	}
 
-	if _, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: []byte{1, 2, 3}}); err != nil {
+	if _, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: []byte{1, 2, 3, 4}}); err != nil {
 		t.Fatalf("PushStreamChunk returned error: %v", err)
 	}
 
@@ -459,6 +459,52 @@ func TestFinishStreamSessionUsesStreamingEngine(t *testing.T) {
 	}
 	if engine.finishSession != "upstream-stream-1" {
 		t.Fatalf("expected finished session stream-1, got %s", engine.finishSession)
+	}
+}
+
+func TestGetStreamSessionStateTracksTranscriptAndCommit(t *testing.T) {
+	engine := &streamingBatchEngineServiceStub{
+		startSessionID: "upstream-stream-1",
+		chunkResult:    &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "你好", Language: "zh"},
+		finishResult:   &StreamChunkResponse{SessionID: "upstream-stream-1", Text: "你好世界", Language: "zh"},
+	}
+	service := NewService(nil, engine, nil, 5, nil)
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+
+	if _, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: []byte{1, 2, 3, 4}}); err != nil {
+		t.Fatalf("PushStreamChunk returned error: %v", err)
+	}
+	state, err := service.GetStreamSessionState(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("GetStreamSessionState returned error after push: %v", err)
+	}
+	if state.Text != "你好" || state.CommittedText != "" || state.IsFinal {
+		t.Fatalf("unexpected state after push: %+v", state)
+	}
+
+	if _, err := service.CommitStreamSegment(context.Background(), started.SessionID); err != nil {
+		t.Fatalf("CommitStreamSegment returned error: %v", err)
+	}
+	state, err = service.GetStreamSessionState(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("GetStreamSessionState returned error after commit: %v", err)
+	}
+	if state.CommittedText != "你好" || state.IsFinal {
+		t.Fatalf("unexpected state after commit: %+v", state)
+	}
+
+	if _, err := service.FinishStreamSession(context.Background(), started.SessionID); err != nil {
+		t.Fatalf("FinishStreamSession returned error: %v", err)
+	}
+	state, err = service.GetStreamSessionState(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("GetStreamSessionState returned error after finish: %v", err)
+	}
+	if state.Text != "你好世界" || state.CommittedText != "你好世界" || !state.IsFinal {
+		t.Fatalf("unexpected final state: %+v", state)
 	}
 }
 

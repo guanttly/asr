@@ -1,4 +1,5 @@
 mod injector;
+mod hotkeys;
 mod tray;
 
 pub use injector::{inject_text, read_clipboard};
@@ -365,6 +366,20 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn toggle_main_window_internal(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let visible = window.is_visible().map_err(|err| err.to_string())?;
+    if visible {
+        persist_main_window_position_from_window(&window);
+        window.hide().map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+    show_main_window(app)
+}
+
 pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         log_runtime("[window] focusing existing settings window");
@@ -408,11 +423,31 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     Ok(())
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn toggle_settings_window_internal(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let visible = window.is_visible().map_err(|err| err.to_string())?;
+        if visible {
+            window.hide().map_err(|err| err.to_string())?;
+            return Ok(());
+        }
+    }
+    open_settings_window_internal(app)
+}
+
 #[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     // 必须是 async——同步命令在主线程执行，而 builder.build() 创建的新窗口
     // 会立刻通过 IPC 请求主线程（如 getCurrentWindow()），导致死锁白屏。
     open_settings_window_internal(&app)
+}
+
+#[tauri::command]
+async fn configure_hotkeys(
+    app: tauri::AppHandle,
+    bindings: Vec<hotkeys::HotkeyBindingPayload>,
+) -> Result<hotkeys::HotkeyConfigureResult, String> {
+    hotkeys::configure_hotkeys(&app, bindings)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -450,6 +485,7 @@ pub fn run() {
             read_clipboard,
             get_machine_identity,
             open_settings_window,
+            configure_hotkeys,
             open_devtools,
             append_runtime_log,
             read_runtime_log_tail,
@@ -463,6 +499,10 @@ pub fn run() {
                 }
             } else {
                 log_runtime("tray setup skipped on this platform");
+            }
+
+            if let Err(err) = hotkeys::start_hotkey_service(&app.handle()) {
+                log_runtime(&format!("hotkey service setup failed: {err}"));
             }
 
             // Hide on close only when tray support is enabled; otherwise allow normal exit.

@@ -81,6 +81,15 @@ const menuIconShapes: Record<string, IconShape[]> = {
     { tag: 'path', attrs: { d: 'M12 3.5 18.5 6v5c0 4.2-2.68 7.27-6.5 9-3.82-1.73-6.5-4.8-6.5-9V6l6.5-2.5Z' } },
     { tag: 'path', attrs: { d: 'm9.5 12 1.7 1.7 3.3-3.7' } },
   ],
+  openapi: [
+    { tag: 'rect', attrs: { x: 4, y: 5.5, width: 7, height: 13, rx: 2 } },
+    { tag: 'path', attrs: { d: 'M7 9h2' } },
+    { tag: 'path', attrs: { d: 'M7 12h2' } },
+    { tag: 'path', attrs: { d: 'M7 15h2' } },
+    { tag: 'circle', attrs: { cx: 17.5, cy: 9, r: 2.2 } },
+    { tag: 'circle', attrs: { cx: 17.5, cy: 15, r: 2.2 } },
+    { tag: 'path', attrs: { d: 'M11 12h4.3' } },
+  ],
   downloads: [
     { tag: 'path', attrs: { d: 'M12 4.5v9.5' } },
     { tag: 'path', attrs: { d: 'm8.5 10.5 3.5 3.5 3.5-3.5' } },
@@ -222,6 +231,7 @@ const menuOptions = computed<MenuOption[]>(() => {
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
         { label: '角色管理', key: '/system/roles', icon: renderMenuIcon('roles', '角色管理') },
+        { label: 'OpenAPI 管理', key: '/system/openapi', icon: renderMenuIcon('openapi', 'OpenAPI 管理') },
       ],
     },
   ]
@@ -261,6 +271,8 @@ const currentPath = computed(() => {
     return '/terminology/sensitive'
   if (path.startsWith('/terminology/rules'))
     return '/terminology/rules'
+  if (path.startsWith('/system/openapi'))
+    return '/system/openapi'
   if (path.startsWith('/system/users'))
     return '/system/users'
   if (path.startsWith('/system/roles'))

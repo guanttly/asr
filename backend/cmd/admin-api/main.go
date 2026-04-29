@@ -10,6 +10,7 @@ import (
 	appappsettings "github.com/lgt/asr/internal/application/appsettings"
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appfiller "github.com/lgt/asr/internal/application/filler"
+	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
 	appsensitive "github.com/lgt/asr/internal/application/sensitive"
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	appuser "github.com/lgt/asr/internal/application/user"
@@ -189,11 +190,20 @@ func main() {
 		log.Fatal(err)
 	}
 	logger.Info("workflow seed templates ensured")
+	openPlatformService := appopenplatform.NewService(
+		persistence.NewOpenAppRepo(db),
+		persistence.NewOpenSkillRepo(db),
+		persistence.NewOpenCallLogRepo(db),
+		workflowService,
+		cfg.OpenAuth.PlatformSecret,
+		cfg.OpenAuth.TokenExpiresIn,
+	)
 
 	router := api.NewRouter(logger)
 	productFeatures := cfg.Product.Features()
 	userHandler := api.NewUserHandler(userService, cfg.JWT.Secret, cfg.JWT.ExpiresIn, productFeatures)
 	userHandler.RegisterPublic(router.Group("/api/admin/auth"))
+	api.NewOpenPlatformHandler(openPlatformService).RegisterOpenAuth(router.Group("/openapi/v1/auth"))
 	downloadHandler := api.NewDownloadHandler(cfg.Download.Dir, cfg.Download.PublicBasePath)
 	downloadHandler.RegisterPublic(router.Group("/api/admin/public"))
 
@@ -208,6 +218,7 @@ func main() {
 	api.NewWorkflowHandler(workflowService, asrService, productFeatures).Register(protected)
 	appSettingsService := appappsettings.NewService(persistence.NewAppSettingRepo(db))
 	api.NewAppSettingsHandler(appSettingsService, productFeatures).Register(protected)
+	api.NewOpenPlatformHandler(openPlatformService).RegisterAdmin(protected)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.AdminAPIPort)
 	logger.Info("admin-api listening", zap.String("addr", addr))

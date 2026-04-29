@@ -170,7 +170,8 @@ func (h *MeetingHandler) Detail(c *gin.Context) {
 		return
 	}
 
-	result, err := h.service.GetMeeting(c.Request.Context(), id)
+	userID := middleware.UserIDFromContext(c)
+	result, err := h.service.GetMeetingForUser(c.Request.Context(), id, userID)
 	if err != nil {
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
 		return

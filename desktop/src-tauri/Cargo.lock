@@ -109,6 +109,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-store",
  "webview2-com",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

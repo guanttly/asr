@@ -13,12 +13,14 @@ type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Database  DatabaseConfig  `mapstructure:"database"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
+	OpenAuth  OpenAuthConfig  `mapstructure:"open_auth"`
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
 	Product   ProductConfig   `mapstructure:"product"`
 	Services  ServiceConfig   `mapstructure:"services"`
 	Upload    UploadConfig    `mapstructure:"upload"`
 	Download  DownloadConfig  `mapstructure:"download"`
 	Gateway   GatewayConfig   `mapstructure:"gateway"`
+	Legacy    LegacyConfig    `mapstructure:"legacy"`
 }
 
 // ServerConfig describes HTTP server settings.
@@ -54,6 +56,13 @@ func (c DatabaseConfig) DSN() string {
 type JWTConfig struct {
 	Secret    string `mapstructure:"secret"`
 	ExpiresIn int64  `mapstructure:"expires_in"`
+}
+
+type OpenAuthConfig struct {
+	PlatformSecret   string `mapstructure:"platform_secret"`
+	TokenExpiresIn   int64  `mapstructure:"token_expires_in"`
+	LogRetentionDays int    `mapstructure:"log_retention_days"`
+	BodyLogDir       string `mapstructure:"body_log_dir"`
 }
 
 // BootstrapConfig holds bootstrap account settings.
@@ -143,6 +152,13 @@ type GatewayConfig struct {
 	NLPAPI   string `mapstructure:"nlp_api"`
 }
 
+type LegacyConfig struct {
+	Enabled                     bool   `mapstructure:"enabled"`
+	AccessLogPath               string `mapstructure:"access_log_path"`
+	DefaultWorkflowIDForASR     uint64 `mapstructure:"default_workflow_id_for_asr"`
+	DefaultWorkflowIDForMeeting uint64 `mapstructure:"default_workflow_id_for_meeting"`
+}
+
 // Load reads configuration from a YAML file and matching environment variables.
 func Load(path string) (*Config, error) {
 	v := viper.New()
@@ -165,6 +181,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("database.dbname", "asr")
 	v.SetDefault("jwt.secret", "dev-secret")
 	v.SetDefault("jwt.expires_in", 86400)
+	v.SetDefault("open_auth.platform_secret", "open-platform-dev-secret")
+	v.SetDefault("open_auth.token_expires_in", 7200)
+	v.SetDefault("open_auth.log_retention_days", 30)
+	v.SetDefault("open_auth.body_log_dir", "runtime/openapi-logs")
 	v.SetDefault("bootstrap.admin_username", "admin")
 	v.SetDefault("bootstrap.admin_password", "123456")
 	v.SetDefault("bootstrap.admin_display_name", "系统管理员")
@@ -187,6 +207,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("gateway.asr_api", "http://127.0.0.1:10011")
 	v.SetDefault("gateway.admin_api", "http://127.0.0.1:10012")
 	v.SetDefault("gateway.nlp_api", "http://127.0.0.1:10013")
+	v.SetDefault("legacy.enabled", true)
+	v.SetDefault("legacy.access_log_path", "runtime/legacy-access.log")
+	v.SetDefault("legacy.default_workflow_id_for_asr", 0)
+	v.SetDefault("legacy.default_workflow_id_for_meeting", 0)
 
 	_ = v.ReadInConfig()
 

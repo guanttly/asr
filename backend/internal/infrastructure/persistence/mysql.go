@@ -80,6 +80,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&WorkflowExecutionModel{},
 		&WorkflowNodeResultModel{},
 		&AppSettingModel{},
+		&OpenAppModel{},
+		&OpenAppCapabilityModel{},
+		&OpenSkillModel{},
+		&OpenCallLogModel{},
+		&SkillInvocationModel{},
 	)
 }
 

@@ -2,6 +2,7 @@ import { reactive, ref, watch } from 'vue'
 import type { RecognitionSettings } from '@/composables/useSettings'
 import { defineStore } from 'pinia'
 import { PRODUCT_API_CAPABILITY_KEYS, PRODUCT_CAPABILITY_KEYS, PRODUCT_EDITIONS, SCENE_MODES, type ProductCapabilityKey, type ProductEdition, type SceneMode as ProductSceneMode } from '@/constants/product'
+import { cloneHotkeyBindings, normalizeHotkeyBindings, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyBindings } from '@/utils/hotkeys'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 export const SETTINGS_STORAGE_KEY = 'asr-desktop-settings'
@@ -48,6 +49,7 @@ interface PersistedState {
   debugLoggingEnabled: boolean
   recognitionSettings: RecognitionSettings
   sceneMode: SceneMode
+  hotkeys: HotkeyBindings
 }
 
 const DEFAULT_RECOGNITION: RecognitionSettings = {
@@ -74,6 +76,7 @@ function defaultPersistedState(): PersistedState {
     debugLoggingEnabled: false,
     recognitionSettings: { ...DEFAULT_RECOGNITION },
     sceneMode: SCENE_MODES.REPORT,
+    hotkeys: cloneHotkeyBindings(),
   }
 }
 
@@ -93,6 +96,7 @@ function normalizePersistedState(parsed?: Partial<PersistedState> | null): Persi
     debugLoggingEnabled: parsed?.debugLoggingEnabled === true,
     recognitionSettings: { ...DEFAULT_RECOGNITION, ...parsed?.recognitionSettings },
     sceneMode: parsed?.sceneMode === SCENE_MODES.MEETING ? SCENE_MODES.MEETING : SCENE_MODES.REPORT,
+    hotkeys: normalizeHotkeyBindings(parsed?.hotkeys),
   }
 }
 
@@ -132,6 +136,7 @@ export const useAppStore = defineStore('app', () => {
   const debugLoggingEnabled = ref(persisted.debugLoggingEnabled)
   const recognitionSettings = reactive<RecognitionSettings>({ ...persisted.recognitionSettings })
   const sceneMode = ref<SceneMode>(persisted.sceneMode)
+  const hotkeys = reactive<HotkeyBindings>(cloneHotkeyBindings(persisted.hotkeys))
   const voiceControl = reactive<VoiceControlConfig>({
     commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     enabled: true,
@@ -151,6 +156,8 @@ export const useAppStore = defineStore('app', () => {
   const history = ref<string[]>([])
   const isRecording = ref(false)
   const expanded = ref(false)
+  const pendingVoiceCommandActivation = ref(false)
+  const voiceCommandAutoStartedRecording = ref(false)
 
   let suppressPersist = false
   let lastSerializedState = serializePersistedState(persisted)
@@ -173,6 +180,7 @@ export const useAppStore = defineStore('app', () => {
       debugLoggingEnabled: debugLoggingEnabled.value,
       recognitionSettings: { ...recognitionSettings },
       sceneMode: sceneMode.value,
+      hotkeys: cloneHotkeyBindings(hotkeys),
     }
   }
 
@@ -191,6 +199,7 @@ export const useAppStore = defineStore('app', () => {
     debugLoggingEnabled.value = next.debugLoggingEnabled
     Object.assign(recognitionSettings, next.recognitionSettings)
     sceneMode.value = next.sceneMode
+    replaceHotkeyBindings(hotkeys, next.hotkeys)
     suppressPersist = false
     lastSerializedState = serializePersistedState(next)
   }
@@ -336,6 +345,8 @@ export const useAppStore = defineStore('app', () => {
     sceneMode,
   ], () => persist())
 
+  watch(() => serializeHotkeyBindings(hotkeys), () => persist())
+
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (event) => {
       if (event.key === SETTINGS_STORAGE_KEY)
@@ -366,6 +377,7 @@ export const useAppStore = defineStore('app', () => {
     debugLoggingEnabled,
     recognitionSettings,
     sceneMode,
+    hotkeys,
     voiceControl,
     productEdition,
     productCapabilities,
@@ -377,6 +389,8 @@ export const useAppStore = defineStore('app', () => {
     history,
     isRecording,
     expanded,
+    pendingVoiceCommandActivation,
+    voiceCommandAutoStartedRecording,
     applyAuthenticatedUser,
     applyWorkflowBindings,
     invalidateWorkflowBindings,

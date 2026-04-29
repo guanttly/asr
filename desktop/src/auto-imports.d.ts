@@ -7,6 +7,7 @@
 export {}
 declare global {
   const DEFAULT_COMMAND_TIMEOUT_MS: typeof import('./stores/app')['DEFAULT_COMMAND_TIMEOUT_MS']
+  const DESKTOP_HOTKEY_ACTION_EVENT: typeof import('./composables/useDesktopHotkeys')['DESKTOP_HOTKEY_ACTION_EVENT']
   const EffectScope: typeof import('vue')['EffectScope']
   const SETTINGS_STORAGE_KEY: typeof import('./stores/app')['SETTINGS_STORAGE_KEY']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
@@ -71,6 +72,8 @@ declare global {
   const useConfirm: typeof import('./composables/useConfirm')['useConfirm']
   const useCssModule: typeof import('vue')['useCssModule']
   const useCssVars: typeof import('vue')['useCssVars']
+  const useDesktopHotkeys: typeof import('./composables/useDesktopHotkeys')['useDesktopHotkeys']
+  const useHotkeyActions: typeof import('./composables/useHotkeyActions')['useHotkeyActions']
   const useId: typeof import('vue')['useId']
   const useInjector: typeof import('./composables/useInjector')['useInjector']
   const useModel: typeof import('vue')['useModel']
@@ -92,6 +95,9 @@ declare global {
   // @ts-ignore
   export type { ConfirmTone, ConfirmOptions } from './composables/useConfirm'
   import('./composables/useConfirm')
+  // @ts-ignore
+  export type { DesktopHotkeySyncResult } from './composables/useDesktopHotkeys'
+  import('./composables/useDesktopHotkeys')
   // @ts-ignore
   export type { RecognitionSettings } from './composables/useSettings'
   import('./composables/useSettings')

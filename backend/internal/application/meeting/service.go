@@ -176,9 +176,21 @@ func titleFromAudioURL(rawURL string) string {
 
 // GetMeeting retrieves meeting detail with transcripts and summary.
 func (s *Service) GetMeeting(ctx context.Context, id uint64) (*MeetingDetailResponse, error) {
+	return s.getMeeting(ctx, id, nil)
+}
+
+// GetMeetingForUser retrieves one meeting for the specified owner.
+func (s *Service) GetMeetingForUser(ctx context.Context, id, userID uint64) (*MeetingDetailResponse, error) {
+	return s.getMeeting(ctx, id, &userID)
+}
+
+func (s *Service) getMeeting(ctx context.Context, id uint64, userID *uint64) (*MeetingDetailResponse, error) {
 	m, err := s.meetingRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if userID != nil && m.UserID != *userID {
+		return nil, ErrMeetingNotFound
 	}
 
 	transcripts, err := s.transcriptRepo.ListByMeeting(ctx, id)

@@ -155,6 +155,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '角色管理', desc: '管理员、转写员、审校员等角色矩阵将在这里配置。' },
         component: () => import('@/pages/system/roles.vue'),
       },
+      {
+        path: 'system/openapi',
+        name: 'system-openapi',
+        meta: { pageManagedScroll: true, title: 'OpenAPI 管理', desc: '管理开放平台应用凭证、能力授权、默认工作流与调用日志。' },
+        component: () => import('@/pages/system/openapi.vue'),
+      },
     ],
   },
 ]

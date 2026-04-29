@@ -9,9 +9,14 @@ import (
 	"net/http"
 	"strings"
 
+	openplatformdomain "github.com/lgt/asr/internal/domain/openplatform"
 	voicecommand "github.com/lgt/asr/internal/domain/voicecommand"
 	voiceintent "github.com/lgt/asr/internal/infrastructure/workflow/voiceintent"
 )
+
+type OpenSkillInvoker interface {
+	MatchAndInvokeSkill(ctx context.Context, ownerUserID uint64, utterance string, taskID, meetingID uint64) (*openplatformdomain.SkillInvokeResult, error)
+}
 
 type VoiceIntentConfig struct {
 	EnableLLM      bool     `json:"enable_llm"`
@@ -27,13 +32,18 @@ type VoiceIntentConfig struct {
 }
 
 type VoiceIntentHandler struct {
-	httpClient *http.Client
-	dictRepo   voicecommand.DictRepository
-	entryRepo  voicecommand.EntryRepository
+	httpClient       *http.Client
+	dictRepo         voicecommand.DictRepository
+	entryRepo        voicecommand.EntryRepository
+	openSkillInvoker OpenSkillInvoker
 }
 
 func NewVoiceIntentHandler(dictRepo voicecommand.DictRepository, entryRepo voicecommand.EntryRepository) *VoiceIntentHandler {
 	return &VoiceIntentHandler{httpClient: &http.Client{}, dictRepo: dictRepo, entryRepo: entryRepo}
+}
+
+func (h *VoiceIntentHandler) SetOpenSkillInvoker(invoker OpenSkillInvoker) {
+	h.openSkillInvoker = invoker
 }
 
 func (h *VoiceIntentHandler) Validate(config json.RawMessage) error {
@@ -56,7 +66,7 @@ func (h *VoiceIntentHandler) Validate(config json.RawMessage) error {
 	return nil
 }
 
-func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta) (string, json.RawMessage, error) {
+func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, meta *ExecutionMeta) (string, json.RawMessage, error) {
 	var cfg VoiceIntentConfig
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return inputText, nil, err
@@ -98,8 +108,12 @@ func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage
 	if err != nil {
 		return inputText, nil, err
 	}
-	if !cfg.EnableLLM {
+	if !cfg.EnableLLM || len(catalog.Commands) == 0 {
 		result, detail := buildCatalogMatchResult(inputText, dicts, entries, catalog)
+		result, detail, err = h.applyOpenSkillFallback(ctx, inputText, meta, result, detail)
+		if err != nil {
+			return inputText, nil, err
+		}
 		if wakeResult != nil {
 			result.WakeMatched = wakeResult.WakeMatched
 			result.WakeWord = wakeResult.WakeWord
@@ -152,6 +166,10 @@ func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage
 	if err != nil {
 		return inputText, nil, err
 	}
+	result, detail, err = h.applyOpenSkillFallback(ctx, inputText, meta, result, detail)
+	if err != nil {
+		return inputText, nil, err
+	}
 	if wakeResult != nil {
 		result.WakeMatched = wakeResult.WakeMatched
 		result.WakeWord = wakeResult.WakeWord
@@ -178,6 +196,9 @@ func (h *VoiceIntentHandler) Execute(ctx context.Context, config json.RawMessage
 
 func (h *VoiceIntentHandler) resolveCatalog(ctx context.Context, cfg VoiceIntentConfig) ([]*voicecommand.Dict, []voicecommand.Entry, voiceintent.Catalog, error) {
 	if h.dictRepo == nil || h.entryRepo == nil {
+		if h.openSkillInvoker != nil {
+			return nil, nil, voiceintent.Catalog{}, nil
+		}
 		return nil, nil, voiceintent.Catalog{}, fmt.Errorf("voice command repositories are not configured")
 	}
 	dicts, _, err := h.dictRepo.List(ctx, 0, 1000)
@@ -212,9 +233,84 @@ func (h *VoiceIntentHandler) resolveCatalog(ctx context.Context, cfg VoiceIntent
 	}
 	catalog, err := voiceintent.BuildCatalog(selectedDicts, entries, cfg.DictIDs, cfg.IncludeBase)
 	if err != nil {
+		if h.openSkillInvoker != nil {
+			return selectedDicts, entries, voiceintent.Catalog{}, nil
+		}
 		return nil, nil, voiceintent.Catalog{}, err
 	}
 	return selectedDicts, entries, catalog, nil
+}
+
+func (h *VoiceIntentHandler) applyOpenSkillFallback(ctx context.Context, inputText string, meta *ExecutionMeta, result voiceintent.Result, detail json.RawMessage) (voiceintent.Result, json.RawMessage, error) {
+	if result.Matched || h.openSkillInvoker == nil || meta == nil || strings.TrimSpace(inputText) == "" {
+		return result, detail, nil
+	}
+	invocation, err := h.openSkillInvoker.MatchAndInvokeSkill(ctx, meta.UserID, inputText, meta.TaskID, meta.MeetingID)
+	if err != nil {
+		return result, nil, err
+	}
+	if invocation == nil {
+		return result, detail, nil
+	}
+	result = voiceintent.Result{
+		Matched:    true,
+		Intent:     invocation.SkillName,
+		GroupKey:   "open_skill",
+		Confidence: 1,
+		Reason:     openSkillInvokeReason(invocation),
+		RawOutput:  invocation.MatchedPattern,
+	}
+	return result, openSkillInvokeDetail(invocation), nil
+}
+
+func openSkillInvokeDetail(result *openplatformdomain.SkillInvokeResult) json.RawMessage {
+	if result == nil {
+		return nil
+	}
+	payload := map[string]any{
+		"match_mode":        "open_skill",
+		"matched":           true,
+		"group_key":         "open_skill",
+		"intent":            result.SkillName,
+		"skill_id":          result.SkillID,
+		"skill_name":        result.SkillName,
+		"matched_pattern":   result.MatchedPattern,
+		"invocation_status": result.Status,
+		"error_message":     result.ErrorMessage,
+	}
+	if result.HTTPStatus != nil {
+		payload["http_status"] = *result.HTTPStatus
+	}
+	if strings.TrimSpace(result.ResponseJSON) != "" {
+		var response any
+		if err := json.Unmarshal([]byte(result.ResponseJSON), &response); err == nil {
+			payload["callback_response"] = response
+		} else {
+			payload["callback_response_raw"] = result.ResponseJSON
+		}
+	}
+	detail, _ := json.Marshal(payload)
+	return detail
+}
+
+func openSkillInvokeReason(result *openplatformdomain.SkillInvokeResult) string {
+	if result == nil {
+		return "未命中开放技能"
+	}
+	name := strings.TrimSpace(result.SkillName)
+	if name == "" {
+		name = strings.TrimSpace(result.SkillID)
+	}
+	switch result.Status {
+	case openplatformdomain.InvocationStatusSuccess:
+		return fmt.Sprintf("已触发开放技能：%s", name)
+	case openplatformdomain.InvocationStatusTimeout:
+		return fmt.Sprintf("已命中开放技能但回调超时：%s", name)
+	case openplatformdomain.InvocationStatusSignedRejected:
+		return fmt.Sprintf("已命中开放技能但签名被拒绝：%s", name)
+	default:
+		return fmt.Sprintf("已命中开放技能但回调失败：%s", name)
+	}
 }
 
 func (h *VoiceIntentHandler) executeChatRequest(ctx context.Context, endpoint string, cfg VoiceIntentConfig, prompt string, temperature float64, maxTokens int) ([]byte, int, error) {

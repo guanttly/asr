@@ -184,6 +184,27 @@ func (s *Service) consumeManagedStreamAudio(sessionID string) (string, float64, 
 	return path, duration, nil
 }
 
+func (s *Service) GetStreamSessionState(_ context.Context, sessionID string) (*StreamSessionState, error) {
+	now := time.Now()
+	session, err := s.loadManagedStreamSession(sessionID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	return &StreamSessionState{
+		SessionID:     strings.TrimSpace(sessionID),
+		Language:      session.language,
+		Text:          strings.TrimSpace(session.transcriptText),
+		CommittedText: strings.TrimSpace(session.committedText),
+		Duration:      session.durationSeconds,
+		IsFinal:       session.finalized,
+		ExpiresAt:     session.expiresAt,
+	}, nil
+}
+
 func (s *Service) applyStreamChunkResult(sessionID string, session *managedStreamSession, result *StreamChunkResponse, now time.Time, isFinal bool) *StreamChunkResponse {
 	current := strings.TrimSpace(session.transcriptText)
 	incoming := sanitizeTranscriptionText(result.Text)

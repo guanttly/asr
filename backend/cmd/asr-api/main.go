@@ -11,6 +11,8 @@ import (
 
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
+	appnlp "github.com/lgt/asr/internal/application/nlp"
+	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
 	appvoicecommand "github.com/lgt/asr/internal/application/voicecommand"
 	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
 	appwf "github.com/lgt/asr/internal/application/workflow"
@@ -368,6 +370,7 @@ func main() {
 	if err := voiceCommandService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+	voiceIntentHandler := wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo)
 
 	// Build workflow engine
 	engine := wfengine.NewEngine(logger)
@@ -376,7 +379,7 @@ func main() {
 	engine.RegisterHandler(wfdomain.NodeSensitiveFilter, wfengine.NewSensitiveFilterHandler(sensitiveDictRepo, sensitiveEntryRepo))
 	engine.RegisterHandler(wfdomain.NodeLLMCorrection, wfengine.NewLLMCorrectionHandler())
 	engine.RegisterHandler(wfdomain.NodeVoiceWake, wfengine.NewVoiceWakeHandler())
-	engine.RegisterHandler(wfdomain.NodeVoiceIntent, wfengine.NewVoiceIntentHandler(voiceCommandDictRepo, voiceCommandEntryRepo))
+	engine.RegisterHandler(wfdomain.NodeVoiceIntent, voiceIntentHandler)
 	engine.RegisterHandler(wfdomain.NodeMeetingSummary, wfengine.NewMeetingSummaryHandler(summarizer))
 	engine.RegisterHandler(wfdomain.NodeCustomRegex, wfengine.NewCustomRegexHandler())
 	speakerServiceURL := strings.TrimSpace(cfg.Services.SpeakerServiceURL)
@@ -389,6 +392,18 @@ func main() {
 	workflowService := appwf.NewService(workflowRepo, workflowNodeRepo, persistence.NewWorkflowNodeDefaultRepo(db), workflowExecRepo, workflowResultRepo, engine)
 	workflowExecutor := &workflowExecutorAdapter{svc: workflowService}
 	postProcessor := postprocess.NewWorkflowAwareProcessor(legacyPostProcessor, workflowExecutor, meetingRepo, transcriptRepo, summaryRepo)
+	nlpService := appnlp.NewService(corrector, summarizer)
+	openPlatformService := appopenplatform.NewService(
+		persistence.NewOpenAppRepo(db),
+		persistence.NewOpenSkillRepo(db),
+		persistence.NewOpenCallLogRepo(db),
+		workflowService,
+		cfg.OpenAuth.PlatformSecret,
+		cfg.OpenAuth.TokenExpiresIn,
+	)
+	openPlatformService.SetSkillInvocationRepo(persistence.NewSkillInvocationRepo(db))
+	voiceIntentHandler.SetOpenSkillInvoker(openPlatformService)
+	openCallLogRepo := persistence.NewOpenCallLogRepo(db)
 
 	asrService := appasr.NewService(taskRepo, &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, businessHub)
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
@@ -403,6 +418,17 @@ func main() {
 
 	router := api.NewRouter(logger)
 	router.Static("/uploads", cfg.Upload.Dir)
+	openASR := router.Group("/openapi/v1/asr", middleware.OpenAPIAudit(openCallLogRepo, "asr.recognize"), middleware.OpenAuthRequired(openPlatformService, "asr.recognize"))
+	api.NewOpenAPIASRHandler(asrService, workflowService, openPlatformService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(openASR)
+	openMeetings := router.Group("/openapi/v1/meetings", middleware.OpenAPIAudit(openCallLogRepo, "meeting.summary"), middleware.OpenAuthRequired(openPlatformService, "meeting.summary"))
+	api.NewOpenAPIMeetingHandler(meetingService, nlpService, workflowService, openPlatformService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, cfg.Product.Features()).Register(openMeetings)
+	openSkills := router.Group("/openapi/v1/skills", middleware.OpenAPIAudit(openCallLogRepo, "skill.register"), middleware.OpenAuthRequired(openPlatformService, "skill.register"))
+	api.NewOpenAPISkillHandler(openPlatformService).Register(openSkills)
+	if cfg.Legacy.Enabled {
+		legacyHandler := api.NewLegacyASRHandler(asrService, nlpService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB)
+		legacyHandler.Register(router.Group("/api"))
+		legacyHandler.Register(router.Group("/api/legacy"))
+	}
 	protected := router.Group("/api", middleware.AuthRequired(cfg.JWT.Secret))
 	productFeatures := cfg.Product.Features()
 	api.NewASRHandler(asrService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/asr"))

@@ -54,6 +54,17 @@ type StreamChunkResponse struct {
 	IsFinal   bool   `json:"is_final,omitempty"`
 }
 
+// StreamSessionState is a read-only snapshot of one managed streaming session.
+type StreamSessionState struct {
+	SessionID     string    `json:"session_id"`
+	Language      string    `json:"language,omitempty"`
+	Text          string    `json:"text,omitempty"`
+	CommittedText string    `json:"committed_text,omitempty"`
+	Duration      float64   `json:"duration,omitempty"`
+	IsFinal       bool      `json:"is_final,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+}
+
 // TaskResponse is the DTO returned to clients.
 type TaskResponse struct {
 	ID                uint64                   `json:"id"`

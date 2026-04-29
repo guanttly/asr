@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { useDesktopHotkeys } from '@/composables/useDesktopHotkeys'
 import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useSettings } from '@/composables/useSettings'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
@@ -8,25 +9,45 @@ import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
 import { appendRuntimeLog, debugLog, getRuntimeLogPath, readRuntimeLogTail } from '@/utils/debug'
+import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 const appStore = useAppStore()
 const { settings, reset } = useSettings()
 const recorder = useAudioRecorder()
 const voiceControl = useVoiceControl()
+const desktopHotkeys = useDesktopHotkeys()
 const machineIdentity = ref<MachineIdentity | null>(null)
 const runtimeLogPath = ref('')
 const runtimeLogTail = ref('')
+const hotkeyDefinitions = HOTKEY_ACTION_DEFINITIONS
 
 const authLoading = ref(false)
 const authMessage = ref('')
 const authMessageType = ref<'success' | 'error' | 'info'>('info')
+const hotkeyMessage = ref('')
+const hotkeyMessageType = ref<'success' | 'error' | 'info'>('info')
+const capturingHotkeyAction = ref<HotkeyActionId | null>(null)
+
+const modifierOnlyCodes = new Set([
+  'ControlLeft',
+  'ControlRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'AltLeft',
+  'AltRight',
+  'MetaLeft',
+  'MetaRight',
+])
 
 function setSceneMode(mode: SceneMode) {
 	if (mode === SCENE_MODES.MEETING && !appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
 		return
   if (appStore.sceneMode === mode) return
+  if (appStore.voiceCommandActive || appStore.pendingVoiceCommandActivation)
+    voiceControl.exitCommandMode('manual')
   appStore.sceneMode = mode
+  appStore.invalidateWorkflowBindings()
   void debugLog('settings.scene', 'scene mode changed', { mode })
 }
 
@@ -37,6 +58,131 @@ async function refreshVoiceControl() {
 function setAuthMessage(type: 'success' | 'error' | 'info', message: string) {
   authMessageType.value = type
   authMessage.value = message
+}
+
+function setHotkeyMessage(type: 'success' | 'error' | 'info', message: string) {
+  hotkeyMessageType.value = type
+  hotkeyMessage.value = message
+}
+
+function shouldShowHotkeyAction(actionId: HotkeyActionId) {
+  if (actionId === HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE)
+    return appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)
+  return true
+}
+
+function getHotkeyTitle(actionId: HotkeyActionId) {
+  return hotkeyDefinitions.find(item => item.id === actionId)?.title || actionId
+}
+
+function stopHotkeyCapture() {
+  capturingHotkeyAction.value = null
+}
+
+function beginHotkeyCapture(actionId: HotkeyActionId) {
+  capturingHotkeyAction.value = actionId
+  setHotkeyMessage('info', '请直接按下组合键，支持鼠标侧键；Esc 取消，Backspace/Delete 清空。')
+}
+
+function applyHotkeyBinding(actionId: HotkeyActionId, binding: Partial<HotkeyBinding> | null) {
+  const normalized = normalizeHotkeyBinding(binding)
+  const conflictAction = findConflictingHotkeyAction(appStore.hotkeys, normalized, actionId)
+  if (conflictAction) {
+    setHotkeyMessage('error', `热键已被“${getHotkeyTitle(conflictAction)}”占用，请换一个组合。`)
+    return false
+  }
+
+  appStore.hotkeys[actionId] = normalized
+  stopHotkeyCapture()
+  setHotkeyMessage('success', `${getHotkeyTitle(actionId)}已更新为 ${formatHotkeyBinding(normalized)}。`)
+  return true
+}
+
+function clearHotkey(actionId: HotkeyActionId) {
+  appStore.hotkeys[actionId] = normalizeHotkeyBinding(null)
+  if (capturingHotkeyAction.value === actionId)
+    stopHotkeyCapture()
+  setHotkeyMessage('info', `${getHotkeyTitle(actionId)}已清空。`)
+}
+
+function restoreDefaultHotkeys() {
+  replaceHotkeyBindings(appStore.hotkeys, cloneHotkeyBindings())
+  stopHotkeyCapture()
+  setHotkeyMessage('success', '已恢复默认热键配置。')
+}
+
+async function syncHotkeysNow(reason = 'settings') {
+  try {
+    const result = await desktopHotkeys.syncHotkeys(reason)
+    setHotkeyMessage(result.supported ? 'success' : 'info', result.message)
+  }
+  catch (error) {
+    setHotkeyMessage('error', error instanceof Error ? error.message : '热键同步失败')
+  }
+}
+
+function handleHotkeyCaptureKeydown(event: KeyboardEvent) {
+  const actionId = capturingHotkeyAction.value
+  if (!actionId)
+    return
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  if (event.code === 'Escape') {
+    stopHotkeyCapture()
+    setHotkeyMessage('info', '已取消热键录制。')
+    return
+  }
+
+  if (event.code === 'Backspace' || event.code === 'Delete') {
+    clearHotkey(actionId)
+    return
+  }
+
+  if (event.repeat || modifierOnlyCodes.has(event.code))
+    return
+
+  void applyHotkeyBinding(actionId, {
+    enabled: true,
+    modifiers: {
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      shift: event.shiftKey,
+      meta: event.metaKey,
+    },
+    trigger: {
+      type: 'keyboard',
+      code: event.code,
+    },
+  })
+}
+
+function handleHotkeyCaptureMousedown(event: MouseEvent) {
+  const actionId = capturingHotkeyAction.value
+  if (!actionId)
+    return
+
+  if (event.button !== 3 && event.button !== 4)
+    return
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  const button = event.button === 3 ? HOTKEY_MOUSE_BUTTONS.BACK : HOTKEY_MOUSE_BUTTONS.FORWARD
+  void applyHotkeyBinding(actionId, {
+    enabled: true,
+    modifiers: {
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      shift: event.shiftKey,
+      meta: event.metaKey,
+    },
+    trigger: {
+      type: 'mouse',
+      button,
+    },
+  })
 }
 
 async function syncIdentityAndLogin(forceLogin = false) {
@@ -142,10 +288,22 @@ watch(() => appStore.debugLoggingEnabled, async (enabled) => {
   }
 })
 
+watch(() => serializeHotkeyBindings(appStore.hotkeys), () => {
+  void syncHotkeysNow('settings-watch')
+}, { immediate: true })
+
 onMounted(() => {
   void syncIdentityAndLogin(false)
   void refreshRuntimeLogs()
   void voiceControl.ensureLoaded()
+  window.addEventListener('keydown', handleHotkeyCaptureKeydown, true)
+  window.addEventListener('mousedown', handleHotkeyCaptureMousedown, true)
+})
+
+onBeforeUnmount(() => {
+  stopHotkeyCapture()
+  window.removeEventListener('keydown', handleHotkeyCaptureKeydown, true)
+  window.removeEventListener('mousedown', handleHotkeyCaptureMousedown, true)
 })
 </script>
 
@@ -201,7 +359,7 @@ onMounted(() => {
 
     <section class="settings-section">
       <h4 class="section-title">录入行为</h4>
-      <p class="section-hint">推荐使用 Ctrl+Shift+Space 开始和停止录音，这样更容易保持外部应用的输入焦点，自动注入也更稳定。</p>
+      <p class="section-hint">默认推荐使用 Ctrl+Shift+Space 开始和停止录音，这样更容易保持外部应用的输入焦点，自动注入也更稳定；也可以在下方全局热键里改成更顺手的组合。</p>
       <div class="field row permission-row">
         <div>
           <label class="status-label">麦克风权限</label>
@@ -225,6 +383,58 @@ onMounted(() => {
           <span class="toggle-slider" />
         </label>
       </div>
+    </section>
+
+    <section class="settings-section">
+      <h4 class="section-title">全局热键</h4>
+      <p class="section-hint">Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。</p>
+      <div class="hotkey-list">
+        <article
+          v-for="definition in hotkeyDefinitions"
+          v-show="shouldShowHotkeyAction(definition.id)"
+          :key="definition.id"
+          class="hotkey-item"
+          :class="{ capturing: capturingHotkeyAction === definition.id }"
+        >
+          <div class="hotkey-head">
+            <div>
+              <div class="hotkey-title-row">
+                <strong class="hotkey-title">{{ definition.title }}</strong>
+                <span v-if="definition.optional" class="hotkey-badge">补充场景</span>
+              </div>
+              <p class="hotkey-description">{{ definition.description }}</p>
+            </div>
+          </div>
+          <div class="hotkey-actions">
+            <button
+              type="button"
+              class="hotkey-binding-btn"
+              :class="{
+                capturing: capturingHotkeyAction === definition.id,
+                empty: !appStore.hotkeys[definition.id].enabled || !appStore.hotkeys[definition.id].trigger,
+              }"
+              @click="beginHotkeyCapture(definition.id)"
+            >
+              {{ capturingHotkeyAction === definition.id ? '按下热键...' : formatHotkeyBinding(appStore.hotkeys[definition.id]) }}
+            </button>
+            <button
+              type="button"
+              class="action-btn compact"
+              :disabled="!appStore.hotkeys[definition.id].enabled"
+              @click="clearHotkey(definition.id)"
+            >
+              清空
+            </button>
+          </div>
+        </article>
+      </div>
+      <div class="field action-row hotkey-footer">
+        <button class="action-btn" @click="restoreDefaultHotkeys">恢复默认热键</button>
+        <button class="action-btn" @click="syncHotkeysNow('settings-button')">重新同步</button>
+      </div>
+      <p v-if="hotkeyMessage" class="auth-message" :class="hotkeyMessageType">
+        {{ hotkeyMessage }}
+      </p>
     </section>
 
     <section class="settings-section">
@@ -470,6 +680,103 @@ onMounted(() => {
 .field input[type="range"] {
   width: 100%;
   accent-color: #0f766e;
+}
+
+.hotkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.hotkey-item {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.9));
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.hotkey-item.capturing {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+.hotkey-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hotkey-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hotkey-title {
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.hotkey-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.hotkey-description {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.hotkey-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.hotkey-binding-btn {
+  flex: 1;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(15, 23, 42, 0.12);
+  background: rgba(15, 23, 42, 0.03);
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.hotkey-binding-btn:hover {
+  border-color: rgba(15, 118, 110, 0.26);
+  background: rgba(15, 118, 110, 0.05);
+}
+
+.hotkey-binding-btn.capturing {
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.hotkey-binding-btn.empty {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.hotkey-footer {
+  margin-top: 10px;
 }
 
 .action-row {

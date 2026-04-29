@@ -456,7 +456,7 @@ watch([retryHistoryFilter, retryResultFilter, selectedRetryHistoryKey], () => {
 
 function goToTask(taskId: number) {
   void router.push({
-    name: 'transcription-history',
+    name: 'transcription',
     query: { taskId: String(taskId) },
   })
 }

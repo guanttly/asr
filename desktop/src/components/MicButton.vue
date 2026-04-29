@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { SCENE_MODES } from '@/constants/product'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useTranscribe } from '@/composables/useTranscribe'
+import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore } from '@/stores/app'
 import { debugLog } from '@/utils/debug'
 
@@ -11,6 +12,7 @@ const appStore = useAppStore()
 const appWindow = getCurrentWindow()
 const recorder = useAudioRecorder()
 const transcribe = useTranscribe()
+const voiceControl = useVoiceControl()
 let hideWindowAfterStart = false
 
 const isActive = computed(() => appStore.isRecording)
@@ -69,6 +71,15 @@ watch(() => appStore.isRecording, async (recording) => {
       transcribe.reset()
       await recorder.start((chunk) => transcribe.handleChunk(chunk))
       void debugLog('recorder.state', 'audio recorder started successfully')
+      if (appStore.pendingVoiceCommandActivation) {
+        const entered = voiceControl.enterCommandMode()
+        if (!entered && appStore.voiceCommandAutoStartedRecording) {
+          appStore.voiceCommandAutoStartedRecording = false
+          appStore.pendingVoiceCommandActivation = false
+          appStore.isRecording = false
+          return
+        }
+      }
       if (hideWindowAfterStart) {
         window.setTimeout(() => {
           void appWindow.hide().catch(() => undefined)
@@ -77,6 +88,9 @@ watch(() => appStore.isRecording, async (recording) => {
     }
     catch (e) {
       hideWindowAfterStart = false
+      appStore.pendingVoiceCommandActivation = false
+      appStore.voiceCommandAutoStartedRecording = false
+      voiceControl.reset()
       appStore.isRecording = false
       transcribe.lastError.value = e instanceof Error ? e.message : '录音启动失败'
       void debugLog('recorder.error', 'failed to start recorder', e instanceof Error ? { message: e.message, stack: e.stack } : e)
@@ -84,6 +98,8 @@ watch(() => appStore.isRecording, async (recording) => {
   }
   else {
     hideWindowAfterStart = false
+    appStore.pendingVoiceCommandActivation = false
+    appStore.voiceCommandAutoStartedRecording = false
     recorder.stop()
     await transcribe.stopAndFlush()
     void debugLog('recorder.state', 'recorder stopped and flushed')

@@ -26,7 +26,7 @@ func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	case domain.NodeSpeakerDiarize:
 		return map[string]any{"service_url": "", "enable_voiceprint_match": false, "fail_on_error": false}
 	case domain.NodeMeetingSummary:
-		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "output_format": "markdown", "max_tokens": 200000}
+		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "output_format": "markdown", "max_tokens": 100000}
 	case domain.NodeCustomRegex:
 		return map[string]any{"rules": []map[string]any{{"pattern": "", "replacement": "", "enabled": true}}}
 	default:

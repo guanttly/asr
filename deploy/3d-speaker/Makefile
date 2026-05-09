@@ -1,4 +1,4 @@
-.PHONY: help dev serve test clean init docker docker-up docker-down download-models pack
+.PHONY: help dev serve test clean init docker docker-up docker-down download-models pack pack-run
 
 PYTHON := python3
 VENV := .venv
@@ -68,6 +68,10 @@ docker-logs: ## 查看 Docker 日志
 pack: ## 构建离线部署包
 	bash build.sh build
 	bash build.sh export
+
+pack-run: ## 构建 .run 一键离线安装包
+	bash build.sh build
+	bash build.sh export-run
 
 pack-full: ## 完整构建（含模型下载）
 	bash build.sh download-models

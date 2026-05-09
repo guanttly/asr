@@ -296,6 +296,16 @@ func (h *OpenAPIASRHandler) createBatchRecognition(c *gin.Context, withVAD bool,
 		response.OpenError(c, http.StatusBadRequest, errcode.OpenWorkflowInvalid, err.Error())
 		return
 	}
+	dictID, err := workflowTermDictID(c.Request.Context(), h.workflowSvc, workflowID)
+	if err != nil {
+		response.OpenError(c, http.StatusBadRequest, errcode.OpenWorkflowInvalid, err.Error())
+		return
+	}
+	language, useITN, hotwords, err := parseASROptions(c)
+	if err != nil {
+		response.OpenError(c, http.StatusBadRequest, errcode.OpenValidation, err.Error())
+		return
+	}
 	result, err := h.audioService.CreateBatchTaskFromAudio(c.Request.Context(), openPlatformOwnerID(app), appaudio.CreateBatchTaskRequest{
 		Audio: appaudio.PreparedAudio{
 			OriginalFilename: audioFile.OriginalFilename,
@@ -303,7 +313,11 @@ func (h *OpenAPIASRHandler) createBatchRecognition(c *gin.Context, withVAD bool,
 			LocalFilePath:    audioFile.AbsolutePath,
 			Duration:         audioFile.Duration,
 		},
+		DictID:     dictID,
 		WorkflowID: workflowID,
+		Language:   language,
+		UseITN:     useITN,
+		Hotwords:   hotwords,
 	})
 	if err != nil {
 		response.OpenError(c, http.StatusInternalServerError, errcode.OpenInternal, err.Error())
@@ -334,7 +348,7 @@ func (h *OpenAPIASRHandler) createBatchRecognition(c *gin.Context, withVAD bool,
 	payload := gin.H{
 		"request_id":  middleware.RequestIDFromContext(c),
 		"duration_ms": int(math.Round(completed.Duration * 1000)),
-		"language":    formOrDefault(c, "language", "auto"),
+		"language":    language,
 		"text":        completed.ResultText,
 		"segments":    buildOpenTranscriptPayload(completed.ResultText, completed.Duration, withVAD),
 		"task_id":     openTaskID(completed.ID),

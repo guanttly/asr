@@ -9,12 +9,13 @@
 # 1. 下载模型： ./build.sh download-models
 # 2. 构建镜像： ./build.sh build
 # 3. 导出镜像： ./build.sh export
+# 4. 导出一键安装包： ./build.sh export-run
 #
 # ---- 在离线机器上 ----
-# 4. 导入镜像： ./build.sh import
-# 5. 启动服务： ./build.sh start
-# 6. 验证服务： ./build.sh test [音频文件路径]
-# 7. 查看日志： ./build.sh logs
+# 5. 导入镜像： ./build.sh import
+# 6. 启动服务： ./build.sh start
+# 7. 验证服务： ./build.sh test [音频文件路径]
+# 8. 查看日志： ./build.sh logs
 
 set -e
 
@@ -23,6 +24,7 @@ IMAGE_NAME="speaker-analysis-service"
 IMAGE_TAG="1.1.7"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 EXPORT_FILE="speaker-analysis-service-offline.tar.gz"
+RUN_EXPORT_SCRIPT="scripts/build-offline-run.sh"
 MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
 DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
 PIP_DOWNLOAD_IMAGE="${PIP_DOWNLOAD_IMAGE:-python:3.10-slim}"
@@ -666,6 +668,20 @@ export)
     info "导出完成: ${EXPORT_FILE} (${SIZE})"
     ;;
 
+# 联网/已部署服务器：导出完整 .run 一键离线安装包，包含镜像、模型、配置和安装脚本。
+export-run)
+    shift || true
+    EXPORT_IMAGE="${FULL_IMAGE}"
+    if command -v docker >/dev/null 2>&1 && ! docker image inspect "${EXPORT_IMAGE}" >/dev/null 2>&1; then
+        if docker image inspect "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
+            warn "未找到 ${EXPORT_IMAGE}，改为导出 ${IMAGE_NAME}:latest"
+            EXPORT_IMAGE="${IMAGE_NAME}:latest"
+        fi
+    fi
+    info "导出 .run 一键离线安装包..."
+    bash "${RUN_EXPORT_SCRIPT}" --image "${EXPORT_IMAGE}" --version "${IMAGE_TAG}" "$@"
+    ;;
+
 # 离线环境：导入先前导出的镜像文件。
 import)
     if [ ! -f "${EXPORT_FILE}" ]; then
@@ -690,7 +706,7 @@ start)
     check_gpu_readiness
     SA_IMAGE="${FULL_IMAGE}" compose up -d --no-build
     info "服务启动中，首次启动需加载模型，约 60-120 秒..."
-    info "API 文档: http://localhost:${SA_PORT:-8100}/docs"
+    info "API 文档: http://localhost:${SA_PORT:-10002}/docs"
     ;;
 
 # 停止 compose 管理的服务实例。
@@ -703,7 +719,7 @@ stop)
 # 快速连通性测试：默认检查 health，可选再调用一次 VAD 接口。
 test)
     info "测试健康检查接口..."
-    HEALTH=$(curl -s "http://localhost:${SA_PORT:-8100}/api/v1/health" 2>/dev/null)
+    HEALTH=$(curl -s "http://localhost:${SA_PORT:-10002}/api/v1/health" 2>/dev/null)
     if [ $? -eq 0 ]; then
         info "健康检查响应: ${HEALTH}"
     else
@@ -714,7 +730,7 @@ test)
 
     if [ -n "${2}" ]; then
         info "测试 VAD 接口: ${2}"
-        curl -s -X POST "http://localhost:${SA_PORT:-8100}/api/v1/vad" \
+        curl -s -X POST "http://localhost:${SA_PORT:-10002}/api/v1/vad" \
             -F "file=@${2}" \
             | python3 -m json.tool
     else
@@ -739,6 +755,7 @@ logs)
     echo "  download-models-docker  通过 Docker 拉取辅助镜像下载模型（无需宿主机 Python）"
     echo "  build            构建 Docker 镜像（自动缓存 3D-Speaker 源码、本地 wheel 与 pip 下载）"
     echo "  export           导出镜像为 tar.gz 文件"
+    echo "  export-run       导出完整 .run 一键离线安装包（含镜像、models、config）"
     echo ""
     echo "命令（离线环境）:"
     echo "  import           从 tar.gz 导入镜像"

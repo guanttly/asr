@@ -41,6 +41,9 @@ type TaskModel struct {
 	Duration          float64
 	DictID            *uint64
 	WorkflowID        *uint64
+	Language          string `gorm:"type:varchar(16);not null;default:'auto'"`
+	UseITN            *bool
+	HotwordsJSON      string `gorm:"column:hotwords_json;type:json"`
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -64,6 +67,10 @@ func NewTaskRepo(db *gorm.DB) *TaskRepo {
 }
 
 func (r *TaskRepo) Create(ctx context.Context, task *domain.TranscriptionTask) error {
+	hotwordsJSON, err := encodeStringSlice(task.Hotwords)
+	if err != nil {
+		return err
+	}
 	m := &TaskModel{
 		UserID:            task.UserID,
 		Type:              string(task.Type),
@@ -85,6 +92,9 @@ func (r *TaskRepo) Create(ctx context.Context, task *domain.TranscriptionTask) e
 		Duration:          task.Duration,
 		DictID:            task.DictID,
 		WorkflowID:        task.WorkflowID,
+		Language:          task.Language,
+		UseITN:            task.UseITN,
+		HotwordsJSON:      hotwordsJSON,
 	}
 	if err := r.db.WithContext(ctx).Create(m).Error; err != nil {
 		return err
@@ -104,6 +114,10 @@ func (r *TaskRepo) GetByID(ctx context.Context, id uint64) (*domain.Transcriptio
 }
 
 func (r *TaskRepo) Update(ctx context.Context, task *domain.TranscriptionTask) error {
+	hotwordsJSON, err := encodeStringSlice(task.Hotwords)
+	if err != nil {
+		return err
+	}
 	return r.db.WithContext(ctx).Model(&TaskModel{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
 		"status":              string(task.Status),
 		"external_task_id":    task.ExternalTaskID,
@@ -120,6 +134,9 @@ func (r *TaskRepo) Update(ctx context.Context, task *domain.TranscriptionTask) e
 		"segment_completed":   task.SegmentCompleted,
 		"result_text":         task.ResultText,
 		"duration":            task.Duration,
+		"language":            task.Language,
+		"use_itn":             task.UseITN,
+		"hotwords_json":       hotwordsJSON,
 		"updated_at":          time.Now(),
 	}).Error
 }
@@ -451,6 +468,7 @@ func (r *TaskRepo) GetSyncHealth(ctx context.Context, warnThreshold, alertLimit 
 }
 
 func (r *TaskRepo) toDomain(m *TaskModel) *domain.TranscriptionTask {
+	hotwords := decodeStringSlice(m.HotwordsJSON)
 	return &domain.TranscriptionTask{
 		ID:                m.ID,
 		UserID:            m.UserID,
@@ -473,7 +491,32 @@ func (r *TaskRepo) toDomain(m *TaskModel) *domain.TranscriptionTask {
 		Duration:          m.Duration,
 		DictID:            m.DictID,
 		WorkflowID:        m.WorkflowID,
+		Language:          m.Language,
+		UseITN:            m.UseITN,
+		Hotwords:          hotwords,
 		CreatedAt:         m.CreatedAt,
 		UpdatedAt:         m.UpdatedAt,
 	}
+}
+
+func encodeStringSlice(values []string) (string, error) {
+	if len(values) == 0 {
+		return "[]", nil
+	}
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func decodeStringSlice(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
 }

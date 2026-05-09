@@ -491,7 +491,7 @@ const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
   {
     title: '操作',
     key: 'actions',
-    minWidth: 300,
+    minWidth: 360,
     render: (row) => {
       const children = [
         h(NButton, { quaternary: true, size: 'tiny', onClick: () => openEditModal(row) }, { default: () => '编辑' }),
@@ -600,32 +600,32 @@ watch(
           </div>
         </template>
 
-        <div class="grid gap-4 py-4 flex-1 min-h-0">
+        <div class="flex flex-col gap-4 py-4 flex-1 min-h-0">
           <NAlert type="info" :show-icon="false">
             创建应用或重置密钥后，前端只会展示一次完整的 app_secret；关闭后列表中仅保留掩码提示。
           </NAlert>
 
-          <div class="grid gap-3 md:grid-cols-4">
-            <div class="rounded-3 bg-[#fbfdff] px-4 py-3">
-              <div class="text-xs text-slate">应用总数</div>
+          <div class="grid gap-3 md:grid-cols-4 shrink-0">
+            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+              <div class="text-xs text-slate/80">应用总数</div>
               <div class="mt-2 text-2xl font-700 text-ink">
                 {{ apps.length }}
               </div>
             </div>
-            <div class="rounded-3 bg-[#fbfdff] px-4 py-3">
-              <div class="text-xs text-slate">启用中</div>
+            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+              <div class="text-xs text-slate/80">启用中</div>
               <div class="mt-2 text-2xl font-700 text-teal-700">
                 {{ activeCount }}
               </div>
             </div>
-            <div class="rounded-3 bg-[#fbfdff] px-4 py-3">
-              <div class="text-xs text-slate">已停用</div>
+            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+              <div class="text-xs text-slate/80">已停用</div>
               <div class="mt-2 text-2xl font-700 text-amber-600">
                 {{ disabledCount }}
               </div>
             </div>
-            <div class="rounded-3 bg-[#fbfdff] px-4 py-3">
-              <div class="text-xs text-slate">已撤销</div>
+            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+              <div class="text-xs text-slate/80">已撤销</div>
               <div class="mt-2 text-2xl font-700 text-red-600">
                 {{ revokedCount }}
               </div>

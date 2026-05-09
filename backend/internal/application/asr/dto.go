@@ -17,14 +17,20 @@ type CreateTaskRequest struct {
 	Type            domain.TaskType `json:"type" binding:"required,oneof=realtime batch"`
 	DictID          *uint64         `json:"dict_id"`
 	WorkflowID      *uint64         `json:"workflow_id"`
+	Language        string          `json:"language"`
+	UseITN          *bool           `json:"use_itn"`
+	Hotwords        []string        `json:"hotwords"`
 	ResultText      string          `json:"result_text"`
 	Duration        float64         `json:"duration"`
 }
 
 // TranscribeSnippetRequest is the DTO for one-shot short-segment recognition.
 type TranscribeSnippetRequest struct {
-	LocalFilePath string  `json:"-"`
-	DictID        *uint64 `json:"dict_id"`
+	LocalFilePath string   `json:"-"`
+	DictID        *uint64  `json:"dict_id"`
+	Language      string   `json:"language"`
+	UseITN        *bool    `json:"use_itn"`
+	Hotwords      []string `json:"hotwords"`
 }
 
 // TranscribeSnippetResponse is the DTO returned by the short-segment endpoint.
@@ -88,6 +94,9 @@ type TaskResponse struct {
 	ResultText        string                   `json:"result_text,omitempty"`
 	Duration          float64                  `json:"duration"`
 	WorkflowID        *uint64                  `json:"workflow_id,omitempty"`
+	Language          string                   `json:"language,omitempty"`
+	UseITN            *bool                    `json:"use_itn,omitempty"`
+	Hotwords          []string                 `json:"hotwords,omitempty"`
 	CreatedAt         time.Time                `json:"created_at"`
 	UpdatedAt         time.Time                `json:"updated_at"`
 }
@@ -205,6 +214,9 @@ func ToResponse(t *domain.TranscriptionTask) *TaskResponse {
 		ResultText:        resultText,
 		Duration:          t.Duration,
 		WorkflowID:        t.WorkflowID,
+		Language:          t.Language,
+		UseITN:            t.UseITN,
+		Hotwords:          t.Hotwords,
 		CreatedAt:         t.CreatedAt,
 		UpdatedAt:         t.UpdatedAt,
 	}

@@ -20,11 +20,11 @@ export function getTermEntries(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/entries`)
 }
 
-export function createTermEntry(dictId: string | number, payload: { correct_term: string, wrong_variants: string[], pinyin?: string }) {
+export function createTermEntry(dictId: string | number, payload: { correct_term: string, wrong_variants: string[] }) {
   return request.post(`/api/admin/term-dicts/${dictId}/entries`, payload)
 }
 
-export function updateTermEntry(dictId: string | number, entryId: string | number, payload: { correct_term: string, wrong_variants: string[], pinyin?: string }) {
+export function updateTermEntry(dictId: string | number, entryId: string | number, payload: { correct_term: string, wrong_variants: string[] }) {
   return request.put(`/api/admin/term-dicts/${dictId}/entries/${entryId}`, payload)
 }
 
@@ -36,11 +36,11 @@ export function getTermRules(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/rules`)
 }
 
-export function createTermRule(dictId: string | number, payload: { layer: number, pattern: string, replacement: string, enabled: boolean }) {
+export function createTermRule(dictId: string | number, payload: { match_type: string, pattern: string, replacement: string, enabled: boolean, sort_order: number }) {
   return request.post(`/api/admin/term-dicts/${dictId}/rules`, payload)
 }
 
-export function updateTermRule(dictId: string | number, ruleId: string | number, payload: { layer: number, pattern: string, replacement: string, enabled: boolean }) {
+export function updateTermRule(dictId: string | number, ruleId: string | number, payload: { match_type: string, pattern: string, replacement: string, enabled: boolean, sort_order: number }) {
   return request.put(`/api/admin/term-dicts/${dictId}/rules/${ruleId}`, payload)
 }
 

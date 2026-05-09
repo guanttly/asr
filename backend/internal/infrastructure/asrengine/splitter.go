@@ -31,6 +31,9 @@ func (c *Client) submitSplitOpenAITranscription(ctx context.Context, req BatchTr
 			LocalFilePath: segmentPath,
 			AudioURL:      req.AudioURL,
 			DictID:        req.DictID,
+			Language:      req.Language,
+			UseITN:        req.UseITN,
+			Hotwords:      req.Hotwords,
 		})
 		if err != nil {
 			return nil, err
@@ -73,6 +76,11 @@ func (c *Client) submitOpenAITranscriptionSingle(ctx context.Context, req BatchT
 
 		if _, copyErr := io.Copy(fileWriter, sourceBody); copyErr != nil {
 			_ = bodyWriter.CloseWithError(copyErr)
+			return
+		}
+
+		if fieldErr := writeOpenAITranscriptionFields(formWriter, req); fieldErr != nil {
+			_ = bodyWriter.CloseWithError(fieldErr)
 			return
 		}
 

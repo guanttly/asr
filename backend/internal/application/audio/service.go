@@ -34,6 +34,9 @@ type CreateBatchTaskRequest struct {
 	Audio      PreparedAudio
 	DictID     *uint64
 	WorkflowID *uint64
+	Language   string
+	UseITN     *bool
+	Hotwords   []string
 }
 
 type CreateMeetingRequest struct {
@@ -49,8 +52,11 @@ type CreateRealtimeTaskRequest struct {
 }
 
 type TranscribeRealtimeSegmentRequest struct {
-	Audio  PreparedAudio
-	DictID *uint64
+	Audio    PreparedAudio
+	DictID   *uint64
+	Language string
+	UseITN   *bool
+	Hotwords []string
 }
 
 func NewService(asrService ASRService, meetingService MeetingService) *Service {
@@ -68,6 +74,9 @@ func (s *Service) CreateBatchTaskFromAudio(ctx context.Context, userID uint64, r
 		Type:          domainasr.TaskTypeBatch,
 		DictID:        req.DictID,
 		WorkflowID:    req.WorkflowID,
+		Language:      req.Language,
+		UseITN:        req.UseITN,
+		Hotwords:      req.Hotwords,
 		Duration:      req.Audio.Duration,
 	})
 }
@@ -109,5 +118,8 @@ func (s *Service) TranscribeRealtimeSegment(ctx context.Context, req TranscribeR
 	return s.asrService.TranscribeSnippet(ctx, &appasr.TranscribeSnippetRequest{
 		LocalFilePath: req.Audio.LocalFilePath,
 		DictID:        req.DictID,
+		Language:      req.Language,
+		UseITN:        req.UseITN,
+		Hotwords:      req.Hotwords,
 	})
 }

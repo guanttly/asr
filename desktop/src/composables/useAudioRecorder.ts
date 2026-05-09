@@ -3,7 +3,7 @@ import { useAppStore } from '@/stores/app'
 import { debugLog } from '@/utils/debug'
 
 const TARGET_SR = 16000
-const CHUNK_MS = 300
+const CHUNK_MS = 200
 
 type FloatBuffer = Float32Array<ArrayBufferLike>
 

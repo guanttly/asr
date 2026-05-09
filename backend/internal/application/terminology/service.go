@@ -2,6 +2,9 @@ package terminology
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
 )
@@ -21,7 +24,11 @@ type Service struct {
 	seedRepo  domain.SeedStateRepository
 }
 
-const terminologySeedStateKey = "terminology_seed_initialized_v1"
+const (
+	terminologySeedStateKey            = "terminology_seed_initialized_v1"
+	terminologyDefaultRuleSeedStateKey = "terminology_default_rules_seeded_v1"
+	terminologySeedDictionaryListLimit = 1000
+)
 
 // NewService creates a new terminology application service.
 func NewService(
@@ -114,7 +121,6 @@ func (s *Service) GetDictEntries(ctx context.Context, dictID uint64) ([]EntryRes
 			ID:            e.ID,
 			CorrectTerm:   e.CorrectTerm,
 			WrongVariants: e.WrongVariants,
-			Pinyin:        e.Pinyin,
 		}
 	}
 	return items, nil
@@ -126,7 +132,6 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 		DictID:        req.DictID,
 		CorrectTerm:   req.CorrectTerm,
 		WrongVariants: req.WrongVariants,
-		Pinyin:        req.Pinyin,
 	}
 	if err := s.entryRepo.BatchCreate(ctx, []domain.TermEntry{entry}); err != nil {
 		return nil, err
@@ -143,7 +148,6 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 				ID:            item.ID,
 				CorrectTerm:   item.CorrectTerm,
 				WrongVariants: item.WrongVariants,
-				Pinyin:        item.Pinyin,
 			}, nil
 		}
 	}
@@ -151,7 +155,6 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	return &EntryResponse{
 		CorrectTerm:   req.CorrectTerm,
 		WrongVariants: req.WrongVariants,
-		Pinyin:        req.Pinyin,
 	}, nil
 }
 
@@ -164,7 +167,6 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 	entry.DictID = req.DictID
 	entry.CorrectTerm = req.CorrectTerm
 	entry.WrongVariants = req.WrongVariants
-	entry.Pinyin = req.Pinyin
 	if err := s.entryRepo.Update(ctx, entry); err != nil {
 		return nil, err
 	}
@@ -172,7 +174,6 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 		ID:            entry.ID,
 		CorrectTerm:   entry.CorrectTerm,
 		WrongVariants: entry.WrongVariants,
-		Pinyin:        entry.Pinyin,
 	}, nil
 }
 
@@ -192,10 +193,11 @@ func (s *Service) GetDictRules(ctx context.Context, dictID uint64) ([]RuleRespon
 	for i, rule := range rules {
 		items[i] = RuleResponse{
 			ID:          rule.ID,
-			Layer:       int(rule.Layer),
+			MatchType:   string(rule.MatchType),
 			Pattern:     rule.Pattern,
 			Replacement: rule.Replacement,
 			Enabled:     rule.Enabled,
+			SortOrder:   rule.SortOrder,
 		}
 	}
 
@@ -204,12 +206,9 @@ func (s *Service) GetDictRules(ctx context.Context, dictID uint64) ([]RuleRespon
 
 // CreateRule creates a correction rule under a dictionary.
 func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*RuleResponse, error) {
-	rule := &domain.CorrectionRule{
-		DictID:      req.DictID,
-		Layer:       domain.CorrectionLayer(req.Layer),
-		Pattern:     req.Pattern,
-		Replacement: req.Replacement,
-		Enabled:     req.Enabled,
+	rule, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.ruleRepo.Create(ctx, rule); err != nil {
 		return nil, err
@@ -217,11 +216,50 @@ func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*Rule
 
 	return &RuleResponse{
 		ID:          rule.ID,
-		Layer:       int(rule.Layer),
+		MatchType:   string(rule.MatchType),
 		Pattern:     rule.Pattern,
 		Replacement: rule.Replacement,
 		Enabled:     rule.Enabled,
+		SortOrder:   rule.SortOrder,
 	}, nil
+}
+
+func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string, enabled bool, sortOrder int) (*domain.CorrectionRule, error) {
+	typeValue := domain.RuleMatchType(strings.TrimSpace(matchType))
+	if typeValue == "" {
+		typeValue = domain.RuleMatchLiteral
+	}
+	if typeValue != domain.RuleMatchLiteral && typeValue != domain.RuleMatchRegex && typeValue != domain.RuleMatchNumberNormalize {
+		return nil, fmt.Errorf("invalid match_type: %s", matchType)
+	}
+
+	pattern = strings.TrimSpace(pattern)
+	replacement = strings.TrimSpace(replacement)
+	if typeValue != domain.RuleMatchNumberNormalize && pattern == "" {
+		return nil, fmt.Errorf("pattern is required")
+	}
+	if typeValue == domain.RuleMatchRegex {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+	}
+	if typeValue == domain.RuleMatchNumberNormalize {
+		pattern = ""
+		replacement = ""
+	}
+	if sortOrder <= 0 {
+		sortOrder = 100
+	}
+
+	rule := &domain.CorrectionRule{
+		DictID:      dictID,
+		MatchType:   typeValue,
+		Pattern:     pattern,
+		Replacement: replacement,
+		Enabled:     enabled,
+		SortOrder:   sortOrder,
+	}
+	return rule, nil
 }
 
 // UpdateRule updates a correction rule.
@@ -230,20 +268,26 @@ func (s *Service) UpdateRule(ctx context.Context, req *UpdateRuleRequest) (*Rule
 	if err != nil {
 		return nil, err
 	}
-	rule.DictID = req.DictID
-	rule.Layer = domain.CorrectionLayer(req.Layer)
-	rule.Pattern = req.Pattern
-	rule.Replacement = req.Replacement
-	rule.Enabled = req.Enabled
+	next, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder)
+	if err != nil {
+		return nil, err
+	}
+	rule.DictID = next.DictID
+	rule.MatchType = next.MatchType
+	rule.Pattern = next.Pattern
+	rule.Replacement = next.Replacement
+	rule.Enabled = next.Enabled
+	rule.SortOrder = next.SortOrder
 	if err := s.ruleRepo.Update(ctx, rule); err != nil {
 		return nil, err
 	}
 	return &RuleResponse{
 		ID:          rule.ID,
-		Layer:       int(rule.Layer),
+		MatchType:   string(rule.MatchType),
 		Pattern:     rule.Pattern,
 		Replacement: rule.Replacement,
 		Enabled:     rule.Enabled,
+		SortOrder:   rule.SortOrder,
 	}, nil
 }
 
@@ -252,8 +296,15 @@ func (s *Service) DeleteRule(ctx context.Context, id uint64) error {
 	return s.ruleRepo.Delete(ctx, id)
 }
 
-// EnsureSeedData creates a minimal default set of dictionaries, entries and rules.
+// EnsureSeedData creates default terminology dictionaries and scene rules.
 func (s *Service) EnsureSeedData(ctx context.Context) error {
+	if err := s.ensureSeedDictionaries(ctx); err != nil {
+		return err
+	}
+	return s.ensureDefaultRules(ctx)
+}
+
+func (s *Service) ensureSeedDictionaries(ctx context.Context) error {
 	seeded, err := s.seedRepo.IsSeeded(ctx, terminologySeedStateKey)
 	if err != nil {
 		return err
@@ -270,36 +321,7 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 		return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
 	}
 
-	seeds := []seedDictionary{
-		{
-			Name:   "医疗查房",
-			Domain: "医疗",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "舒张压", WrongVariants: []string{"舒张亚", "舒张鸭"}, Pinyin: "shu zhang ya"},
-				{CorrectTerm: "冠状动脉", WrongVariants: []string{"关状动脉", "冠状动漫"}, Pinyin: "guan zhuang dong mai"},
-				{CorrectTerm: "心电图", WrongVariants: []string{"心电途", "心电土"}, Pinyin: "xin dian tu"},
-			},
-			Rules: []domain.CorrectionRule{
-				{Layer: domain.LayerExactMatch, Pattern: "舒张亚", Replacement: "舒张压", Enabled: true},
-				{Layer: domain.LayerEditDistance, Pattern: "关状动脉", Replacement: "冠状动脉", Enabled: true},
-				{Layer: domain.LayerPinyinSimilar, Pattern: "心电途", Replacement: "心电图", Enabled: true},
-			},
-		},
-		{
-			Name:   "庭审记录",
-			Domain: "法律",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "被告人", WrongVariants: []string{"被告银", "被告仍"}, Pinyin: "bei gao ren"},
-				{CorrectTerm: "合议庭", WrongVariants: []string{"合一庭", "合议停"}, Pinyin: "he yi ting"},
-			},
-			Rules: []domain.CorrectionRule{
-				{Layer: domain.LayerExactMatch, Pattern: "被告银", Replacement: "被告人", Enabled: true},
-				{Layer: domain.LayerEditDistance, Pattern: "合一庭", Replacement: "合议庭", Enabled: true},
-			},
-		},
-	}
-
-	for _, seed := range seeds {
+	for _, seed := range defaultTerminologySeeds() {
 		dict := &domain.TermDict{Name: seed.Name, Domain: seed.Domain}
 		if err := s.dictRepo.Create(ctx, dict); err != nil {
 			return err
@@ -315,17 +337,249 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 				return err
 			}
 		}
-
-		for _, rule := range seed.Rules {
-			rule.DictID = dict.ID
-			r := rule
-			if err := s.ruleRepo.Create(ctx, &r); err != nil {
-				return err
-			}
-		}
 	}
 
 	return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
+}
+
+func (s *Service) ensureDefaultRules(ctx context.Context) error {
+	seeded, err := s.seedRepo.IsSeeded(ctx, terminologyDefaultRuleSeedStateKey)
+	if err != nil {
+		return err
+	}
+	if seeded {
+		return nil
+	}
+
+	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
+	if err != nil {
+		return err
+	}
+	dictByName := make(map[string]*domain.TermDict, len(dicts))
+	for _, dict := range dicts {
+		if _, exists := dictByName[dict.Name]; !exists {
+			dictByName[dict.Name] = dict
+		}
+	}
+
+	for _, seed := range defaultTerminologySeeds() {
+		dict := dictByName[seed.Name]
+		if dict == nil {
+			dict = &domain.TermDict{Name: seed.Name, Domain: seed.Domain}
+			if err := s.dictRepo.Create(ctx, dict); err != nil {
+				return err
+			}
+			dictByName[dict.Name] = dict
+		}
+
+		if err := s.ensureSeedEntries(ctx, dict.ID, seed.Entries); err != nil {
+			return err
+		}
+		if err := s.removeDeprecatedLiteralSeedRules(ctx, dict.ID); err != nil {
+			return err
+		}
+		if err := s.ensureSeedRules(ctx, dict.ID, seed.Rules); err != nil {
+			return err
+		}
+	}
+
+	return s.seedRepo.MarkSeeded(ctx, terminologyDefaultRuleSeedStateKey)
+}
+
+func (s *Service) ensureSeedEntries(ctx context.Context, dictID uint64, entries []domain.TermEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	existing, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	existingTerms := make(map[string]struct{}, len(existing))
+	for _, entry := range existing {
+		existingTerms[entry.CorrectTerm] = struct{}{}
+	}
+
+	pending := make([]domain.TermEntry, 0, len(entries))
+	for _, entry := range entries {
+		if _, exists := existingTerms[entry.CorrectTerm]; exists {
+			continue
+		}
+		entry.DictID = dictID
+		pending = append(pending, entry)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return s.entryRepo.BatchCreate(ctx, pending)
+}
+
+func (s *Service) removeDeprecatedLiteralSeedRules(ctx context.Context, dictID uint64) error {
+	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for _, rule := range rules {
+		if rule.MatchType != domain.RuleMatchLiteral {
+			continue
+		}
+		replacement := deprecatedSeedLiteralReplacement(rule.Pattern)
+		if replacement == "" || replacement != rule.Replacement {
+			continue
+		}
+		if err := s.ruleRepo.Delete(ctx, rule.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deprecatedSeedLiteralReplacement(pattern string) string {
+	switch pattern {
+	case "舒张亚":
+		return "舒张压"
+	case "关状动脉":
+		return "冠状动脉"
+	case "被告银":
+		return "被告人"
+	case "合一庭":
+		return "合议庭"
+	default:
+		return ""
+	}
+}
+
+func (s *Service) ensureSeedRules(ctx context.Context, dictID uint64, seedRules []domain.CorrectionRule) error {
+	if len(seedRules) == 0 {
+		return nil
+	}
+	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+
+	for _, seedRule := range seedRules {
+		if seedRuleExists(rules, seedRule) {
+			continue
+		}
+		seedRule.DictID = dictID
+		rule := seedRule
+		if err := s.ruleRepo.Create(ctx, &rule); err != nil {
+			return err
+		}
+		rules = append(rules, rule)
+	}
+	return nil
+}
+
+func seedRuleExists(rules []domain.CorrectionRule, seedRule domain.CorrectionRule) bool {
+	for _, rule := range rules {
+		if rule.MatchType == seedRule.MatchType && rule.Pattern == seedRule.Pattern && rule.Replacement == seedRule.Replacement {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultTerminologySeeds() []seedDictionary {
+	return []seedDictionary{
+		{
+			Name:   "写报告",
+			Domain: "医疗",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "舒张压", WrongVariants: []string{"舒张亚", "舒张鸭"}},
+				{CorrectTerm: "冠脉造影", WrongVariants: []string{"冠脉早影", "冠脉照影"}},
+				{CorrectTerm: "阿司匹林", WrongVariants: []string{"阿斯匹林", "阿司匹灵"}},
+			},
+			Rules: medicalReportRules(),
+		},
+		{
+			Name:   "医疗查房",
+			Domain: "医疗",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "舒张压", WrongVariants: []string{"舒张亚", "舒张鸭"}},
+				{CorrectTerm: "冠状动脉", WrongVariants: []string{"关状动脉", "冠状动漫"}},
+				{CorrectTerm: "心电图", WrongVariants: []string{"心电途", "心电土"}},
+			},
+			Rules: medicalReportRules(),
+		},
+		{
+			Name:   "影像报告",
+			Domain: "医疗影像",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "冠脉造影", WrongVariants: []string{"冠脉早影", "冠脉照影"}},
+				{CorrectTerm: "左心室", WrongVariants: []string{"左新室", "左心事"}},
+			},
+			Rules: imagingReportRules(),
+		},
+		{
+			Name:   "检验报告",
+			Domain: "医疗检验",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "血钾", WrongVariants: []string{"血甲", "血家"}},
+				{CorrectTerm: "白细胞", WrongVariants: []string{"白西胞", "白细包"}},
+			},
+			Rules: labReportRules(),
+		},
+		{
+			Name:   "庭审记录",
+			Domain: "法律",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "被告人", WrongVariants: []string{"被告银", "被告仍"}},
+				{CorrectTerm: "合议庭", WrongVariants: []string{"合一庭", "合议停"}},
+			},
+			Rules: legalRecordRules(),
+		},
+		{
+			Name:   "会议纪要",
+			Domain: "办公",
+			Entries: []domain.TermEntry{
+				{CorrectTerm: "会议纪要", WrongVariants: []string{"会议记要", "会议纪药"}},
+				{CorrectTerm: "待办事项", WrongVariants: []string{"代办事项", "待办项目"}},
+			},
+			Rules: meetingMemoRules(),
+		},
+	}
+}
+
+func medicalReportRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+		{MatchType: domain.RuleMatchRegex, Pattern: `血压\s*(\d{2,3})\s*[/／]\s*(\d{2,3})`, Replacement: `血压$1/$2mmHg`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `心率\s*(\d{2,3})\s*次(?:每|/)?分(?:钟)?`, Replacement: `心率$1次/分`, Enabled: true, SortOrder: 50},
+	}
+}
+
+func imagingReportRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(mm|cm)`, Replacement: `$1×$2$3`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(CT|MR|MRI|DR)\s+(\d+)`, Replacement: `$1$2`, Enabled: true, SortOrder: 50},
+	}
+}
+
+func labReportRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(血钾|血钠|血糖|肌酐|白细胞|红细胞|血红蛋白)\s+([0-9]+(?:\.[0-9]+)?)`, Replacement: `$1$2`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `([0-9]+(?:\.[0-9]+)?)\s+(mmol/L|g/L|mg/L|mg/dL)`, Replacement: `$1$2`, Enabled: true, SortOrder: 50},
+	}
+}
+
+func legalRecordRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+		{MatchType: domain.RuleMatchRegex, Pattern: `第\s*([0-9]+)\s*条`, Replacement: `第$1条`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `([（(][0-9]{4}[）)])\s*([^\s，,]{1,12})\s*([0-9]+)\s*号`, Replacement: `$1$2$3号`, Enabled: true, SortOrder: 50},
+	}
+}
+
+func meetingMemoRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+		{MatchType: domain.RuleMatchRegex, Pattern: `([0-2]?[0-9])点([0-5]?[0-9])分?`, Replacement: `$1:$2`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(第[0-9一二三四五六七八九十]+[项条])\s+`, Replacement: `$1`, Enabled: true, SortOrder: 50},
+	}
 }
 
 // BatchImport imports multiple term entries at once.

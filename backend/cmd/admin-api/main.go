@@ -38,6 +38,9 @@ func (a *batchEngineAdapter) SubmitBatch(ctx context.Context, req appasr.BatchSu
 		AudioURL:      req.AudioURL,
 		LocalFilePath: req.LocalFilePath,
 		DictID:        req.DictID,
+		Language:      req.Language,
+		UseITN:        req.UseITN,
+		Hotwords:      req.Hotwords,
 		Progress: func(progress asrengine.BatchTranscribeProgress) {
 			if req.Progress != nil {
 				req.Progress(appasr.BatchSubmitProgress{
@@ -159,6 +162,7 @@ func main() {
 	summarizer := nlpengine.NewSummarizer(cfg.Services.SummaryModel)
 	postProcessor := postprocess.NewBatchMeetingProcessor(meetingRepo, transcriptRepo, summaryRepo, corrector, summarizer)
 	asrService := appasr.NewService(persistence.NewTaskRepo(db), &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, nil)
+	asrService.SetHotwordProvider(appterm.NewHotwordProvider(entryRepo))
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 
 	// Initialize workflow engine and handlers

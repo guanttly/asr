@@ -4,9 +4,9 @@
 
 services:
   speaker-analysis:
-    image: "${SA_IMAGE:-speaker-analysis-service:1.1.0}"
+    image: "${SA_IMAGE:-speaker-analysis-service:1.1.7}"
     pull_policy: never
-    container_name: speaker-analysis
+    container_name: "${SA_CONTAINER_NAME:-speaker-analysis}"
     restart: unless-stopped
 
     ports:
@@ -20,7 +20,9 @@ services:
       - HOST=0.0.0.0
       - PORT=8100
       - HF_HUB_OFFLINE=1
+      - HF_DATASETS_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
+      - MODELSCOPE_OFFLINE=1
       - MODELSCOPE_CACHE=/app/data/native_cache
       # 如需分开指定设备，可自行追加以下环境变量
       # - EMBEDDING_DEVICE=${SA_EMBEDDING_DEVICE:-cuda:0}

@@ -18,6 +18,7 @@ import (
 type Service struct {
 	taskRepo          domain.TaskRepository
 	batchSubmitter    BatchEngine
+	hotwordProvider   HotwordProvider
 	streamingEngine   StreamingEngine
 	streamSessions    sync.Map
 	streamSessionTTL  time.Duration
@@ -39,6 +40,11 @@ type CompletedTaskProcessor interface {
 	ResumeCompletedTaskFromFailure(ctx context.Context, task *domain.TranscriptionTask) error
 }
 
+// HotwordProvider derives upstream ASR hotwords for a terminology dictionary.
+type HotwordProvider interface {
+	HotwordsForDict(ctx context.Context, dictID uint64) ([]string, error)
+}
+
 // BatchEngine describes the upstream batch ASR submission contract.
 type BatchEngine interface {
 	SubmitBatch(ctx context.Context, req BatchSubmitRequest) (*BatchSubmitResult, error)
@@ -57,6 +63,9 @@ type BatchSubmitRequest struct {
 	AudioURL      string
 	LocalFilePath string
 	DictID        *uint64
+	Language      string
+	UseITN        *bool
+	Hotwords      []string
 	Progress      func(BatchSubmitProgress)
 }
 
@@ -134,6 +143,67 @@ func NewService(taskRepo domain.TaskRepository, batchSubmitter BatchEngine, post
 	return service
 }
 
+// SetHotwordProvider configures terminology-derived ASR hotwords.
+func (s *Service) SetHotwordProvider(provider HotwordProvider) {
+	s.hotwordProvider = provider
+}
+
+func (s *Service) newBatchSubmitRequest(ctx context.Context, localFilePath, audioURL string, dictID *uint64, language string, useITN *bool, hotwords []string, progress func(BatchSubmitProgress)) (BatchSubmitRequest, error) {
+	mergedHotwords := normalizeHotwords(hotwords)
+	if s.hotwordProvider != nil && dictID != nil && *dictID > 0 {
+		dictHotwords, err := s.hotwordProvider.HotwordsForDict(ctx, *dictID)
+		if err != nil {
+			return BatchSubmitRequest{}, err
+		}
+		mergedHotwords = mergeHotwords(mergedHotwords, dictHotwords)
+	}
+
+	return BatchSubmitRequest{
+		AudioURL:      strings.TrimSpace(audioURL),
+		LocalFilePath: strings.TrimSpace(localFilePath),
+		DictID:        dictID,
+		Language:      normalizeLanguage(language),
+		UseITN:        useITN,
+		Hotwords:      mergedHotwords,
+		Progress:      progress,
+	}, nil
+}
+
+func normalizeLanguage(value string) string {
+	language := strings.TrimSpace(value)
+	if language == "" {
+		return "auto"
+	}
+	return language
+}
+
+func normalizeHotwords(values []string) []string {
+	return mergeHotwords(nil, values)
+}
+
+func mergeHotwords(left []string, right []string) []string {
+	seen := map[string]struct{}{}
+	merged := make([]string, 0, len(left)+len(right))
+	appendWord := func(value string) {
+		word := strings.TrimSpace(value)
+		if word == "" {
+			return
+		}
+		if _, ok := seen[word]; ok {
+			return
+		}
+		seen[word] = struct{}{}
+		merged = append(merged, word)
+	}
+	for _, word := range left {
+		appendWord(word)
+	}
+	for _, word := range right {
+		appendWord(word)
+	}
+	return merged
+}
+
 // CreateTask creates a new batch transcription task.
 func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTaskRequest) (*TaskResponse, error) {
 	audioURL := strings.TrimSpace(req.AudioURL)
@@ -169,6 +239,9 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 		Duration:          req.Duration,
 		DictID:            req.DictID,
 		WorkflowID:        req.WorkflowID,
+		Language:          normalizeLanguage(req.Language),
+		UseITN:            req.UseITN,
+		Hotwords:          normalizeHotwords(req.Hotwords),
 	}
 
 	if req.Type == domain.TaskTypeRealtime {
@@ -228,10 +301,11 @@ func (s *Service) TranscribeSnippet(ctx context.Context, req *TranscribeSnippetR
 		return nil, fmt.Errorf("asr batch engine is not configured")
 	}
 
-	result, err := s.batchSubmitter.SubmitBatch(ctx, BatchSubmitRequest{
-		LocalFilePath: strings.TrimSpace(req.LocalFilePath),
-		DictID:        req.DictID,
-	})
+	submitReq, err := s.newBatchSubmitRequest(ctx, strings.TrimSpace(req.LocalFilePath), "", req.DictID, normalizeLanguage(req.Language), req.UseITN, req.Hotwords, nil)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.batchSubmitter.SubmitBatch(ctx, submitReq)
 	if err != nil {
 		return nil, err
 	}
@@ -946,14 +1020,19 @@ func (s *Service) submitBatchTask(ctx context.Context, task *domain.Transcriptio
 		s.publishTaskUpdated(task)
 	}
 
-	result, err := s.batchSubmitter.SubmitBatch(ctx, BatchSubmitRequest{
-		AudioURL:      task.AudioURL,
-		LocalFilePath: task.LocalFilePath,
-		DictID:        task.DictID,
-		Progress: func(progress BatchSubmitProgress) {
-			s.updateTaskSegmentProgress(ctx, task, progress)
-		},
+	submitReq, err := s.newBatchSubmitRequest(ctx, task.LocalFilePath, task.AudioURL, task.DictID, task.Language, task.UseITN, task.Hotwords, func(progress BatchSubmitProgress) {
+		s.updateTaskSegmentProgress(ctx, task, progress)
 	})
+	if err != nil {
+		s.recordSyncFailure(task, now, err)
+		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
+			return false, updateErr
+		}
+		s.publishTaskUpdated(task)
+		return false, err
+	}
+
+	result, err := s.batchSubmitter.SubmitBatch(ctx, submitReq)
 	if err != nil {
 		s.recordSyncFailure(task, now, err)
 		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {

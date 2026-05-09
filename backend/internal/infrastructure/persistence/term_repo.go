@@ -28,7 +28,6 @@ type EntryModel struct {
 	DictID            uint64 `gorm:"index;not null"`
 	CorrectTerm       string `gorm:"type:varchar(255);not null"`
 	WrongVariantsJSON string `gorm:"column:wrong_variants_json;type:json"`
-	Pinyin            string `gorm:"type:varchar(255)"`
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -39,10 +38,11 @@ func (EntryModel) TableName() string { return "term_entries" }
 type RuleModel struct {
 	ID          uint64 `gorm:"primaryKey;autoIncrement"`
 	DictID      uint64 `gorm:"index;not null"`
-	Layer       int    `gorm:"not null"`
+	MatchType   string `gorm:"type:varchar(32);not null;default:'literal'"`
 	Pattern     string `gorm:"type:varchar(255);not null"`
 	Replacement string `gorm:"type:varchar(255);not null"`
 	Enabled     bool   `gorm:"not null;default:true"`
+	SortOrder   int    `gorm:"not null;default:100"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -136,7 +136,6 @@ func (r *EntryRepo) BatchCreate(ctx context.Context, entries []domain.TermEntry)
 			DictID:            entry.DictID,
 			CorrectTerm:       entry.CorrectTerm,
 			WrongVariantsJSON: string(payload),
-			Pinyin:            entry.Pinyin,
 		}
 	}
 	return r.db.WithContext(ctx).Create(&models).Error
@@ -156,7 +155,6 @@ func (r *EntryRepo) GetByID(ctx context.Context, id uint64) (*domain.TermEntry, 
 		DictID:        model.DictID,
 		CorrectTerm:   model.CorrectTerm,
 		WrongVariants: variants,
-		Pinyin:        model.Pinyin,
 	}, nil
 }
 
@@ -176,7 +174,6 @@ func (r *EntryRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.Ter
 			DictID:        model.DictID,
 			CorrectTerm:   model.CorrectTerm,
 			WrongVariants: variants,
-			Pinyin:        model.Pinyin,
 		}
 	}
 	return items, nil
@@ -190,7 +187,6 @@ func (r *EntryRepo) Update(ctx context.Context, entry *domain.TermEntry) error {
 	return r.db.WithContext(ctx).Model(&EntryModel{}).Where("id = ?", entry.ID).Updates(map[string]any{
 		"correct_term":        entry.CorrectTerm,
 		"wrong_variants_json": string(payload),
-		"pinyin":              entry.Pinyin,
 		"updated_at":          time.Now(),
 	}).Error
 }
@@ -210,10 +206,11 @@ func NewRuleRepo(db *gorm.DB) *RuleRepo {
 func (r *RuleRepo) Create(ctx context.Context, rule *domain.CorrectionRule) error {
 	model := &RuleModel{
 		DictID:      rule.DictID,
-		Layer:       int(rule.Layer),
+		MatchType:   string(normalizeRuleMatchType(rule.MatchType)),
 		Pattern:     rule.Pattern,
 		Replacement: rule.Replacement,
 		Enabled:     rule.Enabled,
+		SortOrder:   normalizeRuleSortOrder(rule.SortOrder),
 	}
 	if err := r.db.WithContext(ctx).Create(model).Error; err != nil {
 		return err
@@ -231,17 +228,18 @@ func (r *RuleRepo) GetByID(ctx context.Context, id uint64) (*domain.CorrectionRu
 	return &domain.CorrectionRule{
 		ID:          model.ID,
 		DictID:      model.DictID,
-		Layer:       domain.CorrectionLayer(model.Layer),
+		MatchType:   normalizeRuleMatchType(domain.RuleMatchType(model.MatchType)),
 		Pattern:     model.Pattern,
 		Replacement: model.Replacement,
 		Enabled:     model.Enabled,
+		SortOrder:   normalizeRuleSortOrder(model.SortOrder),
 		CreatedAt:   model.CreatedAt,
 	}, nil
 }
 
 func (r *RuleRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.CorrectionRule, error) {
 	var models []RuleModel
-	if err := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Order("layer asc, id asc").Find(&models).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Order("sort_order asc, id asc").Find(&models).Error; err != nil {
 		return nil, err
 	}
 	items := make([]domain.CorrectionRule, len(models))
@@ -249,10 +247,11 @@ func (r *RuleRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.Corr
 		items[i] = domain.CorrectionRule{
 			ID:          model.ID,
 			DictID:      model.DictID,
-			Layer:       domain.CorrectionLayer(model.Layer),
+			MatchType:   normalizeRuleMatchType(domain.RuleMatchType(model.MatchType)),
 			Pattern:     model.Pattern,
 			Replacement: model.Replacement,
 			Enabled:     model.Enabled,
+			SortOrder:   normalizeRuleSortOrder(model.SortOrder),
 			CreatedAt:   model.CreatedAt,
 		}
 	}
@@ -261,12 +260,28 @@ func (r *RuleRepo) ListByDict(ctx context.Context, dictID uint64) ([]domain.Corr
 
 func (r *RuleRepo) Update(ctx context.Context, rule *domain.CorrectionRule) error {
 	return r.db.WithContext(ctx).Model(&RuleModel{}).Where("id = ?", rule.ID).Updates(map[string]any{
-		"layer":       int(rule.Layer),
+		"match_type":  string(normalizeRuleMatchType(rule.MatchType)),
 		"pattern":     rule.Pattern,
 		"replacement": rule.Replacement,
 		"enabled":     rule.Enabled,
+		"sort_order":  normalizeRuleSortOrder(rule.SortOrder),
 		"updated_at":  time.Now(),
 	}).Error
+}
+
+func normalizeRuleMatchType(value domain.RuleMatchType) domain.RuleMatchType {
+	switch value {
+	case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize:
+		return value
+	}
+	return domain.RuleMatchLiteral
+}
+
+func normalizeRuleSortOrder(value int) int {
+	if value <= 0 {
+		return 100
+	}
+	return value
 }
 
 func (r *RuleRepo) Delete(ctx context.Context, id uint64) error {

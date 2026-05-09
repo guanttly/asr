@@ -29,6 +29,8 @@ const fallbackEntries = computed(() => {
     'layer1',
     'layer2',
     'layer3',
+    'rules',
+    'terms',
     'removed_words',
     'masked_words',
     'matched_words',
@@ -55,6 +57,14 @@ const markdownRenderer = new MarkdownIt({
 })
 
 const chunkOutputs = computed<Array<Record<string, any>>>(() => Array.isArray(parsedDetail.value?.chunk_outputs) ? parsedDetail.value.chunk_outputs as Array<Record<string, any>> : [])
+const ruleCorrections = computed(() => {
+  const rules = asList(parsedDetail.value?.rules)
+  return rules.length ? rules : asList(parsedDetail.value?.layer2)
+})
+const termCorrections = computed(() => {
+  const terms = asList(parsedDetail.value?.terms)
+  return terms.length ? terms : asList(parsedDetail.value?.layer1)
+})
 const currentChunkTab = ref(0)
 const renderedCurrentChunkHtml = computed(() => {
   const current = chunkOutputs.value[currentChunkTab.value]
@@ -159,33 +169,23 @@ function localizeFallbackValue(key: string, value: unknown) {
         </div>
       </div>
 
-      <div v-if="asList(parsedDetail.layer1).length || asList(parsedDetail.layer2).length || asList(parsedDetail.layer3).length" class="node-detail-grid">
-        <div v-if="asList(parsedDetail.layer1).length" class="node-detail-block">
+      <div v-if="ruleCorrections.length || termCorrections.length" class="node-detail-grid">
+        <div v-if="ruleCorrections.length" class="node-detail-block">
           <div class="node-detail-title">
-            第一层纠正
+            规则纠正
           </div>
           <ul class="node-detail-list">
-            <li v-for="(item, index) in asList(parsedDetail.layer1)" :key="`layer1-${index}`">
+            <li v-for="(item, index) in ruleCorrections" :key="`rule-${index}`">
               {{ stringify(item) }}
             </li>
           </ul>
         </div>
-        <div v-if="asList(parsedDetail.layer2).length" class="node-detail-block">
+        <div v-if="termCorrections.length" class="node-detail-block">
           <div class="node-detail-title">
-            第二层纠正
+            术语替换
           </div>
           <ul class="node-detail-list">
-            <li v-for="(item, index) in asList(parsedDetail.layer2)" :key="`layer2-${index}`">
-              {{ stringify(item) }}
-            </li>
-          </ul>
-        </div>
-        <div v-if="asList(parsedDetail.layer3).length" class="node-detail-block">
-          <div class="node-detail-title">
-            第三层纠正
-          </div>
-          <ul class="node-detail-list">
-            <li v-for="(item, index) in asList(parsedDetail.layer3)" :key="`layer3-${index}`">
+            <li v-for="(item, index) in termCorrections" :key="`term-${index}`">
               {{ stringify(item) }}
             </li>
           </ul>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useDesktopHotkeys } from '@/composables/useDesktopHotkeys'
 import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
@@ -21,6 +21,61 @@ const machineIdentity = ref<MachineIdentity | null>(null)
 const runtimeLogPath = ref('')
 const runtimeLogTail = ref('')
 const hotkeyDefinitions = HOTKEY_ACTION_DEFINITIONS
+const RECOGNITION_CHUNK_MS = 200
+const RECOGNITION_PRESETS = [
+  {
+    key: 'fast',
+    title: '抢实时',
+    scene: '报告短句、边说边插入',
+    effect: '说完约 0.6s 切句，响应最快。',
+    values: { minSpeechThreshold: 0.016, noiseGateMultiplier: 2.4, endSilenceChunks: 3, minEffectiveSpeechChunks: 1, singleChunkPeakMultiplier: 1.25 },
+  },
+  {
+    key: 'balanced',
+    title: '均衡',
+    scene: '常规口述、普通办公室',
+    effect: '说完约 0.8s 切句，兼顾速度和完整性。',
+    values: { minSpeechThreshold: 0.018, noiseGateMultiplier: 2.8, endSilenceChunks: 4, minEffectiveSpeechChunks: 2, singleChunkPeakMultiplier: 1.45 },
+  },
+  {
+    key: 'steady',
+    title: '稳健长句',
+    scene: '讲话有停顿、希望少切断',
+    effect: '说完约 1.2s 切句，更少误切。',
+    values: { minSpeechThreshold: 0.02, noiseGateMultiplier: 3.0, endSilenceChunks: 6, minEffectiveSpeechChunks: 2, singleChunkPeakMultiplier: 1.5 },
+  },
+  {
+    key: 'noisy',
+    title: '嘈杂环境',
+    scene: '键盘声、环境噪声较多',
+    effect: '说完约 1.4s 切句，优先抗噪。',
+    values: { minSpeechThreshold: 0.03, noiseGateMultiplier: 3.8, endSilenceChunks: 7, minEffectiveSpeechChunks: 3, singleChunkPeakMultiplier: 1.8 },
+  },
+] as const
+
+const endSilenceSeconds = computed({
+  get: () => Number(((settings.value.endSilenceChunks * RECOGNITION_CHUNK_MS) / 1000).toFixed(1)),
+  set: (value: number) => {
+    settings.value.endSilenceChunks = Math.max(1, Math.min(20, Math.round((Number(value) * 1000) / RECOGNITION_CHUNK_MS)))
+  },
+})
+const activeRecognitionPresetKey = computed(() => {
+  const current = settings.value
+  return RECOGNITION_PRESETS.find((preset) => {
+    const values = preset.values
+    return Math.abs(current.minSpeechThreshold - values.minSpeechThreshold) < 0.0005
+      && Math.abs(current.noiseGateMultiplier - values.noiseGateMultiplier) < 0.05
+      && current.endSilenceChunks === values.endSilenceChunks
+      && current.minEffectiveSpeechChunks === values.minEffectiveSpeechChunks
+      && Math.abs(current.singleChunkPeakMultiplier - values.singleChunkPeakMultiplier) < 0.02
+  })?.key || 'custom'
+})
+const recognitionEffectSummary = computed(() => {
+  const current = settings.value
+  const speed = current.endSilenceChunks <= 3 ? '出字更快，适合短句连续口述' : current.endSilenceChunks <= 5 ? '速度和完整性比较均衡' : '更少误切，适合长句和思考停顿'
+  const noise = current.noiseGateMultiplier >= 3.5 || current.minSpeechThreshold >= 0.028 ? '抗噪更强，但轻声可能更难触发' : '更容易捕捉轻声，但嘈杂环境可能误触发'
+  return `预计说完后等待 ${formatRecognitionSeconds(endSilenceSeconds.value)} 切句，之后叠加 ASR 与工作流耗时。${speed}；${noise}。`
+})
 
 const authLoading = ref(false)
 const authMessage = ref('')
@@ -41,14 +96,22 @@ const modifierOnlyCodes = new Set([
 ])
 
 function setSceneMode(mode: SceneMode) {
-	if (mode === SCENE_MODES.MEETING && !appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
-		return
+  if (mode === SCENE_MODES.MEETING && !appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
+    return
   if (appStore.sceneMode === mode) return
   if (appStore.voiceCommandActive || appStore.pendingVoiceCommandActivation)
     voiceControl.exitCommandMode('manual')
   appStore.sceneMode = mode
   appStore.invalidateWorkflowBindings()
   void debugLog('settings.scene', 'scene mode changed', { mode })
+}
+
+function formatRecognitionSeconds(seconds: number) {
+  return `${Number(seconds.toFixed(1))}s`
+}
+
+function applyRecognitionPreset(preset: typeof RECOGNITION_PRESETS[number]) {
+  Object.assign(settings.value, preset.values)
 }
 
 async function refreshVoiceControl() {
@@ -504,6 +567,38 @@ onBeforeUnmount(() => {
     <!-- VAD Parameters -->
     <section class="settings-section">
       <h4 class="section-title">语音检测参数</h4>
+      <p class="section-hint">先按场景选择预设，再微调句尾等待。当前按 200ms 小块做本地分句，配置只影响后续录音。</p>
+
+      <div class="preset-grid">
+        <button
+          v-for="preset in RECOGNITION_PRESETS"
+          :key="preset.key"
+          type="button"
+          class="preset-card"
+          :class="{ active: activeRecognitionPresetKey === preset.key }"
+          @click="applyRecognitionPreset(preset)"
+        >
+          <span class="preset-head">
+            <span class="preset-title">{{ preset.title }}</span>
+            <span class="preset-time">{{ formatRecognitionSeconds((preset.values.endSilenceChunks * RECOGNITION_CHUNK_MS) / 1000) }}</span>
+          </span>
+          <span class="preset-scene">{{ preset.scene }}</span>
+          <span class="preset-effect">{{ preset.effect }}</span>
+        </button>
+      </div>
+
+      <div class="recognition-summary">{{ recognitionEffectSummary }}</div>
+
+      <div class="field">
+        <label>句尾等待时间 ({{ formatRecognitionSeconds(endSilenceSeconds) }} / {{ settings.endSilenceChunks }} 块)</label>
+        <input
+          v-model.number="endSilenceSeconds"
+          type="range"
+          min="0.2"
+          max="4"
+          step="0.2"
+        >
+      </div>
       <div class="field">
         <label>最小语音阈值 ({{ settings.minSpeechThreshold.toFixed(3) }})</label>
         <input
@@ -522,16 +617,6 @@ onBeforeUnmount(() => {
           min="1.2"
           max="6"
           step="0.1"
-        >
-      </div>
-      <div class="field">
-        <label>句末静音块数 ({{ settings.endSilenceChunks }})</label>
-        <input
-          v-model.number="settings.endSilenceChunks"
-          type="range"
-          min="2"
-          max="10"
-          step="1"
         >
       </div>
       <div class="field">
@@ -587,6 +672,70 @@ onBeforeUnmount(() => {
 .field {
   margin-bottom: 8px;
   padding: 0 4px;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 4px 8px;
+}
+
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(255, 255, 255, 0.78);
+  color: #1f2937;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset-card.active {
+  border-color: rgba(15, 118, 110, 0.32);
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+}
+
+.preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preset-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preset-time {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #64748b;
+  font-size: 10px;
+}
+
+.preset-scene,
+.preset-effect {
+  font-size: 10px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.recognition-summary {
+  margin: 0 4px 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  background: rgba(15, 118, 110, 0.06);
+  color: #0f766e;
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .identity-grid {

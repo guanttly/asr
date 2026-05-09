@@ -150,7 +150,7 @@ func defaultWorkflowSeeds() []workflowSeed {
 				}),
 				seedNode(domain.NodeMeetingSummary, true, map[string]any{
 					"output_format": "markdown",
-					"max_tokens":    200000,
+					"max_tokens":    100000,
 				}),
 			},
 		},

@@ -17,7 +17,6 @@ type CreateEntryRequest struct {
 	DictID        uint64   `json:"dict_id"`
 	CorrectTerm   string   `json:"correct_term" binding:"required"`
 	WrongVariants []string `json:"wrong_variants"`
-	Pinyin        string   `json:"pinyin"`
 }
 
 // UpdateEntryRequest is the DTO for updating a term entry.
@@ -26,7 +25,6 @@ type UpdateEntryRequest struct {
 	DictID        uint64   `json:"dict_id"`
 	CorrectTerm   string   `json:"correct_term" binding:"required"`
 	WrongVariants []string `json:"wrong_variants"`
-	Pinyin        string   `json:"pinyin"`
 }
 
 // BatchImportRequest supports importing multiple entries at once.
@@ -47,33 +45,35 @@ type EntryResponse struct {
 	ID            uint64   `json:"id"`
 	CorrectTerm   string   `json:"correct_term"`
 	WrongVariants []string `json:"wrong_variants"`
-	Pinyin        string   `json:"pinyin"`
 }
 
 // RuleResponse is the DTO for a correction rule.
 type RuleResponse struct {
 	ID          uint64 `json:"id"`
-	Layer       int    `json:"layer"`
+	MatchType   string `json:"match_type"`
 	Pattern     string `json:"pattern"`
 	Replacement string `json:"replacement"`
 	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sort_order"`
 }
 
 // CreateRuleRequest is the DTO for adding a correction rule.
 type CreateRuleRequest struct {
 	DictID      uint64 `json:"dict_id"`
-	Layer       int    `json:"layer" binding:"required,oneof=1 2 3"`
-	Pattern     string `json:"pattern" binding:"required"`
-	Replacement string `json:"replacement" binding:"required"`
+	MatchType   string `json:"match_type"`
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
 	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sort_order"`
 }
 
 // UpdateRuleRequest is the DTO for updating a correction rule.
 type UpdateRuleRequest struct {
 	ID          uint64 `json:"id"`
 	DictID      uint64 `json:"dict_id"`
-	Layer       int    `json:"layer" binding:"required,oneof=1 2 3"`
-	Pattern     string `json:"pattern" binding:"required"`
-	Replacement string `json:"replacement" binding:"required"`
+	MatchType   string `json:"match_type"`
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
 	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sort_order"`
 }

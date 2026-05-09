@@ -13,6 +13,7 @@ import (
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
 	appnlp "github.com/lgt/asr/internal/application/nlp"
 	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
+	appterm "github.com/lgt/asr/internal/application/terminology"
 	appvoicecommand "github.com/lgt/asr/internal/application/voicecommand"
 	appvoiceprint "github.com/lgt/asr/internal/application/voiceprint"
 	appwf "github.com/lgt/asr/internal/application/workflow"
@@ -99,6 +100,9 @@ func (a *batchEngineAdapter) SubmitBatch(ctx context.Context, req appasr.BatchSu
 		AudioURL:      req.AudioURL,
 		LocalFilePath: req.LocalFilePath,
 		DictID:        req.DictID,
+		Language:      req.Language,
+		UseITN:        req.UseITN,
+		Hotwords:      req.Hotwords,
 		Progress: func(progress asrengine.BatchTranscribeProgress) {
 			if req.Progress != nil {
 				req.Progress(appasr.BatchSubmitProgress{
@@ -406,6 +410,7 @@ func main() {
 	openCallLogRepo := persistence.NewOpenCallLogRepo(db)
 
 	asrService := appasr.NewService(taskRepo, &batchEngineAdapter{client: asrEngineClient}, postProcessor, cfg.Services.DashboardRetryHistoryLimit, businessHub)
+	asrService.SetHotwordProvider(appterm.NewHotwordProvider(entryRepo))
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 	meetingService := appmeeting.NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExecutor, &meetingBatchEngineAdapter{client: asrEngineClient}, businessHub)
 	voiceprintService := appvoiceprint.NewService(speakerServiceClient)

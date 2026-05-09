@@ -32,14 +32,20 @@ const columns = [
   {
     title: '用户名 / 机器码',
     key: 'username',
-    width: 560,
-    render: (row: UserItem) => h('span', { style: 'word-break: break-all' }, row.username),
+    minWidth: 280,
+    render: (row: UserItem) => h('span', { style: 'word-break: break-all; line-height: 1.5' }, row.username),
   },
-  { title: '显示名', key: 'displayName', render: (row: UserItem) => row.displayName || row.display_name || '-' },
+  {
+    title: '显示名',
+    key: 'displayName',
+    width: 200,
+    ellipsis: { tooltip: true },
+    render: (row: UserItem) => row.displayName || row.display_name || '-',
+  },
   {
     title: '角色',
     key: 'role',
-    width: 88,
+    width: 96,
     render: (row: UserItem) => h(NTag, {
       size: 'small',
       round: true,

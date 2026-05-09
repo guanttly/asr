@@ -92,7 +92,7 @@ export function fallbackNodeDefaultConfig(type: string): Record<string, unknown>
     case 'speaker_diarize':
       return { service_url: '', enable_voiceprint_match: false, fail_on_error: false }
     case 'meeting_summary':
-      return { endpoint: '', model: '', api_key: '', prompt_template: '', output_format: 'markdown', max_tokens: 65536 }
+      return { endpoint: '', model: '', api_key: '', prompt_template: '', output_format: 'markdown', max_tokens: 100000 }
     case 'custom_regex':
       return { rules: [{ pattern: '', replacement: '', enabled: true }] }
     default:
@@ -184,7 +184,7 @@ export function normalizeNodeConfig(type: string, raw: Record<string, unknown>, 
         api_key: String(raw.api_key ?? base.api_key ?? ''),
         prompt_template: String(raw.prompt_template ?? base.prompt_template ?? ''),
         output_format: String(raw.output_format ?? base.output_format ?? 'markdown'),
-        max_tokens: ensureNumber(raw.max_tokens, ensureNumber(base.max_tokens, 65536)),
+        max_tokens: ensureNumber(raw.max_tokens, ensureNumber(base.max_tokens, 100000)),
       }
     case 'custom_regex':
       return {

@@ -1931,7 +1931,7 @@ watch(selectedIndex, () => {
                       示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
                     <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 65536 })" />
+                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
                     <NSelect
                       :value="selectedConfig.output_format || 'markdown'"
                       :options="[

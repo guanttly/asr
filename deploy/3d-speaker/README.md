@@ -87,7 +87,10 @@ speaker-diarization-service/
 # 2. 构建镜像
 ./build.sh build
 
-# 3. 导出离线镜像包
+# 3. 导出完整一键离线安装包（推荐交付）
+./build.sh export-run
+
+# 如只需要镜像 tar.gz，也可以继续使用
 ./build.sh export
 
 # 4. 本地开发运行
@@ -98,7 +101,15 @@ make serve
 ./build.sh start
 ```
 
-和 cam++ 一样，这套脚本统一使用 build / export / import / start / stop / test / logs 命令；不再使用旧的参数式构建入口。
+和 cam++ 一样，这套脚本统一使用 build / export / import / start / stop / test / logs 命令；额外提供 export-run，用于输出包含 Docker 镜像、models、config、Compose 和安装脚本的 `.run` 一键离线安装包。
+
+如果镜像已经在服务器上，且服务器上已经有完整的 `models/`，可以直接执行：
+
+```bash
+./build.sh export-run
+```
+
+产物默认输出到 `dist/speaker-analysis-service-<version>.run`。把这个文件拷贝到断网环境后执行 `bash speaker-analysis-service-<version>.run`，安装脚本只会解包、校验内置镜像、执行 `docker load` 并使用 `pull_policy: never` / `--pull never` 启动容器，不会主动拉取镜像、模型或 Python 依赖。若服务器模型目录不在当前目录，可使用 `./scripts/build-offline-run.sh --models-dir /path/to/models`。
 
 `make init` 会优先安装 `wheels/` 下的 `speakerlab-*.whl`；如果没有 wheel，则自动拉取 3D-Speaker 源码并通过 `.pth` 注册到当前 Python 环境。
 

@@ -1,7 +1,9 @@
 import { ref, shallowRef } from 'vue'
 
 const TARGET_SR = 16000
-const CHUNK_MS = 300
+const CHUNK_MS = 200
+
+type FloatBuffer = Float32Array<ArrayBufferLike>
 
 function mapRecorderError(error: unknown): Error {
   if (error instanceof Error) {
@@ -26,7 +28,7 @@ function mapRecorderError(error: unknown): Error {
   return new Error('初始化录音失败')
 }
 
-function resampleLinear(input: Float32Array, srcSr: number, dstSr: number): Float32Array {
+function resampleLinear(input: FloatBuffer, srcSr: number, dstSr: number): FloatBuffer {
   if (srcSr === dstSr)
     return input
   const ratio = dstSr / srcSr
@@ -42,14 +44,14 @@ function resampleLinear(input: Float32Array, srcSr: number, dstSr: number): Floa
   return out
 }
 
-function concatFloat32(a: Float32Array, b: Float32Array): Float32Array {
+function concatFloat32(a: FloatBuffer, b: FloatBuffer): FloatBuffer {
   const out = new Float32Array(a.length + b.length)
   out.set(a, 0)
   out.set(b, a.length)
   return out
 }
 
-function float32ToInt16(float32: Float32Array): ArrayBuffer {
+function float32ToInt16(float32: FloatBuffer): ArrayBuffer {
   const int16 = new Int16Array(float32.length)
   for (let i = 0; i < float32.length; i++) {
     const s = Math.max(-1, Math.min(1, float32[i]))
@@ -66,7 +68,7 @@ export function useAudioRecorder() {
 
   let processor: ScriptProcessorNode | null = null
   let source: MediaStreamAudioSourceNode | null = null
-  let buffer = new Float32Array(0)
+  let buffer: FloatBuffer = new Float32Array(0)
   let onChunkCallback: ((chunk: ArrayBuffer) => void) | null = null
 
   const cleanup = () => {

@@ -56,7 +56,7 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 	defer releaseMigrationLock(conn, schemaMigrationLockName)
 
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&TaskModel{},
 		&AdminOperationStateModel{},
 		&MeetingModel{},
@@ -85,7 +85,46 @@ func AutoMigrate(db *gorm.DB) error {
 		&OpenSkillModel{},
 		&OpenCallLogModel{},
 		&SkillInvocationModel{},
-	)
+	); err != nil {
+		return err
+	}
+	return dropObsoleteColumns(db)
+}
+
+func dropObsoleteColumns(db *gorm.DB) error {
+	obsoleteColumns := []struct {
+		tableName  string
+		columnName string
+	}{
+		{tableName: "term_entries", columnName: "pinyin"},
+		{tableName: "correction_rules", columnName: "layer"},
+	}
+
+	for _, column := range obsoleteColumns {
+		exists, err := columnExists(db, column.tableName, column.columnName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := db.Exec("ALTER TABLE " + column.tableName + " DROP COLUMN " + column.columnName).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func columnExists(db *gorm.DB, tableName, columnName string) (bool, error) {
+	var count int64
+	if err := db.Raw(
+		"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+		tableName,
+		columnName,
+	).Scan(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func acquireMigrationLock(db *gorm.DB, lockName string, timeoutSec int) (*sql.Conn, error) {

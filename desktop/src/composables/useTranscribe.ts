@@ -8,12 +8,12 @@ import { debugLog } from '@/utils/debug'
 import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
 
 const TARGET_SAMPLE_RATE = 16000
-const CHUNK_MS = 300
+const CHUNK_MS = 200
 const DEFAULT_NOISE_FLOOR = 0.004
 const MAX_SPEECH_RMS = 0.08
 const NOISE_FLOOR_SMOOTHING = 0.08
 const PRE_ROLL_CHUNKS = 1
-const MAX_SEGMENT_CHUNKS = 40
+const MAX_SEGMENT_CHUNKS = 60
 // 防止用户在会议/报告模式间误切换或者误录产生无意义任务：
 // 1) 录音时长低于 MIN_MEETING_DURATION_SECONDS 时直接丢弃；
 // 2) 没有任何识别文本时直接丢弃。

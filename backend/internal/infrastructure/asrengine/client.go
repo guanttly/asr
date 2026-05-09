@@ -41,6 +41,9 @@ type BatchTranscribeRequest struct {
 	AudioURL      string                        `json:"audio_url"`
 	LocalFilePath string                        `json:"-"`
 	DictID        *uint64                       `json:"dict_id,omitempty"`
+	Language      string                        `json:"language,omitempty"`
+	UseITN        *bool                         `json:"use_itn,omitempty"`
+	Hotwords      []string                      `json:"hotwords,omitempty"`
 	Progress      func(BatchTranscribeProgress) `json:"-"`
 }
 
@@ -297,6 +300,11 @@ func (c *Client) submitOpenAITranscription(ctx context.Context, req BatchTranscr
 			return
 		}
 
+		if fieldErr := writeOpenAITranscriptionFields(formWriter, req); fieldErr != nil {
+			_ = bodyWriter.CloseWithError(fieldErr)
+			return
+		}
+
 		if closeErr := formWriter.Close(); closeErr != nil {
 			_ = bodyWriter.CloseWithError(closeErr)
 		}
@@ -333,6 +341,43 @@ func (c *Client) submitOpenAITranscription(ctx context.Context, req BatchTranscr
 		ResultText: result.Text,
 		Duration:   result.Usage.Seconds,
 	}, nil
+}
+
+func writeOpenAITranscriptionFields(formWriter *multipart.Writer, req BatchTranscribeRequest) error {
+	if language := strings.TrimSpace(req.Language); language != "" && language != "auto" {
+		if err := formWriter.WriteField("language", language); err != nil {
+			return err
+		}
+	}
+	if prompt := hotwordPrompt(req.Hotwords); prompt != "" {
+		if err := formWriter.WriteField("prompt", prompt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hotwordPrompt(hotwords []string) string {
+	if len(hotwords) == 0 {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	items := make([]string, 0, len(hotwords))
+	for _, value := range hotwords {
+		word := strings.TrimSpace(value)
+		if word == "" {
+			continue
+		}
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		items = append(items, word)
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	return "请优先识别以下领域热词：" + strings.Join(items, "、")
 }
 
 func newOpenAIBatchRequestError(endpoint string, statusCode int, body []byte) error {

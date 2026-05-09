@@ -116,14 +116,12 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'terminology',
         name: 'terminology',
-        meta: { title: '术语库管理', desc: '查看词库、浏览词条，并直接维护术语数据，为三层纠错管道提供可运营底座。' },
+        meta: { title: '术语库管理', desc: '查看词库、维护词条和词库附属纠错规则，并为 ASR 热词与后处理提供统一数据源。' },
         component: () => import('@/pages/terminology/index.vue'),
       },
       {
         path: 'terminology/rules',
-        name: 'terminology-rules',
-        meta: { title: '纠错规则', desc: '管理词库对应的三层纠错规则，统一维护替换链路。' },
-        component: () => import('@/pages/terminology/rules.vue'),
+        redirect: '/terminology',
       },
       {
         path: 'terminology/sensitive',

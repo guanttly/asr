@@ -191,7 +191,6 @@ const menuOptions = computed<MenuOption[]>(() => {
     { label: '术语库管理', key: '/terminology', icon: renderMenuIcon('terminology', '术语库管理') },
     { label: '语气词库', key: '/terminology/fillers', icon: renderMenuIcon('terminology', '语气词库') },
     { label: '敏感词库', key: '/terminology/sensitive', icon: renderMenuIcon('sensitive', '敏感词库') },
-    { label: '纠错规则', key: '/terminology/rules', icon: renderMenuIcon('terminology', '纠错规则') },
   ]
   if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
     terminologyChildren.splice(3, 0, { label: '控制指令库', key: '/terminology/voice-commands', icon: renderMenuIcon('terminology', '控制指令库') })
@@ -231,7 +230,7 @@ const menuOptions = computed<MenuOption[]>(() => {
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
         { label: '角色管理', key: '/system/roles', icon: renderMenuIcon('roles', '角色管理') },
-        { label: 'OpenAPI 管理', key: '/system/openapi', icon: renderMenuIcon('openapi', 'OpenAPI 管理') },
+        { label: '对接管理', key: '/system/openapi', icon: renderMenuIcon('openapi', '对接管理') },
       ],
     },
   ]
@@ -269,8 +268,6 @@ const currentPath = computed(() => {
     return '/terminology/voice-commands'
   if (path.startsWith('/terminology/sensitive'))
     return '/terminology/sensitive'
-  if (path.startsWith('/terminology/rules'))
-    return '/terminology/rules'
   if (path.startsWith('/system/openapi'))
     return '/system/openapi'
   if (path.startsWith('/system/users'))
@@ -363,6 +360,11 @@ function handleLogout() {
   appStore.resetWorkflowBindings()
   router.push('/login')
 }
+
+const buildVersion = __APP_VERSION__
+const buildCode = __APP_BUILD_CODE__
+const buildDate = __APP_BUILD_DATE__
+const buildTitle = `构建日期 ${buildDate}`
 </script>
 
 <template>
@@ -373,7 +375,7 @@ function handleLogout() {
       :collapsed-width="88"
       :width="244"
       :collapsed="appStore.siderCollapsed"
-      content-class="scroll-shell px-3 py-5 sm:px-4 sm:py-6"
+      content-class="sider-shell px-3 py-5 sm:px-4 sm:py-6"
       class="min-h-0 !bg-white/72 !border-r-gray-200/60 !backdrop-blur-2xl"
     >
       <div class="sidebar-brand-area" :class="{ 'is-collapsed': appStore.siderCollapsed }">
@@ -416,6 +418,17 @@ function handleLogout() {
         @update:value="handleMenuSelect"
         @update:expanded-keys="handleMenuExpand"
       />
+      <div
+        class="sidebar-build"
+        :class="{ 'is-collapsed': appStore.siderCollapsed }"
+        :title="buildTitle"
+      >
+        <span v-if="appStore.siderCollapsed">v{{ buildVersion }}</span>
+        <template v-else>
+          <span class="sidebar-build-version">版本 {{ buildVersion }}</span>
+          <span class="sidebar-build-meta">构建 {{ buildCode }} · {{ buildDate }}</span>
+        </template>
+      </div>
     </NLayoutSider>
 
     <div class="flex-1 flex flex-col min-h-0 min-w-0 h-full overflow-hidden bg-transparent">
@@ -441,18 +454,30 @@ function handleLogout() {
 
           <div class="flex flex-wrap items-center gap-2 sm:justify-end sm:gap-2.5">
             <div
-              class="hidden items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-600 lg:flex"
+              class="hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs font-600 lg:flex"
               :class="businessSocketBadgeClass"
               :title="businessSocketTooltip"
             >
-              <span class="h-2 w-2 rounded-full" :class="businessSocketDotClass" />
+              <span class="h-1.75 w-1.75 rounded-full" :class="businessSocketDotClass" />
               <span>{{ businessSocketLabel }}</span>
             </div>
-            <div class="hidden rounded-full bg-mist/80 px-3.5 py-1.5 text-xs font-500 text-slate lg:block">
-              {{ userStore.profile?.displayName || userStore.profile?.username || '未登录用户' }}
+            <div class="hidden items-center gap-2 rounded-full bg-mist/70 px-3 py-1.5 text-xs font-600 text-slate lg:flex">
+              <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-teal/14 text-[10px] font-700 uppercase text-teal">
+                {{ (userStore.profile?.displayName || userStore.profile?.username || 'U').slice(0, 1) }}
+              </span>
+              <span class="max-w-32 truncate">{{ userStore.profile?.displayName || userStore.profile?.username || '未登录用户' }}</span>
             </div>
-            <NButton size="small" type="primary" color="#0f766e" @click="handleLogout">
-              退出登录
+            <NButton size="small" quaternary class="logout-button" @click="handleLogout">
+              <template #icon>
+                <NIcon :size="14">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <path d="m16 17 5-5-5-5" />
+                    <path d="M21 12H9" />
+                  </svg>
+                </NIcon>
+              </template>
+              退出
             </NButton>
           </div>
         </div>

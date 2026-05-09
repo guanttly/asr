@@ -36,7 +36,6 @@ const newDictTag = ref('')
 
 const correctTerm = ref('')
 const wrongVariantsText = ref('')
-const pinyin = ref('')
 
 const sensitiveWord = ref('')
 
@@ -78,7 +77,6 @@ function resetForm(text: string) {
   if (props.kind === 'term') {
     correctTerm.value = text.trim()
     wrongVariantsText.value = ''
-    pinyin.value = ''
   }
   else {
     sensitiveWord.value = text.trim()
@@ -149,7 +147,6 @@ async function handleSubmit() {
       await createTermEntry(dict.id, {
         correct_term: correct,
         wrong_variants: variants,
-        pinyin: pinyin.value.trim() || undefined,
       })
       emit('success', { kind: 'term', dictName: dict.name, value: correct })
     }
@@ -252,10 +249,6 @@ function handleCancel() {
               <label class="dict-field">
                 <span>易错变体（可多个，用 , 或换行分隔）</span>
                 <textarea v-model="wrongVariantsText" rows="2" placeholder="模型常错写法，例如：左室肥后\n左心室肥后" />
-              </label>
-              <label class="dict-field">
-                <span>拼音（可选）</span>
-                <input v-model="pinyin" type="text" placeholder="例如：zuǒ xīn shì féi hòu">
               </label>
             </template>
             <template v-else>

@@ -184,6 +184,11 @@ func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
 		}
 		dictID = &parsed
 	}
+	language, useITN, hotwords, err := parseASROptions(c)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 
 	result, err := h.audioService.TranscribeRealtimeSegment(c.Request.Context(), appaudio.TranscribeRealtimeSegmentRequest{
 		Audio: appaudio.PreparedAudio{
@@ -191,7 +196,10 @@ func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
 			LocalFilePath:    audioFile.AbsolutePath,
 			Duration:         audioFile.Duration,
 		},
-		DictID: dictID,
+		DictID:   dictID,
+		Language: language,
+		UseITN:   useITN,
+		Hotwords: hotwords,
 	})
 	if err != nil {
 		if isASRBadRequest(err) {
@@ -246,6 +254,21 @@ func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	if dictID == nil {
+		resolvedDictID, err := workflowTermDictID(c.Request.Context(), h.workflowSvc, workflowID)
+		if err != nil {
+			_ = os.Remove(audioFile.AbsolutePath)
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
+		dictID = resolvedDictID
+	}
+	language, useITN, hotwords, err := parseASROptions(c)
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 
 	userID := middleware.UserIDFromContext(c)
 	result, err := h.audioService.CreateBatchTaskFromAudio(c.Request.Context(), userID, appaudio.CreateBatchTaskRequest{
@@ -257,6 +280,9 @@ func (h *ASRHandler) UploadTaskFile(c *gin.Context) {
 		},
 		DictID:     dictID,
 		WorkflowID: workflowID,
+		Language:   language,
+		UseITN:     useITN,
+		Hotwords:   hotwords,
 	})
 	if err != nil {
 		_ = os.Remove(audioFile.AbsolutePath)
@@ -350,6 +376,14 @@ func (h *ASRHandler) CreateTask(c *gin.Context) {
 	if err := h.validateWorkflowBinding(c.Request.Context(), req.WorkflowID, req.Type); err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
+	}
+	if req.DictID == nil && req.WorkflowID != nil {
+		resolvedDictID, err := workflowTermDictID(c.Request.Context(), h.workflowSvc, req.WorkflowID)
+		if err != nil {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
+		req.DictID = resolvedDictID
 	}
 
 	userID := middleware.UserIDFromContext(c)

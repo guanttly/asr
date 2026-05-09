@@ -76,7 +76,7 @@ interface NormalizedRealtimeRecognitionSettings {
 }
 
 const TARGET_SAMPLE_RATE = 16000
-const CHUNK_MS = 300
+const CHUNK_MS = 200
 const DEFAULT_NOISE_FLOOR_LEVEL = 0.004
 const DEFAULT_MIN_SPEECH_RMS_THRESHOLD = 0.018
 const MAX_SPEECH_RMS_THRESHOLD = 0.08
@@ -84,7 +84,9 @@ const NOISE_FLOOR_SMOOTHING = 0.08
 const DEFAULT_NOISE_GATE_MULTIPLIER = 2.8
 const PRE_ROLL_CHUNKS = 1
 const DEFAULT_END_SILENCE_CHUNKS = 4
-const MAX_SEGMENT_CHUNKS = 40
+const MIN_END_SILENCE_CHUNKS = 1
+const MAX_END_SILENCE_CHUNKS = 20
+const MAX_SEGMENT_CHUNKS = 60
 const DEFAULT_MIN_EFFECTIVE_SPEECH_CHUNKS = 2
 const DEFAULT_SINGLE_CHUNK_PEAK_MULTIPLIER = 1.45
 const REALTIME_SETTINGS_STORAGE_KEY = 'asr.realtime.recognition.settings'
@@ -98,6 +100,61 @@ const DEFAULT_REALTIME_SETTINGS: RealtimeRecognitionSettings = {
   minEffectiveSpeechChunks: DEFAULT_MIN_EFFECTIVE_SPEECH_CHUNKS,
   singleChunkPeakMultiplier: DEFAULT_SINGLE_CHUNK_PEAK_MULTIPLIER,
 }
+
+const REALTIME_TUNING_PRESETS = [
+  {
+    key: 'fast',
+    title: '抢实时',
+    scene: '报告短句、边说边插入',
+    effect: '说完约 0.6s 切句，响应最快，但思考停顿可能被切开。',
+    settings: {
+      minSpeechThreshold: 0.016,
+      noiseGateMultiplier: 2.4,
+      endSilenceChunks: 3,
+      minEffectiveSpeechChunks: 1,
+      singleChunkPeakMultiplier: 1.25,
+    },
+  },
+  {
+    key: 'balanced',
+    title: '均衡',
+    scene: '常规口述、普通办公室',
+    effect: '说完约 0.8s 切句，兼顾速度和完整句子。',
+    settings: {
+      minSpeechThreshold: DEFAULT_MIN_SPEECH_RMS_THRESHOLD,
+      noiseGateMultiplier: DEFAULT_NOISE_GATE_MULTIPLIER,
+      endSilenceChunks: DEFAULT_END_SILENCE_CHUNKS,
+      minEffectiveSpeechChunks: DEFAULT_MIN_EFFECTIVE_SPEECH_CHUNKS,
+      singleChunkPeakMultiplier: DEFAULT_SINGLE_CHUNK_PEAK_MULTIPLIER,
+    },
+  },
+  {
+    key: 'steady',
+    title: '稳健长句',
+    scene: '讲话有停顿、希望少切断',
+    effect: '说完约 1.2s 切句，更像整句输出，但出字会慢一些。',
+    settings: {
+      minSpeechThreshold: 0.02,
+      noiseGateMultiplier: 3.0,
+      endSilenceChunks: 6,
+      minEffectiveSpeechChunks: 2,
+      singleChunkPeakMultiplier: 1.5,
+    },
+  },
+  {
+    key: 'noisy',
+    title: '嘈杂环境',
+    scene: '环境噪声大、键盘声多',
+    effect: '说完约 1.4s 切句，优先降低误触发和无效片段。',
+    settings: {
+      minSpeechThreshold: 0.03,
+      noiseGateMultiplier: 3.8,
+      endSilenceChunks: 7,
+      minEffectiveSpeechChunks: 3,
+      singleChunkPeakMultiplier: 1.8,
+    },
+  },
+] as const
 
 const appStore = useAppStore()
 
@@ -173,10 +230,41 @@ const hasImmediateWorkflow = computed(() => effectiveImmediateWorkflowId.value !
 const effectiveWorkflowLabel = computed(() => workflowLabel(effectiveImmediateWorkflowId.value))
 const effectiveOutputText = computed(() => store.processedTranscriptText.trim() || store.transcriptText.trim())
 const recognitionQueueSummary = computed(() => `待识别句子：${uploadQueueSize.value} · 待处理文本：${instantQueueSize.value}`)
+const effectiveEndSilenceMs = computed(() => effectiveRealtimeSettings.value.endSilenceChunks * CHUNK_MS)
+const effectiveEndSilenceSeconds = computed({
+  get: () => Number((effectiveEndSilenceMs.value / 1000).toFixed(1)),
+  set: (value: number | null) => {
+    realtimeSettings.value.endSilenceChunks = secondsToSilenceChunks(value ?? effectiveEndSilenceMs.value / 1000)
+  },
+})
+const effectiveEndSilenceLabel = computed(() => formatSeconds(effectiveEndSilenceMs.value / 1000))
+const remainingSilenceLabel = computed(() => {
+  if (activeSegmentChunkCount.value === 0 || trailingSilenceChunkCount.value <= 0)
+    return ''
+  const remainingChunks = Math.max(0, effectiveRealtimeSettings.value.endSilenceChunks - trailingSilenceChunkCount.value)
+  return formatSeconds((remainingChunks * CHUNK_MS) / 1000)
+})
+const activeRealtimePresetKey = computed(() => {
+  const current = effectiveRealtimeSettings.value
+  return REALTIME_TUNING_PRESETS.find((preset) => {
+    const settings = preset.settings
+    return Math.abs(current.minSpeechThreshold - settings.minSpeechThreshold) < 0.0005
+      && Math.abs(current.noiseGateMultiplier - settings.noiseGateMultiplier) < 0.05
+      && current.endSilenceChunks === settings.endSilenceChunks
+      && current.minEffectiveSpeechChunks === settings.minEffectiveSpeechChunks
+      && Math.abs(current.singleChunkPeakMultiplier - settings.singleChunkPeakMultiplier) < 0.02
+  })?.key || 'custom'
+})
+const realtimeTuningEffect = computed(() => {
+  const settings = effectiveRealtimeSettings.value
+  const speed = settings.endSilenceChunks <= 3 ? '出字更快，适合短句连续口述' : settings.endSilenceChunks <= 5 ? '速度和完整性比较均衡' : '更少误切，适合长句和思考停顿'
+  const noise = settings.noiseGateMultiplier >= 3.5 || settings.minSpeechThreshold >= 0.028 ? '抗噪更强，但轻声可能更难触发' : '更容易捕捉轻声，但嘈杂环境可能误触发'
+  return `预计说完后等待 ${effectiveEndSilenceLabel.value} 切句，之后叠加 ASR 与工作流耗时。${speed}；${noise}。`
+})
 const realtimeConfigSummary = computed(() => {
   const workflowSummary = hasImmediateWorkflow.value ? effectiveWorkflowLabel.value : '未绑定即时工作流'
   const punctuationSummary = effectiveRealtimeSettings.value.keepPunctuation ? '保留标点' : '过滤标点'
-  const thresholdSummary = `阈值 ${speechThresholdLevel.value.toFixed(3)} / 静音 ${effectiveRealtimeSettings.value.endSilenceChunks} 块`
+  const thresholdSummary = `阈值 ${speechThresholdLevel.value.toFixed(3)} / 句尾等待 ${effectiveEndSilenceLabel.value}`
   return `${workflowSummary} · ${punctuationSummary} · ${thresholdSummary}`
 })
 const immediateOutputTitle = computed(() => hasImmediateWorkflow.value ? '即时输出（已处理）' : '即时输出（原始识别直出）')
@@ -206,8 +294,10 @@ const transportStateLabel = computed(() => {
   return '本地分句待命'
 })
 const transportStateDescription = computed(() => {
-  if (isRecording.value)
-    return `浏览器本地 VAD 分句 + HTTP 短句识别，当前能量 ${listeningLevel.value.toFixed(3)} / 触发阈值 ${speechThresholdLevel.value.toFixed(3)} / 底噪 ${noiseFloorLevel.value.toFixed(3)}`
+  if (isRecording.value) {
+    const waitingHint = remainingSilenceLabel.value ? ` / 距离切句约 ${remainingSilenceLabel.value}` : ''
+    return `浏览器本地 VAD 分句 + HTTP 短句识别，当前能量 ${listeningLevel.value.toFixed(3)} / 触发阈值 ${speechThresholdLevel.value.toFixed(3)} / 底噪 ${noiseFloorLevel.value.toFixed(3)}${waitingHint}`
+  }
   return '浏览器本地切句后再调用短句识别接口，不维持流式会话。'
 })
 const secureContextBlocked = computed(() => typeof window !== 'undefined' && !window.isSecureContext)
@@ -225,15 +315,30 @@ function clampInteger(value: number, min: number, max: number) {
   return Math.round(clamp(value, min, max))
 }
 
+function secondsToSilenceChunks(seconds: number) {
+  return clampInteger(Math.round((seconds * 1000) / CHUNK_MS), MIN_END_SILENCE_CHUNKS, MAX_END_SILENCE_CHUNKS)
+}
+
+function formatSeconds(seconds: number) {
+  return `${Number(seconds.toFixed(1))}s`
+}
+
 function normalizeRealtimeRecognitionSettings(value?: Partial<RealtimeRecognitionSettings> | null): NormalizedRealtimeRecognitionSettings {
   const raw = value || {}
   return {
     keepPunctuation: Boolean(raw.keepPunctuation),
     minSpeechThreshold: clamp(Number(raw.minSpeechThreshold) || DEFAULT_MIN_SPEECH_RMS_THRESHOLD, 0.005, MAX_SPEECH_RMS_THRESHOLD),
     noiseGateMultiplier: clamp(Number(raw.noiseGateMultiplier) || DEFAULT_NOISE_GATE_MULTIPLIER, 1.2, 6),
-    endSilenceChunks: clampInteger(Number(raw.endSilenceChunks) || DEFAULT_END_SILENCE_CHUNKS, 2, 10),
+    endSilenceChunks: clampInteger(Number(raw.endSilenceChunks) || DEFAULT_END_SILENCE_CHUNKS, MIN_END_SILENCE_CHUNKS, MAX_END_SILENCE_CHUNKS),
     minEffectiveSpeechChunks: clampInteger(Number(raw.minEffectiveSpeechChunks) || DEFAULT_MIN_EFFECTIVE_SPEECH_CHUNKS, 1, 6),
     singleChunkPeakMultiplier: clamp(Number(raw.singleChunkPeakMultiplier) || DEFAULT_SINGLE_CHUNK_PEAK_MULTIPLIER, 1, 3),
+  }
+}
+
+function applyRealtimeTuningPreset(preset: typeof REALTIME_TUNING_PRESETS[number]) {
+  realtimeSettings.value = {
+    ...realtimeSettings.value,
+    ...preset.settings,
   }
 }
 
@@ -1063,7 +1168,7 @@ onBeforeUnmount(() => {
                     实时分句参数
                   </div>
                   <div class="mt-1 text-xs leading-6 text-slate/80">
-                    1 个块约等于 300ms。这里的参数会保存在当前浏览器，只影响本页实时转写。
+                    按 200ms 小块做本地 VAD。先选场景，再微调句尾等待时间；参数会保存在当前浏览器，只影响本页实时转写。
                   </div>
                 </div>
                 <div class="flex flex-wrap gap-2">
@@ -1074,6 +1179,32 @@ onBeforeUnmount(() => {
                     恢复默认
                   </NButton>
                 </div>
+              </div>
+
+              <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <button
+                  v-for="preset in REALTIME_TUNING_PRESETS"
+                  :key="preset.key"
+                  type="button"
+                  class="rounded-3 border px-3 py-3 text-left transition hover:-translate-y-0.5 hover:shadow-sm"
+                  :class="activeRealtimePresetKey === preset.key ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-white/80 bg-white/70 text-slate/90'"
+                  @click="applyRealtimeTuningPreset(preset)"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-700">{{ preset.title }}</span>
+                    <span class="rounded-full bg-white/80 px-2 py-0.5 text-[10px] text-slate/70">{{ formatSeconds((preset.settings.endSilenceChunks * CHUNK_MS) / 1000) }}</span>
+                  </div>
+                  <div class="mt-1 text-xs leading-5 opacity-80">
+                    {{ preset.scene }}
+                  </div>
+                  <div class="mt-2 text-xs leading-5 opacity-80">
+                    {{ preset.effect }}
+                  </div>
+                </button>
+              </div>
+
+              <div class="mt-4 rounded-3 border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-xs leading-6 text-emerald-800">
+                {{ realtimeTuningEffect }}
               </div>
 
               <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1091,9 +1222,12 @@ onBeforeUnmount(() => {
                 </div>
                 <div>
                   <div class="text-xs text-slate/70">
-                    句尾静音块数
+                    句尾等待时间
                   </div>
-                  <NInputNumber v-model:value="realtimeSettings.endSilenceChunks" size="small" class="mt-2 w-full" :min="2" :max="10" :step="1" />
+                  <NInputNumber v-model:value="effectiveEndSilenceSeconds" size="small" class="mt-2 w-full" :min="0.2" :max="4" :step="0.2" />
+                  <div class="mt-1 text-[11px] text-slate/70">
+                    当前等效 {{ effectiveEndSilenceLabel }}，{{ effectiveRealtimeSettings.endSilenceChunks }} 个块
+                  </div>
                 </div>
                 <div>
                   <div class="text-xs text-slate/70">
@@ -1111,7 +1245,7 @@ onBeforeUnmount(() => {
                   <NInputNumber v-model:value="realtimeSettings.singleChunkPeakMultiplier" size="small" class="mt-2 w-full" :min="1" :max="3" :step="0.05" />
                 </div>
                 <div class="rounded-2 bg-white/70 px-3 py-2 text-xs leading-6 text-slate/80">
-                  当前生效阈值 {{ speechThresholdLevel.toFixed(3) }}，当前底噪 {{ noiseFloorLevel.toFixed(3) }}。如果环境噪音大，优先提高“最小触发阈值”或“底噪倍率”；如果句子收尾太慢，再降低“句尾静音块数”。
+                  当前生效阈值 {{ speechThresholdLevel.toFixed(3) }}，当前底噪 {{ noiseFloorLevel.toFixed(3) }}。如果环境噪音大，优先选“嘈杂环境”或提高阈值；如果句子收尾太慢，降低“句尾等待时间”。
                 </div>
               </div>
             </div>

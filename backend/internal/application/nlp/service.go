@@ -23,7 +23,7 @@ func NewService(corrector CorrectionEngine, summarizer SummaryEngine) *Service {
 	return &Service{corrector: corrector, summarizer: summarizer}
 }
 
-// Correct applies the multi-layer terminology correction pipeline.
+// Correct applies terminology rules and near-term replacements.
 func (s *Service) Correct(ctx context.Context, req *CorrectRequest) (*CorrectResponse, error) {
 	correctedText, corrections, err := s.corrector.Correct(ctx, req.DictID, req.Text)
 	if err != nil {

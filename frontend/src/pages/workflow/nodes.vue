@@ -869,7 +869,7 @@ onMounted(async () => {
                   </div>
                   <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                   <div class="grid gap-3 lg:grid-cols-2">
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 65536 })" />
+                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
                     <NSelect
                       :value="selectedConfig.output_format || 'markdown'"
                       :options="[

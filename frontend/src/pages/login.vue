@@ -74,7 +74,7 @@ async function handleLogin() {
               术语纠错
             </div>
             <div class="mt-1.5 text-xl font-700 text-ink">
-              三层管道
+              规则优先
             </div>
           </div>
           <div class="subtle-panel">

@@ -67,6 +67,54 @@ a {
   overflow: auto;
 }
 
+.sider-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  overflow: auto;
+}
+
+.sider-shell > .sidebar-menu {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sidebar-build {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  color: #5b6b7d;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-build-version {
+  color: #243243;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-build-meta {
+  font-size: 10.5px;
+  color: rgba(91, 107, 125, 0.84);
+  font-weight: 500;
+}
+
+.sidebar-build.is-collapsed {
+  align-items: center;
+  padding: 8px 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: rgba(91, 107, 125, 0.78);
+}
+
 .content-scroll {
   flex: 1;
   overflow-x: hidden;
@@ -113,8 +161,7 @@ a {
   font-weight: 600;
   font-size: 12px;
   color: #435266;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
 }
 
 .n-data-table .n-data-table-td {
@@ -401,4 +448,83 @@ a {
 .empty-shell .n-empty-description,
 .empty-shell .n-empty__description {
   color: #5d6b7c;
+}
+
+/* --- Topbar logout button --- */
+.logout-button.n-button {
+  --n-color: rgba(15, 118, 110, 0.06);
+  --n-color-hover: rgba(15, 118, 110, 0.12);
+  --n-color-pressed: rgba(15, 118, 110, 0.16);
+  --n-text-color: #0f766e;
+  --n-text-color-hover: #0c5e57;
+  --n-text-color-pressed: #0a4f49;
+  --n-text-color-focus: #0f766e;
+  border-radius: 999px;
+  padding-left: 10px;
+  padding-right: 12px;
+  font-weight: 600;
+}
+
+/* --- DataTable: action column visual separators between text buttons --- */
+.n-data-table-td .n-button.n-button--text-type + .n-button.n-button--text-type {
+  position: relative;
+  margin-left: 4px;
+  padding-left: 4px;
+}
+
+.n-data-table-td .n-button.n-button--text-type + .n-button.n-button--text-type::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 1px;
+  height: 14px;
+  margin-top: -7px;
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* --- Modal preset=card: standardized footer --- */
+.modal-card .n-card__content {
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+.modal-footer-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 18px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+/* --- DataTable: tags should not stretch --- */
+.n-data-table .n-data-table-td .n-tag {
+  white-space: nowrap;
+}
+
+/* --- NCard header padding harmonization --- */
+.n-card.card-main > .n-card-header {
+  padding-top: 18px;
+  padding-bottom: 12px;
+}
+
+/* --- Section toolbar: header-extra row that wraps gracefully --- */
+.card-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-toolbar.is-end {
+  justify-content: flex-end;
+}
+
+/* --- Compact NInputNumber for header toolbars --- */
+.n-card-header .n-input-number,
+.card-toolbar .n-input-number {
+  --n-height: 30px;
 }

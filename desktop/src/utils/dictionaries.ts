@@ -58,7 +58,6 @@ export async function createTermDict(payload: { name: string, domain: string }):
 export async function createTermEntry(dictID: number, body: {
   correct_term: string
   wrong_variants?: string[]
-  pinyin?: string
 }) {
   const response = await authedFetch(`/api/admin/term-dicts/${dictID}/entries`, {
     method: 'POST',

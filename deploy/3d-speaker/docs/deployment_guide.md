@@ -36,7 +36,30 @@
 
 ## 3. 部署步骤
 
-### 方式一：Docker 部署（推荐）
+### 方式一：.run 一键离线安装（推荐交付）
+
+在已经完成模型下载、镜像构建或服务器部署的机器上执行：
+
+```bash
+cd deploy/3d-speaker
+./build.sh export-run
+```
+
+产物位于 `dist/speaker-analysis-service-<version>.run`，包内包含 Docker 镜像、`models/`、`config/`、`docker-compose.yml`、安装脚本和卸载脚本。复制到断网服务器后执行：
+
+```bash
+bash speaker-analysis-service-<version>.run
+```
+
+安装过程只会解包本地归档、校验并 `docker load` 内置镜像，然后使用 Docker Compose 启动服务；不会主动 `docker pull`、下载模型或安装 Python 包。默认访问地址为 `http://localhost:10002/docs`。
+
+如果服务器上的模型目录不在 `deploy/3d-speaker/models`，导出时指定：
+
+```bash
+./scripts/build-offline-run.sh --models-dir /data/speaker-analysis/models
+```
+
+### 方式二：Docker 部署（手动包）
 
 ```bash
 # 1. 将整个部署目录和导出的离线镜像包拷贝到目标服务器
@@ -52,11 +75,11 @@ cd speaker-analysis-service
 curl http://localhost:8100/api/v1/health
 ```
 
-说明：`./build.sh export` 只导出 Docker 镜像 tar.gz；因此离线部署时仍需要把当前目录下的 `build.sh`、`docker-compose.yml`、`config/` 等文件一并带到目标服务器。
+说明：`./build.sh export` 只导出 Docker 镜像 tar.gz；因此离线部署时仍需要把当前目录下的 `build.sh`、`docker-compose.yml`、`config/` 和完整 `models/` 一并带到目标服务器。最终交付建议优先使用 `.run`。
 
 说明：如果部署环境与打包环境分离，服务器侧需要准备完整的 `./models` 目录，并通过 Compose 挂载到容器内 `/app/models`。除了 `eres2netv2`、`campplus`、`fsmn_vad` 外，还必须包含 `native_cache`，否则 speakerlab 原生 diarization 会因为缺少 `campplus_cn_en_common.pt` 而回退兼容模式。
 
-### 方式二：裸机部署
+### 方式三：裸机部署
 
 ```bash
 # 1. 安装依赖与原生 speakerlab
@@ -87,7 +110,7 @@ make serve
 
 然后将整个 `models/` 目录同步到目标服务器。
 
-### 方式三：GPU 加速
+### 方式四：GPU 加速
 
 修改 `config/settings.yaml`:
 

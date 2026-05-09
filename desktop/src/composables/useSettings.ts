@@ -29,7 +29,7 @@ function normalize(raw?: Partial<RecognitionSettings>): RecognitionSettings {
     keepPunctuation: Boolean(r.keepPunctuation),
     minSpeechThreshold: clamp(Number(r.minSpeechThreshold) || DEFAULTS.minSpeechThreshold, 0.005, 0.08),
     noiseGateMultiplier: clamp(Number(r.noiseGateMultiplier) || DEFAULTS.noiseGateMultiplier, 1.2, 6),
-    endSilenceChunks: Math.round(clamp(Number(r.endSilenceChunks) || DEFAULTS.endSilenceChunks, 2, 10)),
+    endSilenceChunks: Math.round(clamp(Number(r.endSilenceChunks) || DEFAULTS.endSilenceChunks, 1, 20)),
     minEffectiveSpeechChunks: Math.round(clamp(Number(r.minEffectiveSpeechChunks) || DEFAULTS.minEffectiveSpeechChunks, 1, 6)),
     singleChunkPeakMultiplier: clamp(Number(r.singleChunkPeakMultiplier) || DEFAULTS.singleChunkPeakMultiplier, 1, 3),
   }

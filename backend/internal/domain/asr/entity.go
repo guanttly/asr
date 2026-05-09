@@ -53,6 +53,9 @@ type TranscriptionTask struct {
 	Duration          float64           `json:"duration"`    // audio duration in seconds
 	DictID            *uint64           `json:"dict_id"`     // optional terminology dict
 	WorkflowID        *uint64           `json:"workflow_id"` // optional workflow for post-processing
+	Language          string            `json:"language"`
+	UseITN            *bool             `json:"use_itn,omitempty"`
+	Hotwords          []string          `json:"hotwords,omitempty"`
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
 }

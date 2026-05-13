@@ -2,7 +2,7 @@
   "name": "asr-desktop-electron",
   "displayName": "巨鲨语音助手 (Win7)",
   "type": "module",
-  "version": "0.5.4",
+  "version": "0.6.6",
   "private": true,
   "description": "Electron 22 客户端，专门用于打 Windows 7 兼容的安装包；UI 复用 desktop/src 同一套 Vue 代码。",
   "main": "dist-electron/main/index.cjs",

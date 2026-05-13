@@ -63,6 +63,23 @@ update_env_value() {
   mv "$TMP_FILE" "$FILE_PATH"
 }
 
+backup_optional_file() {
+  SRC_PATH="$1"
+  DEST_PATH="$2"
+  LABEL="$3"
+
+  if [ ! -e "$SRC_PATH" ]; then
+    return 0
+  fi
+
+  if [ ! -r "$SRC_PATH" ]; then
+    echo "警告: 跳过备份 ${LABEL}，当前用户无权读取 $SRC_PATH；安装不会覆盖现有文件。" >&2
+    return 0
+  fi
+
+  cp "$SRC_PATH" "$DEST_PATH"
+}
+
 detect_primary_ip() {
   if command -v hostname >/dev/null 2>&1; then
     hostname -I 2>/dev/null | awk '{print $1}'
@@ -336,8 +353,8 @@ mkdir -p "$BACKUP_DIR"
 [ -f .env ] && cp .env "$BACKUP_DIR/.env"
 [ -f docker-compose.yml ] && cp docker-compose.yml "$BACKUP_DIR/docker-compose.yml"
 [ -f .release-manifest ] && cp .release-manifest "$BACKUP_DIR/.release-manifest"
-[ -f runtime/certs/tls.crt ] && cp runtime/certs/tls.crt "$BACKUP_DIR/tls.crt"
-[ -f runtime/certs/tls.key ] && cp runtime/certs/tls.key "$BACKUP_DIR/tls.key"
+backup_optional_file runtime/certs/tls.crt "$BACKUP_DIR/tls.crt" "现有 TLS 证书"
+backup_optional_file runtime/certs/tls.key "$BACKUP_DIR/tls.key" "现有 TLS 私钥"
 
 CURRENT_IMAGE=""
 if docker container inspect "$ASR_CONTAINER_NAME" >/dev/null 2>&1; then

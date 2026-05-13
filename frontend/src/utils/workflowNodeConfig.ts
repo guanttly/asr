@@ -9,6 +9,16 @@ interface RegexRule {
   enabled: boolean
 }
 
+export const DEFAULT_LLM_CORRECTION_PROMPT = `你是一个专业的语音转写文本校对助手。请只修正语音识别造成的错别字、同音误识别、标点和明显语序问题，保持原意、语气、人名、数字和专业术语不变。
+
+要求：
+1. 只输出纠错后的正文，不要解释、不要标题、不要列表。
+2. 如果原文为空或只有空白，直接输出空字符串，不要补充提示语。
+3. 无法确定的内容保持原样，不要编造。
+
+原文：
+{{TEXT}}`
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Object.prototype.toString.call(value) === '[object Object]'
 }
@@ -86,7 +96,7 @@ export function fallbackNodeDefaultConfig(type: string): Record<string, unknown>
     case 'sensitive_filter':
       return { dict_id: 0, custom_words: [], replacement: '[已过滤]' }
     case 'llm_correction':
-      return { endpoint: '', model: '', api_key: '', prompt_template: '', temperature: 0.3, max_tokens: 4096, allow_markdown: false }
+      return { endpoint: '', model: '', api_key: '', prompt_template: DEFAULT_LLM_CORRECTION_PROMPT, temperature: 0.3, max_tokens: 4096, allow_markdown: false }
     case 'voice_intent':
       return { enable_llm: false, endpoint: '', model: '', api_key: '', prompt_template: '', extra_prompt: '', temperature: 0, max_tokens: 512, include_base: true, dict_ids: [] }
     case 'speaker_diarize':

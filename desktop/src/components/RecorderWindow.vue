@@ -12,10 +12,11 @@ const dragHandleActive = ref(false)
 
 const DRAG_HANDLE_RADIUS_RATIO = 0.45
 const DRAG_START_THRESHOLD_PX = 4
+const DRAG_CLICK_SUPPRESS_MS = 500
 
 let pendingDrag: { startX: number, startY: number } | null = null
 let dragInProgress = false
-let suppressNextClick = false
+let suppressClickUntil = 0
 
 const orbState = computed(() => {
   if (!appStore.isRecording) return 'idle'
@@ -56,6 +57,7 @@ function endDrag() {
   clearPendingDrag()
   if (dragInProgress) {
     dragInProgress = false
+    suppressClickUntil = Date.now() + DRAG_CLICK_SUPPRESS_MS
     // Tauri 没有 stopDragging（系统接管 mouseup 自动结束），
     // Electron Win7 用此调用通知主进程结束 cursor 轮询拖拽。
     const stop = (appWindow as { stopDragging?: () => Promise<void> }).stopDragging
@@ -75,10 +77,6 @@ function handleDragMove(event: MouseEvent) {
   pendingDrag = null
   window.removeEventListener('mousemove', handleDragMove)
   dragInProgress = true
-  suppressNextClick = true
-  window.setTimeout(() => {
-    suppressNextClick = false
-  }, 500)
   void appWindow.startDragging().catch(() => undefined)
 }
 
@@ -96,10 +94,10 @@ function startDrag(event: MouseEvent) {
 }
 
 function suppressClickAfterDrag(event: MouseEvent) {
-  if (!suppressNextClick)
+  if (Date.now() > suppressClickUntil)
     return
 
-  suppressNextClick = false
+  suppressClickUntil = 0
   event.preventDefault()
   event.stopPropagation()
 }

@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	domain "github.com/lgt/asr/internal/domain/workflow"
@@ -428,6 +429,10 @@ func TestUpdateNodeDefaultReturnsEffectiveConfig(t *testing.T) {
 	}
 	if payload["temperature"] != 0.3 {
 		t.Fatalf("expected builtin default temperature to be preserved, got %+v", payload["temperature"])
+	}
+	promptTemplate, _ := payload["prompt_template"].(string)
+	if !strings.Contains(promptTemplate, "空字符串") {
+		t.Fatalf("expected effective default config to include builtin prompt, got %q", promptTemplate)
 	}
 }
 

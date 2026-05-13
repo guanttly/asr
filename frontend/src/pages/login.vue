@@ -111,8 +111,8 @@ async function handleLogin() {
           <NButton block type="primary" color="#0f766e" size="large" :loading="loading" @click="handleLogin">
             进入系统
           </NButton>
-          <NButton block class="mt-3" tertiary size="large" @click="openDownloads">
-            打开终端下载页
+          <NButton block class="mt-3" secondary type="primary" color="#0f766e" size="large" @click="openDownloads">
+            下载桌面端
           </NButton>
         </NForm>
       </section>

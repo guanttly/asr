@@ -9,6 +9,16 @@ import (
 	domain "github.com/lgt/asr/internal/domain/workflow"
 )
 
+const defaultLLMCorrectionPrompt = `你是一个专业的语音转写文本校对助手。请只修正语音识别造成的错别字、同音误识别、标点和明显语序问题，保持原意、语气、人名、数字和专业术语不变。
+
+要求：
+1. 只输出纠错后的正文，不要解释、不要标题、不要列表。
+2. 如果原文为空或只有空白，直接输出空字符串，不要补充提示语。
+3. 无法确定的内容保持原样，不要编造。
+
+原文：
+{{TEXT}}`
+
 func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	switch nodeType {
 	case domain.NodeTermCorrection:
@@ -18,7 +28,7 @@ func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	case domain.NodeSensitiveFilter:
 		return map[string]any{"dict_id": 0, "custom_words": []string{}, "replacement": "[已过滤]"}
 	case domain.NodeLLMCorrection:
-		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "temperature": 0.3, "max_tokens": 4096, "allow_markdown": false}
+		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": defaultLLMCorrectionPrompt, "temperature": 0.3, "max_tokens": 4096, "allow_markdown": false}
 	case domain.NodeVoiceWake:
 		return map[string]any{"wake_words": []string{"你好小鲨"}, "homophone_words": []string{"你好小沙", "你好小莎", "你好小善"}}
 	case domain.NodeVoiceIntent:
@@ -160,6 +170,7 @@ func (s *Service) resolveGlobalNodeDefault(ctx context.Context, nodeType domain.
 	base := builtinNodeDefaultConfig(nodeType)
 	result := cloneConfigMap(base)
 	if s.nodeDefaultRepo == nil {
+		normalizeResolvedNodeDefault(nodeType, result)
 		return mustMarshalNodeConfig(result), nil
 	}
 
@@ -168,6 +179,7 @@ func (s *Service) resolveGlobalNodeDefault(ctx context.Context, nodeType domain.
 		return nil, err
 	}
 	if item == nil || strings.TrimSpace(item.Config) == "" {
+		normalizeResolvedNodeDefault(nodeType, result)
 		return mustMarshalNodeConfig(result), nil
 	}
 
@@ -175,7 +187,19 @@ func (s *Service) resolveGlobalNodeDefault(ctx context.Context, nodeType domain.
 	if err != nil {
 		return nil, fmt.Errorf("invalid stored default config for %s: %w", nodeType, err)
 	}
-	return mustMarshalNodeConfig(mergeExplicitConfigMaps(result, override)), nil
+	result = mergeExplicitConfigMaps(result, override)
+	normalizeResolvedNodeDefault(nodeType, result)
+	return mustMarshalNodeConfig(result), nil
+}
+
+func normalizeResolvedNodeDefault(nodeType domain.NodeType, config map[string]any) {
+	if nodeType != domain.NodeLLMCorrection {
+		return
+	}
+	promptTemplate, _ := config["prompt_template"].(string)
+	if strings.TrimSpace(promptTemplate) == "" {
+		config["prompt_template"] = defaultLLMCorrectionPrompt
+	}
 }
 
 func (s *Service) resolveNodeConfig(ctx context.Context, nodeType domain.NodeType, raw json.RawMessage) (json.RawMessage, error) {

@@ -226,6 +226,7 @@ const menuOptions = computed<MenuOption[]>(() => {
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
         { label: '对接管理', key: '/system/openapi', icon: renderMenuIcon('openapi', '对接管理') },
+        { label: '终端下载', key: '/downloads', icon: renderMenuIcon('downloads', '终端下载') },
       ],
     },
   ]

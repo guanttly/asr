@@ -675,7 +675,12 @@ onMounted(loadOverview)
     <section class="flex-1 min-h-0 grid min-w-0 grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.28fr)]">
       <NCard class="card-main min-w-0 flex flex-col min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <template #header>
-          <span class="text-sm font-600">系统态势</span>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-sm font-600">系统态势</span>
+            <NButton quaternary size="small" @click="router.push('/downloads')">
+              终端下载
+            </NButton>
+          </div>
         </template>
         <div class="grid min-w-0 gap-3 md:grid-cols-2">
           <div class="rounded-2.5 bg-mist/60 p-3.5">

@@ -191,13 +191,13 @@ async function loadWorkflowBuckets() {
   loading.value = true
   try {
     const tasks: Array<Promise<unknown>> = [
-		realtimeCatalog.loadWorkflows(),
-		batchCatalog.loadWorkflows(),
-	]
+      realtimeCatalog.loadWorkflows(),
+      batchCatalog.loadWorkflows(),
+    ]
     if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING))
-		tasks.push(meetingCatalog.loadWorkflows())
+      tasks.push(meetingCatalog.loadWorkflows())
     if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
-		tasks.push(voiceCatalog.loadWorkflows())
+      tasks.push(voiceCatalog.loadWorkflows())
     const results = await Promise.allSettled(tasks)
 
     if (results.some(result => result.status === 'rejected'))
@@ -284,6 +284,9 @@ onMounted(() => {
                 {{ configuredCount }}/{{ availableSections.length }}
               </div>
             </div>
+            <NButton secondary type="primary" color="#0f766e" @click="router.push('/downloads')">
+              终端下载
+            </NButton>
             <NButton quaternary @click="router.push('/workflows')">
               管理工作流
             </NButton>

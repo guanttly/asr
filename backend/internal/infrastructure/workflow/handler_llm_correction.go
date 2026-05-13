@@ -24,7 +24,12 @@ type LLMCorrectionConfig struct {
 	AllowMarkdown  bool    `json:"allow_markdown,omitempty"`
 }
 
-const defaultLLMPrompt = `你是一个专业的文本校对助手。请对以下语音转写文本进行纠错，修正错别字、语法错误和不通顺的表述，但保持原意不变。只输出纠错后的文本，不要添加任何解释。
+const defaultLLMPrompt = `你是一个专业的语音转写文本校对助手。请只修正语音识别造成的错别字、同音误识别、标点和明显语序问题，保持原意、语气、人名、数字和专业术语不变。
+
+要求：
+1. 只输出纠错后的正文，不要解释、不要标题、不要列表。
+2. 如果原文为空或只有空白，直接输出空字符串，不要补充提示语。
+3. 无法确定的内容保持原样，不要编造。
 
 原文：
 {{TEXT}}`
@@ -65,6 +70,10 @@ func (h *LLMCorrectionHandler) Validate(config json.RawMessage) error {
 }
 
 func (h *LLMCorrectionHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta) (string, json.RawMessage, error) {
+	if strings.TrimSpace(inputText) == "" {
+		return "", emptyLLMCorrectionDetail(false), nil
+	}
+
 	cfg, prompt, temperature, maxTokens, endpoint, err := h.prepareRequest(config, inputText)
 	if err != nil {
 		return inputText, nil, err
@@ -77,6 +86,10 @@ func (h *LLMCorrectionHandler) Execute(ctx context.Context, config json.RawMessa
 }
 
 func (h *LLMCorrectionHandler) ExecuteStream(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta, emit StreamEmitter) (string, json.RawMessage, error) {
+	if strings.TrimSpace(inputText) == "" {
+		return "", emptyLLMCorrectionDetail(true), nil
+	}
+
 	cfg, prompt, temperature, maxTokens, endpoint, err := h.prepareRequest(config, inputText)
 	if err != nil {
 		return inputText, nil, err
@@ -113,6 +126,15 @@ func (h *LLMCorrectionHandler) prepareRequest(config json.RawMessage, inputText 
 		return LLMCorrectionConfig{}, "", 0, 0, "", err
 	}
 	return cfg, prompt, temperature, maxTokens, endpoint, nil
+}
+
+func emptyLLMCorrectionDetail(streamed bool) json.RawMessage {
+	detail, _ := json.Marshal(map[string]interface{}{
+		"skipped":  true,
+		"reason":   "empty_input",
+		"streamed": streamed,
+	})
+	return detail
 }
 
 func parseLLMResponse(respBody []byte, allowMarkdown bool, usedMaxTokens int) (string, json.RawMessage, error) {

@@ -184,6 +184,59 @@ func TestLLMCorrectionHandlerRetriesWithProviderMaxTokenRange(t *testing.T) {
 	}
 }
 
+func TestLLMCorrectionHandlerSkipsEmptyInput(t *testing.T) {
+	var callCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"不应该调用"}}]}`))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"temperature": 0.3,
+		"max_tokens": 512
+	}`)
+
+	output, detail, err := handler.Execute(context.Background(), configBytes, "  \n\t  ", nil)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if output != "" {
+		t.Fatalf("expected empty output, got %q", output)
+	}
+
+	streamOutput, streamDetail, err := handler.ExecuteStream(context.Background(), configBytes, "", nil, nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream returned error: %v", err)
+	}
+	if streamOutput != "" {
+		t.Fatalf("expected empty stream output, got %q", streamOutput)
+	}
+	if callCount.Load() != 0 {
+		t.Fatalf("expected no LLM requests for empty input, got %d", callCount.Load())
+	}
+
+	var parsedDetail map[string]any
+	if err := json.Unmarshal(detail, &parsedDetail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if parsedDetail["skipped"] != true || parsedDetail["reason"] != "empty_input" {
+		t.Fatalf("unexpected empty-input detail: %+v", parsedDetail)
+	}
+
+	var parsedStreamDetail map[string]any
+	if err := json.Unmarshal(streamDetail, &parsedStreamDetail); err != nil {
+		t.Fatalf("unmarshal stream detail: %v", err)
+	}
+	if parsedStreamDetail["streamed"] != true {
+		t.Fatalf("expected streamed=true for stream skip detail, got %+v", parsedStreamDetail)
+	}
+}
+
 func TestLLMCorrectionHandlerNormalizesMarkdownOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

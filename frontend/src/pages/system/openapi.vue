@@ -3,6 +3,7 @@ import type { AxiosError } from 'axios'
 import type { DataTableColumns } from 'naive-ui'
 import type { OpenPlatformApp, OpenPlatformCallLog, OpenPlatformCapability, OpenPlatformCreateAppPayload, OpenPlatformCreateAppResponse } from '@/api/openplatform'
 
+import MarkdownIt from 'markdown-it'
 import { NButton, NTag, useMessage } from 'naive-ui'
 import { computed, h, reactive, ref, watch } from 'vue'
 
@@ -13,6 +14,7 @@ import {
   getOpenPlatformAppCalls,
   getOpenPlatformApps,
   getOpenPlatformCapabilities,
+  getOpenPlatformDocs,
   revokeOpenPlatformApp,
   rotateOpenPlatformAppSecret,
   updateOpenPlatformApp,
@@ -36,6 +38,11 @@ const initializing = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const keyword = ref('')
+const activeTab = ref('apps')
+const docsLoading = ref(false)
+const docsContent = ref('')
+const docsCapabilityFilter = ref('all')
+const docsKeyword = ref('')
 
 const apps = ref<OpenPlatformApp[]>([])
 const capabilities = ref<OpenPlatformCapability[]>([])
@@ -120,6 +127,31 @@ const disabledCount = computed(() => apps.value.filter(item => item.status === '
 const revokedCount = computed(() => apps.value.filter(item => item.status === 'revoked').length)
 const selectedCapabilityCount = computed(() => form.allowed_caps.length)
 const modalTitle = computed(() => editingAppId.value ? '编辑 OpenAPI 应用' : '新增 OpenAPI 应用')
+const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true })
+const docsCapabilityOptions = computed(() => [
+  { label: '全部能力', value: 'all' },
+  ...capabilities.value.map(item => ({ label: item.display_name || item.id, value: item.id })),
+])
+const filteredDocsContent = computed(() => {
+  const content = docsContent.value.trim()
+  const keyword = docsKeyword.value.trim().toLowerCase()
+  const selectedCapability = docsCapabilityFilter.value === 'all' ? null : capabilityMap.value.get(docsCapabilityFilter.value)
+  if (!content || (!keyword && !selectedCapability))
+    return content
+
+  const capabilityTerms = selectedCapability
+    ? [selectedCapability.id, selectedCapability.display_name, selectedCapability.description].filter(Boolean).map(item => String(item).toLowerCase())
+    : []
+  const sections = content.split(/\n(?=#{1,3}\s+)/g)
+  const matched = sections.filter((section) => {
+    const haystack = section.toLowerCase()
+    const matchesCapability = capabilityTerms.length === 0 || capabilityTerms.some(term => haystack.includes(term))
+    const matchesKeyword = !keyword || haystack.includes(keyword)
+    return matchesCapability && matchesKeyword
+  })
+  return matched.length > 0 ? matched.join('\n\n') : '未找到匹配的文档章节。'
+})
+const renderedDocs = computed(() => markdown.render(filteredDocsContent.value || ''))
 
 const filteredApps = computed(() => {
   const value = keyword.value.trim().toLowerCase()
@@ -240,6 +272,48 @@ async function loadCapabilities() {
   capabilities.value = result.data.items || []
 }
 
+async function loadDocs() {
+  docsLoading.value = true
+  try {
+    const result = await getOpenPlatformDocs()
+    docsContent.value = result.data.content || ''
+  }
+  catch (error) {
+    message.error(extractErrorMessage(error, 'OpenAPI 对接文档加载失败'))
+  }
+  finally {
+    docsLoading.value = false
+  }
+}
+
+async function copyText(text: string, successMessage: string) {
+  if (!text.trim()) {
+    message.warning('没有可复制的内容')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(successMessage)
+  }
+  catch {
+    message.error('复制失败，请检查浏览器剪贴板权限')
+  }
+}
+
+function copyDocsContent() {
+  void copyText(filteredDocsContent.value, '已复制当前文档内容')
+}
+
+function copyAuthExample() {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://your-asr-host'
+  const sample = [
+    `curl -X POST ${origin}/openapi/v1/auth/token \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '{"app_id":"YOUR_APP_ID","app_secret":"YOUR_APP_SECRET"}'`,
+  ].join('\n')
+  void copyText(sample, '已复制鉴权 curl 示例')
+}
+
 async function loadApps() {
   loading.value = true
   try {
@@ -273,6 +347,7 @@ async function initializePage() {
     await Promise.allSettled([
       loadCapabilities(),
       loadApps(),
+      loadDocs(),
       loadWorkflowCatalogs(),
     ])
   }
@@ -572,6 +647,11 @@ watch(
   },
   { immediate: true },
 )
+
+watch(activeTab, (tab) => {
+  if (tab === 'docs' && !docsContent.value && !docsLoading.value)
+    void loadDocs()
+})
 </script>
 
 <template>
@@ -582,30 +662,33 @@ watch(
 
     <template v-else>
       <NCard class="card-main flex flex-col min-h-0 flex-1" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
-        <template #header>
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="grid gap-1">
-              <span class="text-sm font-600">OpenAPI 应用</span>
-              <span class="text-xs text-slate">管理 app_id / app_secret、能力授权、默认工作流和最近调用日志。</span>
+        <NTabs v-model:value="activeTab" type="line" animated class="flex-1 min-h-0 flex flex-col">
+          <NTabPane name="apps" tab="应用管理" display-directive="show">
+            <template #tab>
+              应用管理
+            </template>
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-4">
+              <div class="grid gap-1">
+                <span class="text-sm font-600">OpenAPI 应用</span>
+                <span class="text-xs text-slate">管理 app_id / app_secret、能力授权、默认工作流和最近调用日志。</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <NInput v-model:value="keyword" clearable placeholder="搜索名称 / App ID / 能力" size="small" class="w-full sm:!w-72" />
+                <NButton quaternary size="small" :loading="loading || initializing" @click="initializePage">
+                  刷新
+                </NButton>
+                <NButton type="primary" size="small" color="#0f766e" @click="openCreateModal">
+                  新增应用
+                </NButton>
+              </div>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <NInput v-model:value="keyword" clearable placeholder="搜索名称 / App ID / 能力" size="small" class="w-full sm:!w-72" />
-              <NButton quaternary size="small" :loading="loading || initializing" @click="initializePage">
-                刷新
-              </NButton>
-              <NButton type="primary" size="small" color="#0f766e" @click="openCreateModal">
-                新增应用
-              </NButton>
-            </div>
-          </div>
-        </template>
 
-        <div class="flex flex-col gap-4 py-4 flex-1 min-h-0">
-          <NAlert type="info" :show-icon="false">
-            创建应用或重置密钥后，前端只会展示一次完整的 app_secret；关闭后列表中仅保留掩码提示。
-          </NAlert>
+            <div class="flex flex-col gap-4 py-4 flex-1 min-h-0">
+              <NAlert type="info" :show-icon="false">
+                创建应用或重置密钥后，前端只会展示一次完整的 app_secret；关闭后列表中仅保留掩码提示。
+              </NAlert>
 
-          <div class="grid gap-3 md:grid-cols-4 shrink-0">
+              <div class="grid gap-3 md:grid-cols-4 shrink-0">
             <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
               <div class="text-xs text-slate/80">应用总数</div>
               <div class="mt-2 text-2xl font-700 text-ink">
@@ -630,19 +713,38 @@ watch(
                 {{ revokedCount }}
               </div>
             </div>
-          </div>
+              </div>
 
-          <NDataTable
-            flex-height
-            class="flex-1 min-h-0"
-            :columns="appColumns"
-            :data="filteredApps"
-            :loading="loading"
-            :pagination="{ pageSize: 10 }"
-            :scroll-x="1680"
-            size="small"
-          />
-        </div>
+              <NDataTable
+                flex-height
+                class="flex-1 min-h-0"
+                :columns="appColumns"
+                :data="filteredApps"
+                :loading="loading"
+                :pagination="{ pageSize: 10 }"
+                :scroll-x="1680"
+                size="small"
+              />
+            </div>
+          </NTabPane>
+          <NTabPane name="docs" tab="对接文档" display-directive="show:lazy">
+            <div class="flex flex-col gap-3 py-4">
+              <div class="flex flex-wrap items-center gap-2">
+                <NSelect v-model:value="docsCapabilityFilter" class="w-full sm:!w-56" size="small" :options="docsCapabilityOptions" />
+                <NInput v-model:value="docsKeyword" clearable placeholder="搜索接口、字段或示例" size="small" class="w-full sm:!w-72" />
+                <NButton size="small" quaternary @click="copyDocsContent">
+                  复制当前文档
+                </NButton>
+                <NButton size="small" quaternary @click="copyAuthExample">
+                  复制鉴权示例
+                </NButton>
+              </div>
+              <NSpin :show="docsLoading">
+                <div class="prose max-w-none rounded-3 border border-gray-200/70 bg-white/70 p-5 text-sm leading-7" v-html="renderedDocs" />
+              </NSpin>
+            </div>
+          </NTabPane>
+        </NTabs>
       </NCard>
 
       <NModal v-model:show="formVisible" preset="card" :title="modalTitle" class="modal-card max-w-220">

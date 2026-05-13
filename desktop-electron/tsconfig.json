@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@/*": ["../desktop/src/*"],
+      "@tauri-apps/api/core": ["./src/shim/tauri-core.ts"],
+      "@tauri-apps/api/window": ["./src/shim/tauri-window.ts"],
+      "@tauri-apps/api/event": ["./src/shim/tauri-event.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "electron/**/*.ts",
+    "scripts/**/*.ts",
+    "../desktop/src/**/*.ts",
+    "../desktop/src/**/*.vue"
+  ],
+  "exclude": ["node_modules", "dist", "dist-electron"]
+}

@@ -58,7 +58,9 @@ pub fn configure_hotkeys(
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{HotkeyBindingPayload, HotkeyConfigureResult, HotkeyModifiersPayload, HotkeyTriggerPayload};
+    use super::{
+        HotkeyBindingPayload, HotkeyConfigureResult, HotkeyModifiersPayload, HotkeyTriggerPayload,
+    };
     use std::collections::{BTreeSet, HashMap};
     use std::ptr::null_mut;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -69,16 +71,16 @@ mod windows_impl {
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL,
-        MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN,
-        VK_END, VK_ESCAPE, VK_HOME, VK_INSERT, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR,
-        VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+        GetAsyncKeyState, RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+        MOD_SHIFT, MOD_WIN, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME,
+        VK_INSERT, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
+        VK_TAB, VK_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, HHOOK, MSG,
-        MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
-        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_MOUSE_LL,
-        WM_APP, WM_HOTKEY, WM_XBUTTONDOWN, XBUTTON1, XBUTTON2,
+        CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, MSG,
+        MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL, WM_APP, WM_HOTKEY, WM_XBUTTONDOWN, XBUTTON1,
+        XBUTTON2,
     };
 
     const HOTKEY_ACTION_EVENT: &str = "desktop-hotkey-action";
@@ -171,8 +173,9 @@ mod windows_impl {
 
         let thread_id = HOTKEY_THREAD_ID.load(Ordering::SeqCst);
         if thread_id != 0 {
-            unsafe {
-                PostThreadMessageW(thread_id, HOTKEY_WAKE_MESSAGE, 0, 0);
+            let posted = unsafe { PostThreadMessageW(thread_id, HOTKEY_WAKE_MESSAGE, 0, 0) };
+            if posted == 0 {
+                return Err("无法唤醒 Windows 热键线程，请重启应用后重试".to_string());
             }
         }
 
@@ -194,7 +197,8 @@ mod windows_impl {
         let thread_id = unsafe { GetCurrentThreadId() };
         HOTKEY_THREAD_ID.store(thread_id, Ordering::SeqCst);
 
-        let mouse_hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), null_mut(), 0) };
+        let mouse_hook =
+            unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_proc), null_mut(), 0) };
         if mouse_hook.is_null() {
             let _ = ready_tx.send(Err("failed to install low-level mouse hook".to_string()));
             return;
@@ -246,7 +250,10 @@ mod windows_impl {
     fn drain_commands(receiver: &Receiver<ServiceCommand>) {
         while let Ok(command) = receiver.try_recv() {
             match command {
-                ServiceCommand::Configure { bindings, responder } => {
+                ServiceCommand::Configure {
+                    bindings,
+                    responder,
+                } => {
                     let result = configure_hotkeys_internal(bindings);
                     let _ = responder.send(result);
                 }
@@ -529,7 +536,8 @@ mod windows_impl {
             ctrl: unsafe { GetAsyncKeyState(i32::from(VK_CONTROL)) } < 0,
             alt: unsafe { GetAsyncKeyState(i32::from(VK_MENU)) } < 0,
             shift: unsafe { GetAsyncKeyState(i32::from(VK_SHIFT)) } < 0,
-            meta: unsafe { GetAsyncKeyState(VK_LWIN) } < 0 || unsafe { GetAsyncKeyState(VK_RWIN) } < 0,
+            meta: unsafe { GetAsyncKeyState(VK_LWIN) } < 0
+                || unsafe { GetAsyncKeyState(VK_RWIN) } < 0,
         }
     }
 
@@ -550,6 +558,8 @@ mod windows_impl {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        let mut handled = false;
+
         if code == HC_ACTION as i32 && wparam as u32 == WM_XBUTTONDOWN {
             let info = *(lparam as *const MSLLHOOKSTRUCT);
             if let Some(button) = mouse_button_from_xbutton(info.mouseData) {
@@ -573,8 +583,13 @@ mod windows_impl {
 
                 if let Some(action) = action {
                     dispatch_action(&action);
+                    handled = true;
                 }
             }
+        }
+
+        if handled {
+            return 1 as LRESULT;
         }
 
         CallNextHookEx(null_mut(), code, wparam, lparam)

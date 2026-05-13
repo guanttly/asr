@@ -862,23 +862,6 @@ async function loadWorkflowOptions() {
   }
 }
 
-function exportTranscript() {
-  if (!effectiveOutputText.value) {
-    message.warning('当前没有可导出的输出结果')
-    return
-  }
-
-  const blob = new Blob([effectiveOutputText.value], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `realtime-transcription-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(url)
-}
-
 async function copyTranscript() {
   if (!effectiveOutputText.value) {
     message.warning('当前没有可复制的输出结果')
@@ -1125,9 +1108,6 @@ onBeforeUnmount(() => {
           <NButton size="small" quaternary :disabled="!effectiveOutputText || savingSession" :loading="savingSession" @click="copyTranscript">
             复制输出
           </NButton>
-          <NButton size="small" quaternary :disabled="!effectiveOutputText" @click="exportTranscript">
-            导出输出
-          </NButton>
           <NButton size="small" quaternary @click="router.push('/transcription')">
             去批量转写
           </NButton>
@@ -1159,7 +1139,6 @@ onBeforeUnmount(() => {
             empty-title="未配置实时应用工作流"
             empty-description="前往应用配置页设置后，前端按停顿切出的每个句子都会即时执行这里展示的默认节点链路；停止录音时系统还会再做一次整段复核。"
           />
-
           <div class="mt-4 grid gap-3 xl:grid-cols-[1.4fr_0.8fr]">
             <div class="subtle-panel m-0">
               <div class="flex flex-wrap items-start justify-between gap-3">

@@ -1,0 +1,44 @@
+appId: com.asr.desktop.win7
+productName: 巨鲨语音助手
+copyright: Copyright © 2025
+asar: true
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+
+extraResources:
+  - from: ../desktop/src-tauri/icons/icon.png
+    to: icons/icon.png
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  executableName: JushaVoiceAssistant
+  icon: ../desktop/src-tauri/icons/icon.ico
+  artifactName: ${productName}_${version}_win7_x64-setup.${ext}
+  # Electron 22 是最后一个支持 Windows 7 SP1 的官方版本
+  requestedExecutionLevel: asInvoker
+  # 这里必须保留默认的 signAndEditExecutable=true，
+  # 否则 electron-builder 不会把 Win10 复用过来的 ico 写进 exe 资源，
+  # 桌面快捷方式、开始菜单和安装目录里的主程序图标都会丢失。
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 巨鲨语音助手
+  installerIcon: ../desktop/src-tauri/icons/icon.ico
+  uninstallerIcon: ../desktop/src-tauri/icons/icon.ico
+  deleteAppDataOnUninstall: false

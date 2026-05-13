@@ -1,5 +1,5 @@
 import type { WorkflowBindingKey, WorkflowBindings } from '@/types/workflow'
-import type { ProductCapabilitiesPayload, ProductFeaturesPayload } from '@/api/appSettings'
+import type { HardwareProfilePayload, ProductCapabilitiesPayload, ProductFeaturesPayload, ProductLanguagePayload } from '@/api/appSettings'
 import type { ProductFeatureKey } from '@/constants/product'
 
 import { defineStore } from 'pinia'
@@ -11,6 +11,29 @@ import { WORKFLOW_BINDING_KEYS } from '@/types/workflow'
 
 const LEGACY_WORKFLOW_BINDINGS_STORAGE_KEY = 'asr_app_workflow_bindings'
 
+function defaultProductLanguages(): ProductLanguagePayload[] {
+  return [
+    { code: 'zh-CN', label: '普通话' },
+    { code: 'zh', label: '中文' },
+    { code: 'en-US', label: '英文（美）' },
+  ]
+}
+
+function defaultHardwareRequirements(): Partial<Record<typeof PRODUCT_EDITIONS[keyof typeof PRODUCT_EDITIONS], HardwareProfilePayload>> {
+  return {
+    [PRODUCT_EDITIONS.STANDARD]: {
+      tier: PRODUCT_EDITIONS.STANDARD,
+      minimum: { cpu: '8 核', memory: '16 GB', storage: '200 GB SSD', acceleration: 'RTX 3090' },
+      recommended: { cpu: '16 核', memory: '32 GB', storage: '500 GB SSD', acceleration: 'A10 / A100' },
+    },
+    [PRODUCT_EDITIONS.ADVANCED]: {
+      tier: PRODUCT_EDITIONS.ADVANCED,
+      minimum: { cpu: '16 核', memory: '32 GB', storage: '500 GB SSD', acceleration: 'A10' },
+      recommended: { cpu: '16 核及以上', memory: '32 GB 及以上', storage: '500 GB SSD 及以上', acceleration: 'A100' },
+    },
+  }
+}
+
 function defaultProductFeatures(): ProductFeaturesPayload {
   return {
     edition: PRODUCT_EDITIONS.STANDARD,
@@ -21,6 +44,9 @@ function defaultProductFeatures(): ProductFeaturesPayload {
       [PRODUCT_FEATURE_KEYS.VOICEPRINT]: false,
       [PRODUCT_FEATURE_KEYS.VOICE_CONTROL]: false,
     },
+    supported_languages: defaultProductLanguages(),
+    hardware_tier: PRODUCT_EDITIONS.STANDARD,
+    hardware_requirements: defaultHardwareRequirements(),
   }
 }
 
@@ -36,6 +62,13 @@ function normalizeProductFeatures(raw?: Partial<ProductFeaturesPayload> | null):
       [PRODUCT_FEATURE_KEYS.VOICEPRINT]: capabilities[PRODUCT_FEATURE_KEYS.VOICEPRINT] === true,
       [PRODUCT_FEATURE_KEYS.VOICE_CONTROL]: capabilities[PRODUCT_FEATURE_KEYS.VOICE_CONTROL] === true,
     },
+    supported_languages: Array.isArray(raw?.supported_languages) && raw.supported_languages.length > 0
+      ? raw.supported_languages.filter(item => typeof item.code === 'string' && typeof item.label === 'string')
+      : defaults.supported_languages,
+    hardware_tier: raw?.hardware_tier === PRODUCT_EDITIONS.ADVANCED ? PRODUCT_EDITIONS.ADVANCED : defaults.hardware_tier,
+    hardware_requirements: raw?.hardware_requirements && Object.keys(raw.hardware_requirements).length > 0
+      ? { ...defaults.hardware_requirements, ...raw.hardware_requirements }
+      : defaults.hardware_requirements,
   }
 }
 
@@ -101,6 +134,9 @@ export const useAppStore = defineStore('app', {
     siderCollapsed: false,
     productEdition: defaultProductFeatures().edition,
     productCapabilities: defaultProductFeatures().capabilities,
+    productSupportedLanguages: defaultProductFeatures().supported_languages,
+    productHardwareTier: defaultProductFeatures().hardware_tier,
+    productHardwareRequirements: defaultProductFeatures().hardware_requirements,
     productFeaturesReady: false,
     workflowBindings: defaultWorkflowBindings(),
     workflowBindingsReady: false,
@@ -118,6 +154,9 @@ export const useAppStore = defineStore('app', {
     const normalized = normalizeProductFeatures(payload)
     this.productEdition = normalized.edition
     this.productCapabilities = normalized.capabilities
+    this.productSupportedLanguages = normalized.supported_languages
+    this.productHardwareTier = normalized.hardware_tier
+    this.productHardwareRequirements = normalized.hardware_requirements
     this.productFeaturesReady = true
     this.workflowBindings = sanitizeWorkflowBindings(this.workflowBindings, normalized.capabilities)
   },

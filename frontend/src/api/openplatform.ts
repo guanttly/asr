@@ -52,8 +52,18 @@ export interface OpenPlatformCallLog {
   created_at?: string
 }
 
+export interface OpenPlatformDocsPayload {
+  format: 'markdown'
+  content: string
+  capabilities: OpenPlatformCapability[]
+}
+
 export function getOpenPlatformCapabilities() {
   return request.get('/api/admin/openplatform/capabilities')
+}
+
+export function getOpenPlatformDocs() {
+  return request.get<OpenPlatformDocsPayload>('/api/admin/openapi/docs')
 }
 
 export function getOpenPlatformApps(params?: { offset?: number, limit?: number }) {

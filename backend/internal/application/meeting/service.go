@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	appasr "github.com/lgt/asr/internal/application/asr"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domain "github.com/lgt/asr/internal/domain/meeting"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
@@ -49,6 +50,7 @@ type EventPublisher interface {
 type BatchSubmitRequest struct {
 	AudioURL      string
 	LocalFilePath string
+	Language      string
 }
 
 // BatchSubmitResult is the minimal engine response needed by the meeting pipeline.
@@ -110,6 +112,10 @@ func (s *Service) CreateMeeting(ctx context.Context, userID uint64, req *CreateM
 	if audioURL == "" {
 		return nil, fmt.Errorf("audio_url is required")
 	}
+	language, err := appasr.NormalizeLanguage(req.Language)
+	if err != nil {
+		return nil, err
+	}
 
 	m := &domain.Meeting{
 		UserID:        userID,
@@ -117,6 +123,7 @@ func (s *Service) CreateMeeting(ctx context.Context, userID uint64, req *CreateM
 		AudioURL:      audioURL,
 		LocalFilePath: strings.TrimSpace(req.LocalFilePath),
 		Duration:      req.Duration,
+		Language:      language,
 		WorkflowID:    req.WorkflowID,
 		Status:        domain.MeetingStatusUploaded,
 	}
@@ -507,6 +514,7 @@ func (s *Service) submitMeetingTask(ctx context.Context, meeting *domain.Meeting
 	result, err := s.batchSubmitter.SubmitBatch(ctx, BatchSubmitRequest{
 		AudioURL:      meeting.AudioURL,
 		LocalFilePath: meeting.LocalFilePath,
+		Language:      meeting.Language,
 	})
 	if err != nil {
 		return s.persistMeetingSyncFailure(ctx, meeting, now, err)
@@ -799,6 +807,7 @@ func toMeetingResponse(meeting *domain.Meeting) *MeetingResponse {
 		Duration:      meeting.Duration,
 		Status:        string(meeting.Status),
 		WorkflowID:    meeting.WorkflowID,
+		Language:      meeting.Language,
 		SyncFailCount: meeting.SyncFailCount,
 		LastSyncError: meeting.LastSyncError,
 		LastSyncAt:    meeting.LastSyncAt,

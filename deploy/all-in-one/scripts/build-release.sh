@@ -5,7 +5,9 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 DEPLOY_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$DEPLOY_DIR/../.." && pwd)
 DESKTOP_DIR="$REPO_ROOT/desktop"
+DESKTOP_ELECTRON_DIR="$REPO_ROOT/desktop-electron"
 DESKTOP_INSTALLER_DIR="$DESKTOP_DIR/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
+DESKTOP_ELECTRON_INSTALLER_DIR="$DESKTOP_ELECTRON_DIR/release"
 CURRENT_UID=$(id -u)
 CURRENT_USER=$(id -un)
 CURRENT_GROUP=$(id -gn)
@@ -25,9 +27,12 @@ JWT_SECRET=""
 ASR_SERVICE_URL="http://host.docker.internal:11001"
 SPEAKER_SERVICE_URL="http://host.docker.internal:11002"
 DESKTOP_INSTALLER_OVERRIDE=""
+DESKTOP_ELECTRON_INSTALLER_OVERRIDE=""
+SKIP_ELECTRON_BUILD=0
 DESKTOP_PACKAGE_OWNER=""
 DESKTOP_CARGO_TOML_OWNER=""
 DESKTOP_CARGO_LOCK_OWNER=""
+DESKTOP_ELECTRON_PACKAGE_OWNER=""
 OUTPUT_OWNER=""
 
 append_path_if_dir() {
@@ -84,6 +89,40 @@ run_pnpm() {
   return 127
 }
 
+ensure_pnpm_project_ready() {
+  PROJECT_DIR="$1"
+  PROJECT_LABEL="$2"
+  REQUIRED_BIN="$3"
+
+  if [ -x "$PROJECT_DIR/$REQUIRED_BIN" ]; then
+    return 0
+  fi
+
+  echo "检测到 $PROJECT_LABEL 依赖未就绪，正在执行 pnpm install..." >&2
+  if [ -f "$PROJECT_DIR/pnpm-lock.yaml" ]; then
+    if ! (
+      cd "$PROJECT_DIR"
+      run_pnpm install --frozen-lockfile
+    ) >&2; then
+      echo "$PROJECT_LABEL 依赖安装失败。" >&2
+      return 1
+    fi
+  else
+    if ! (
+      cd "$PROJECT_DIR"
+      run_pnpm install
+    ) >&2; then
+      echo "$PROJECT_LABEL 依赖安装失败。" >&2
+      return 1
+    fi
+  fi
+
+  if [ ! -x "$PROJECT_DIR/$REQUIRED_BIN" ]; then
+    echo "$PROJECT_LABEL 依赖安装完成，但仍缺少构建命令: $REQUIRED_BIN" >&2
+    return 1
+  fi
+}
+
 bootstrap_node_path
 
 usage() {
@@ -116,7 +155,10 @@ usage() {
   --speaker-service-url <url> | speaker-service-url <url>
                                      统一的人声服务地址，默认 http://host.docker.internal:11002
   --desktop-installer <path> | desktop-installer <path>
-                                     直接使用现成桌面端安装包，不自动构建
+                                     直接使用现成桌面端（Tauri Win10/11）安装包，不自动构建
+  --desktop-electron-installer <path> | desktop-electron-installer <path>
+                                     直接使用现成 Win7 兼容版（Electron）安装包，不自动构建
+  --skip-electron | skip-electron   跳过 Win7 兼容版 Electron 安装包的构建与打包
   --dry-run | dry-run               跳过 Docker 镜像构建和桌面端自动构建
   -h, --help                        显示帮助
 EOF
@@ -217,6 +259,26 @@ find_desktop_installer() {
   find_desktop_installer_for_version || find_latest_desktop_installer
 }
 
+find_desktop_electron_installer_for_version() {
+  if [ -n "$VERSION" ] && ls "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$VERSION"*win7*setup.exe >/dev/null 2>&1; then
+    ls -t "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$VERSION"*win7*setup.exe | head -n 1
+    return 0
+  fi
+  return 1
+}
+
+find_latest_desktop_electron_installer() {
+  if ls "$DESKTOP_ELECTRON_INSTALLER_DIR"/*win7*setup.exe >/dev/null 2>&1; then
+    ls -t "$DESKTOP_ELECTRON_INSTALLER_DIR"/*win7*setup.exe | head -n 1
+    return 0
+  fi
+  return 1
+}
+
+find_desktop_electron_installer() {
+  find_desktop_electron_installer_for_version || find_latest_desktop_electron_installer
+}
+
 maybe_restore_owner() {
   OWNER="$1"
   TARGET_PATH="$2"
@@ -263,6 +325,28 @@ ensure_output_owner_matches_current_user() {
   fi
 }
 
+reset_staging_dir() {
+  TARGET_PATH="$1"
+
+  if [ ! -e "$TARGET_PATH" ]; then
+    return 0
+  fi
+
+  rm -rf "$TARGET_PATH" 2>/dev/null || true
+  if [ ! -e "$TARGET_PATH" ]; then
+    return 0
+  fi
+
+  STALE_PATH="${TARGET_PATH}.stale.$(date +%Y%m%d%H%M%S).$$"
+  if mv "$TARGET_PATH" "$STALE_PATH" 2>/dev/null; then
+    echo "检测到旧发布目录包含非当前用户属主的运行残留，已移动到: $STALE_PATH" >&2
+    return 0
+  fi
+
+  ensure_output_owner_matches_current_user "$TARGET_PATH"
+  rm -rf "$TARGET_PATH"
+}
+
 restore_desktop_version_files() {
   if [ -z "${DESKTOP_VERSION_BACKUP_DIR:-}" ] || [ ! -d "$DESKTOP_VERSION_BACKUP_DIR" ]; then
     return 0
@@ -278,6 +362,17 @@ restore_desktop_version_files() {
   maybe_restore_owner "$DESKTOP_CARGO_LOCK_OWNER" "$DESKTOP_DIR/src-tauri/Cargo.lock"
   rm -rf "$DESKTOP_VERSION_BACKUP_DIR"
   DESKTOP_VERSION_BACKUP_DIR=""
+}
+
+restore_desktop_electron_version_file() {
+  if [ -z "${DESKTOP_ELECTRON_VERSION_BACKUP_DIR:-}" ] || [ ! -d "$DESKTOP_ELECTRON_VERSION_BACKUP_DIR" ]; then
+    return 0
+  fi
+
+  cp "$DESKTOP_ELECTRON_VERSION_BACKUP_DIR/package.json" "$DESKTOP_ELECTRON_DIR/package.json"
+  maybe_restore_owner "$DESKTOP_ELECTRON_PACKAGE_OWNER" "$DESKTOP_ELECTRON_DIR/package.json"
+  rm -rf "$DESKTOP_ELECTRON_VERSION_BACKUP_DIR"
+  DESKTOP_ELECTRON_VERSION_BACKUP_DIR=""
 }
 
 prepare_desktop_version_files() {
@@ -327,8 +422,35 @@ if (fs.existsSync(cargoLockPath)) {
 EOF
 }
 
+prepare_desktop_electron_version_file() {
+  TARGET_VERSION="$1"
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "未找到 node，无法在构建前同步 Win7 兼容版版本号。" >&2
+    return 1
+  fi
+
+  DESKTOP_ELECTRON_VERSION_BACKUP_DIR=$(mktemp -d)
+  DESKTOP_ELECTRON_PACKAGE_OWNER=$(stat -c '%u:%g' "$DESKTOP_ELECTRON_DIR/package.json")
+  cp "$DESKTOP_ELECTRON_DIR/package.json" "$DESKTOP_ELECTRON_VERSION_BACKUP_DIR/package.json"
+
+  TARGET_VERSION="$TARGET_VERSION" DESKTOP_ELECTRON_DIR="$DESKTOP_ELECTRON_DIR" node <<'EOF'
+const fs = require('node:fs')
+const path = require('node:path')
+
+const version = process.env.TARGET_VERSION
+const desktopElectronDir = process.env.DESKTOP_ELECTRON_DIR
+const packageJsonPath = path.join(desktopElectronDir, 'package.json')
+
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+packageJson.version = version
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8')
+EOF
+}
+
 build_desktop_installer() {
   DEFAULT_CLIENT_URL="$1"
+  FALLBACK_CLIENT_URL="$2"
 
   if [ -n "$DESKTOP_INSTALLER_OVERRIDE" ]; then
     if [ ! -f "$DESKTOP_INSTALLER_OVERRIDE" ]; then
@@ -345,13 +467,15 @@ build_desktop_installer() {
   fi
 
   if run_pnpm --version >/dev/null 2>&1; then
-    echo "构建桌面端安装包，默认服务地址: $DEFAULT_CLIENT_URL" >&2
+    echo "构建桌面端安装包（Tauri Win10/11），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
+    ensure_pnpm_project_ready "$DESKTOP_DIR" "桌面端（Tauri Win10/11）" "node_modules/.bin/tauri" || exit 1
     prepare_desktop_version_files "$VERSION"
     if ! (
       cd "$DESKTOP_DIR"
       ASR_DESKTOP_IGNORE_CERT_ERRORS=1 \
       ASR_BUILD_DATE="$BUILD_DATE" \
       VITE_DEFAULT_SERVER_URL="$DEFAULT_CLIENT_URL" \
+      VITE_FALLBACK_SERVER_URL="$FALLBACK_CLIENT_URL" \
       run_pnpm build:win
     ) >&2; then
       restore_desktop_version_files
@@ -377,6 +501,66 @@ build_desktop_installer() {
   exit 1
 }
 
+build_desktop_electron_installer() {
+  DEFAULT_CLIENT_URL="$1"
+  FALLBACK_CLIENT_URL="$2"
+
+  if [ "$SKIP_ELECTRON_BUILD" -eq 1 ]; then
+    return 1
+  fi
+
+  if [ -n "$DESKTOP_ELECTRON_INSTALLER_OVERRIDE" ]; then
+    if [ ! -f "$DESKTOP_ELECTRON_INSTALLER_OVERRIDE" ]; then
+      echo "指定的 Win7 兼容版安装包不存在: $DESKTOP_ELECTRON_INSTALLER_OVERRIDE" >&2
+      exit 1
+    fi
+    printf '%s' "$DESKTOP_ELECTRON_INSTALLER_OVERRIDE"
+    return 0
+  fi
+
+  if [ ! -d "$DESKTOP_ELECTRON_DIR" ]; then
+    echo "未找到 desktop-electron 目录，跳过 Win7 兼容版打包: $DESKTOP_ELECTRON_DIR" >&2
+    return 1
+  fi
+
+  if [ "$SKIP_DOCKER" -eq 1 ]; then
+    find_desktop_electron_installer || return 1
+    return 0
+  fi
+
+  if run_pnpm --version >/dev/null 2>&1; then
+    echo "构建 Win7 兼容版安装包（Electron 22），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
+    ensure_pnpm_project_ready "$DESKTOP_ELECTRON_DIR" "Win7 兼容版（Electron 22）" "node_modules/.bin/vite" || return 1
+    prepare_desktop_electron_version_file "$VERSION" || return 1
+    if ! (
+      cd "$DESKTOP_ELECTRON_DIR"
+      ASR_BUILD_DATE="$BUILD_DATE" \
+      VITE_DEFAULT_SERVER_URL="$DEFAULT_CLIENT_URL" \
+      VITE_FALLBACK_SERVER_URL="$FALLBACK_CLIENT_URL" \
+      run_pnpm build:win
+    ) >&2; then
+      restore_desktop_electron_version_file
+      echo "Win7 兼容版（Electron）构建失败。" >&2
+      return 1
+    fi
+    restore_desktop_electron_version_file
+    find_desktop_electron_installer_for_version || {
+      echo "Win7 兼容版构建完成，但未找到 $VERSION 的安装包输出" >&2
+      return 1
+    }
+    return 0
+  fi
+
+  if find_desktop_electron_installer_for_version >/dev/null 2>&1; then
+    echo "警告: 未找到 pnpm，回退为使用已存在的同版本 Win7 兼容版安装包: $VERSION" >&2
+    find_desktop_electron_installer_for_version
+    return 0
+  fi
+
+  echo "未找到 pnpm/corepack，且没有现成的同版本 Win7 兼容版安装包，已跳过 Win7 兼容版打包。" >&2
+  return 1
+}
+
 create_self_extract_run() {
   RUN_PATH="$1"
   PAYLOAD_ARCHIVE="$2"
@@ -388,17 +572,167 @@ set -eu
 
 SELF="$0"
 TARGET_BASE=${ASR_RUN_TARGET_DIR:-$PWD}
+TARGET_DIR="$TARGET_BASE/asr-all-in-one"
 PAYLOAD_LINE=$(awk '/^__ASR_ARCHIVE_BELOW__$/ {print NR + 1; exit 0; }' "$SELF")
+EXTRACT_ROOT=
 
 if [ -z "${PAYLOAD_LINE:-}" ]; then
   echo "无效的安装包：未找到内置归档数据" >&2
   exit 1
 fi
 
-mkdir -p "$TARGET_BASE"
-tail -n +"$PAYLOAD_LINE" "$SELF" | tar -xzf - -C "$TARGET_BASE"
+cleanup() {
+  if [ -n "${EXTRACT_ROOT:-}" ] && [ -d "$EXTRACT_ROOT" ]; then
+    rm -rf "$EXTRACT_ROOT"
+  fi
+}
 
-cd "$TARGET_BASE/asr-all-in-one"
+trap cleanup EXIT INT TERM
+
+preserve_target_entry() {
+  case "$1" in
+    .env|runtime|backups)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+preserve_runtime_entry() {
+  case "$1" in
+    mysql|uploads|tmp|certs)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+sync_cert_dir() {
+  SRC_CERT_DIR="$1"
+  DEST_CERT_DIR="$2"
+
+  mkdir -p "$DEST_CERT_DIR"
+
+  find "$DEST_CERT_DIR" -mindepth 1 -maxdepth 1 | while read -r EXISTING_PATH; do
+    CERT_NAME=$(basename "$EXISTING_PATH")
+    case "$CERT_NAME" in
+      tls.crt|tls.key)
+        continue
+        ;;
+    esac
+
+    if [ ! -e "$SRC_CERT_DIR/$CERT_NAME" ]; then
+      rm -rf "$EXISTING_PATH"
+    fi
+  done
+
+  find "$SRC_CERT_DIR" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
+    CERT_NAME=$(basename "$INCOMING_PATH")
+    case "$CERT_NAME" in
+      tls.crt|tls.key)
+        if [ -e "$DEST_CERT_DIR/$CERT_NAME" ]; then
+          continue
+        fi
+        ;;
+    esac
+
+    rm -rf "$DEST_CERT_DIR/$CERT_NAME"
+    cp -a "$INCOMING_PATH" "$DEST_CERT_DIR/$CERT_NAME"
+  done
+}
+
+sync_runtime_dir() {
+  SRC_RUNTIME_DIR="$1"
+  DEST_RUNTIME_DIR="$2"
+
+  mkdir -p "$DEST_RUNTIME_DIR"
+
+  find "$DEST_RUNTIME_DIR" -mindepth 1 -maxdepth 1 | while read -r EXISTING_PATH; do
+    ENTRY_NAME=$(basename "$EXISTING_PATH")
+    if preserve_runtime_entry "$ENTRY_NAME"; then
+      continue
+    fi
+
+    if [ ! -e "$SRC_RUNTIME_DIR/$ENTRY_NAME" ]; then
+      rm -rf "$EXISTING_PATH"
+    fi
+  done
+
+  find "$SRC_RUNTIME_DIR" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
+    ENTRY_NAME=$(basename "$INCOMING_PATH")
+    case "$ENTRY_NAME" in
+      mysql|uploads|tmp)
+        mkdir -p "$DEST_RUNTIME_DIR/$ENTRY_NAME"
+        if [ "$ENTRY_NAME" = "tmp" ]; then
+          chmod 1777 "$DEST_RUNTIME_DIR/$ENTRY_NAME" 2>/dev/null || true
+        fi
+        ;;
+      certs)
+        sync_cert_dir "$INCOMING_PATH" "$DEST_RUNTIME_DIR/$ENTRY_NAME"
+        ;;
+      *)
+        rm -rf "$DEST_RUNTIME_DIR/$ENTRY_NAME"
+        cp -a "$INCOMING_PATH" "$DEST_RUNTIME_DIR/$ENTRY_NAME"
+        ;;
+    esac
+  done
+
+  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs"
+  chmod 1777 "$DEST_RUNTIME_DIR/tmp" 2>/dev/null || true
+}
+
+if [ -f "$TARGET_DIR/.env" ]; then
+  echo "检测到已有 .env，安装时将保留现有数据库和服务配置。"
+fi
+
+mkdir -p "$TARGET_BASE"
+EXTRACT_ROOT=$(mktemp -d)
+tail -n +"$PAYLOAD_LINE" "$SELF" | tar -xzf - -C "$EXTRACT_ROOT"
+
+if [ ! -d "$EXTRACT_ROOT/asr-all-in-one" ]; then
+  echo "无效的安装包：未找到 asr-all-in-one 目录" >&2
+  exit 1
+fi
+
+if [ ! -d "$TARGET_DIR" ]; then
+  mv "$EXTRACT_ROOT/asr-all-in-one" "$TARGET_DIR"
+else
+  find "$TARGET_DIR" -mindepth 1 -maxdepth 1 | while read -r EXISTING_PATH; do
+    ENTRY_NAME=$(basename "$EXISTING_PATH")
+    if preserve_target_entry "$ENTRY_NAME"; then
+      continue
+    fi
+
+    if [ ! -e "$EXTRACT_ROOT/asr-all-in-one/$ENTRY_NAME" ]; then
+      rm -rf "$EXISTING_PATH"
+    fi
+  done
+
+  find "$EXTRACT_ROOT/asr-all-in-one" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
+    ENTRY_NAME=$(basename "$INCOMING_PATH")
+    case "$ENTRY_NAME" in
+      .env)
+        if [ -f "$TARGET_DIR/.env" ]; then
+          continue
+        fi
+        ;;
+      runtime)
+        sync_runtime_dir "$INCOMING_PATH" "$TARGET_DIR/runtime"
+        continue
+        ;;
+      backups)
+        continue
+        ;;
+    esac
+
+    rm -rf "$TARGET_DIR/$ENTRY_NAME"
+    cp -a "$INCOMING_PATH" "$TARGET_DIR/$ENTRY_NAME"
+  done
+fi
+
+cd "$TARGET_DIR"
 sh install.sh
 exit 0
 __ASR_ARCHIVE_BELOW__
@@ -408,6 +742,13 @@ EOF
   chmod +x "$TMP_RUN"
   mv "$TMP_RUN" "$RUN_PATH"
 }
+
+cleanup_on_exit() {
+  restore_desktop_version_files
+  restore_desktop_electron_version_file
+}
+
+trap cleanup_on_exit EXIT HUP INT TERM
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -472,6 +813,14 @@ while [ "$#" -gt 0 ]; do
       DESKTOP_INSTALLER_OVERRIDE="$2"
       shift 2
       ;;
+    --desktop-electron-installer|desktop-electron-installer)
+      DESKTOP_ELECTRON_INSTALLER_OVERRIDE="$2"
+      shift 2
+      ;;
+    --skip-electron|skip-electron)
+      SKIP_ELECTRON_BUILD=1
+      shift
+      ;;
     --dry-run|dry-run)
       SKIP_DOCKER=1
       shift
@@ -521,15 +870,15 @@ PACKAGE_NAME="${PACKAGE_ROOT_NAME}-${VERSION}"
 STAGING_DIR="$OUTPUT_ROOT/$PACKAGE_ROOT_NAME"
 ARCHIVE_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.tar.gz"
 RUN_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.run"
-DEFAULT_CLIENT_URL=$(build_https_origin "$SERVER_HOST" "$HTTPS_PORT")
+DEFAULT_CLIENT_URL=$(build_http_origin "$SERVER_HOST" "$HTTP_PORT")
+DEFAULT_CLIENT_FALLBACK_URL=$(build_https_origin "$SERVER_HOST" "$HTTPS_PORT")
 TLS_ALT_NAMES=$(build_tls_alt_names "$SERVER_HOST")
 OUTPUT_OWNER=$(resolve_path_owner "$OUTPUT_ROOT")
 
-ensure_output_owner_matches_current_user "$STAGING_DIR"
 ensure_output_owner_matches_current_user "$ARCHIVE_PATH"
 ensure_output_owner_matches_current_user "$RUN_PATH"
 
-rm -rf "$STAGING_DIR"
+reset_staging_dir "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads"
 
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
@@ -569,22 +918,57 @@ RELEASE_IMAGE=asr-all-in-one:latest
 EOF
 
 DESKTOP_INSTALLER_PATH=""
-if DESKTOP_INSTALLER_PATH=$(build_desktop_installer "$DEFAULT_CLIENT_URL"); then
-  cp "$DESKTOP_INSTALLER_PATH" "$STAGING_DIR/runtime/downloads/"
+DESKTOP_ELECTRON_INSTALLER_PATH=""
+DESKTOP_BASENAMES=""
+
+# Tauri 打出来的 Win10/11 推荐版安装包
+if DESKTOP_INSTALLER_PATH=$(build_desktop_installer "$DEFAULT_CLIENT_URL" "$DEFAULT_CLIENT_FALLBACK_URL"); then
   DESKTOP_INSTALLER_BASENAME=$(basename "$DESKTOP_INSTALLER_PATH")
-  cat > "$STAGING_DIR/runtime/downloads/README.txt" <<EOF
-桌面端安装包已自动打入当前目录：$DESKTOP_INSTALLER_BASENAME
-客户端默认服务地址：$DEFAULT_CLIENT_URL
-公共下载页会自动读取并展示这些文件。
-EOF
+  # 给 Tauri 产物补上 _win10_ 标识，让公共下载页前端能正确归类到「Win10/11 推荐版」
+  case "$DESKTOP_INSTALLER_BASENAME" in
+    *_win10_*|*-win10-*|*_win7_*|*-win7-*)
+      RENAMED_TAURI="$DESKTOP_INSTALLER_BASENAME"
+      ;;
+    *)
+      RENAMED_TAURI=$(printf '%s' "$DESKTOP_INSTALLER_BASENAME" | sed 's/_x64-setup\.exe$/_win10_x64-setup.exe/; s/-x64-setup\.exe$/-win10-x64-setup.exe/')
+      if [ "$RENAMED_TAURI" = "$DESKTOP_INSTALLER_BASENAME" ]; then
+        # 兜底：未匹配 _x64-setup 命名时，在扩展名前插入 .win10
+        RENAMED_TAURI="${DESKTOP_INSTALLER_BASENAME%.exe}.win10.exe"
+      fi
+      ;;
+  esac
+  cp "$DESKTOP_INSTALLER_PATH" "$STAGING_DIR/runtime/downloads/$RENAMED_TAURI"
+  DESKTOP_BASENAMES="$DESKTOP_BASENAMES\n  - $RENAMED_TAURI（Tauri，Win10/11 推荐版）"
 else
   if [ "$SKIP_DOCKER" -eq 0 ]; then
-    echo "未能自动构建或定位桌面端安装包，发布失败。请检查 pnpm build:win 环境，或改用 --desktop-installer <path>。" >&2
+    echo "未能自动构建或定位桌面端安装包（Tauri Win10/11 推荐版），发布失败。" >&2
+    echo "可通过 --desktop-installer <path> 直接指定现成的安装包。" >&2
     exit 1
   fi
+fi
+
+# Electron 22 打出来的 Win7 兼容版安装包
+if DESKTOP_ELECTRON_INSTALLER_PATH=$(build_desktop_electron_installer "$DEFAULT_CLIENT_URL" "$DEFAULT_CLIENT_FALLBACK_URL"); then
+  ELECTRON_BASENAME=$(basename "$DESKTOP_ELECTRON_INSTALLER_PATH")
+  cp "$DESKTOP_ELECTRON_INSTALLER_PATH" "$STAGING_DIR/runtime/downloads/$ELECTRON_BASENAME"
+  DESKTOP_BASENAMES="$DESKTOP_BASENAMES\n  - $ELECTRON_BASENAME（Electron 22，Win7 兼容版）"
+else
+  if [ "$SKIP_ELECTRON_BUILD" -eq 1 ]; then
+    echo "提示：已显式跳过 Win7 兼容版安装包（Electron 22）构建。" >&2
+  else
+    echo "未能自动构建或定位 Win7 兼容版安装包（Electron 22），发布失败。" >&2
+    echo "可通过 --desktop-electron-installer <path> 指定现成安装包，或通过 --skip-electron 显式跳过。" >&2
+    exit 1
+  fi
+fi
+
+if [ -n "$DESKTOP_BASENAMES" ]; then
+  printf "桌面端安装包已自动打入当前目录：%b\n客户端默认服务地址：%s\n公共下载页会自动读取并按目标系统分组展示这些文件。\n" "$DESKTOP_BASENAMES" "$DEFAULT_CLIENT_URL" > "$STAGING_DIR/runtime/downloads/README.txt"
+else
   cat > "$STAGING_DIR/runtime/downloads/README.txt" <<EOF
-未自动打入桌面端安装包。
-如果需要，请先执行 desktop/pnpm build:win 或在打包时传入 --desktop-installer <path>。
+未自动打入任何桌面端安装包。
+- Win10/11 推荐版：在 desktop/ 下执行 pnpm build:win 或传入 --desktop-installer <path>
+- Win7 兼容版：在 desktop-electron/ 下执行 pnpm build:win 或传入 --desktop-electron-installer <path>
 EOF
 fi
 

@@ -43,12 +43,14 @@ type CreateMeetingRequest struct {
 	Audio      PreparedAudio
 	Title      string
 	WorkflowID *uint64
+	Language   string
 }
 
 type CreateRealtimeTaskRequest struct {
 	Audio      PreparedAudio
 	ResultText string
 	WorkflowID *uint64
+	Language   string
 }
 
 type TranscribeRealtimeSegmentRequest struct {
@@ -91,6 +93,7 @@ func (s *Service) CreateRealtimeTaskFromAudio(ctx context.Context, userID uint64
 		LocalFilePath: req.Audio.LocalFilePath,
 		Type:          domainasr.TaskTypeRealtime,
 		WorkflowID:    req.WorkflowID,
+		Language:      req.Language,
 		ResultText:    req.ResultText,
 		Duration:      req.Audio.Duration,
 	})
@@ -107,6 +110,7 @@ func (s *Service) CreateMeetingFromAudio(ctx context.Context, userID uint64, req
 		LocalFilePath: req.Audio.LocalFilePath,
 		Duration:      req.Audio.Duration,
 		WorkflowID:    req.WorkflowID,
+		Language:      req.Language,
 	})
 }
 

@@ -105,6 +105,18 @@ make release-all-in-one \
 	ADMIN_PASSWORD='Admin@123456'
 ```
 
+如果想为 Windows 7 用户额外打一个 Electron 22 兼容版安装包，可以指定已构建好的产物（也可以让发布脚本自动构建）：
+
+```bash
+cd /home/lgt/asr
+make release-all-in-one \
+	VERSION=0.2.7 \
+	SERVER_HOST=192.168.40.223 \
+	HTTP_PORT=11010 \
+	ADMIN_PASSWORD='Admin@123456' \
+	DESKTOP_ELECTRON_INSTALLER='/path/to/asr-desktop_0.2.7_win7_x64-setup.exe'
+```
+
 上面这组参数会自动得到：
 
 - 客户端默认地址: `https://192.168.40.223:11011`
@@ -161,12 +173,13 @@ make release-all-in-one \
 - `ADMIN_PASSWORD` 会直接写入发布包里的 `.env`
 - 如果不传 `MYSQL_PASSWORD` 和 `JWT_SECRET`，脚本会自动生成随机值
 - `ASR_SERVICE_URL` 和 `SPEAKER_SERVICE_URL` 都是“从 all-in-one 容器内部看出去”的地址
+- `WEBVIEW2_FIXED_RUNTIME` 变量已废弃：Win7 发布包现在由 `desktop-electron` 下的 Electron 22 工程生成，不再依赖 WebView2 固定版运行时
 - 如果外部服务和 all-in-one 部署在同一台宿主机上，推荐填 `http://host.docker.internal:<端口>`；服务器 shell 里 `ping host.docker.internal` 不通是正常的
 - 这里的 `<端口>` 必须写“宿主机实际暴露出来的端口”，不是外部容器自己的内部监听端口；例如外部 ASR 如果是 `-p 11001:8000`，那这里应填 `http://host.docker.internal:11001`
 - 如果外部服务部署在另一台机器上，就填那台机器的实际内网 IP 或域名
 - 如果 3D-Speaker 同时承担说话人分离和声纹能力，优先只传 `SPEAKER_SERVICE_URL`
 - 当前发布脚本不再单独暴露 `DIARIZATION_SERVICE_URL` 和 `SPEAKER_ANALYSIS_SERVICE_URL` 参数；发布包会把后端内部这两个地址统一写成同一个 `SPEAKER_SERVICE_URL`
-- 如果你已经提前构建好了桌面安装包，也可以传 `DESKTOP_INSTALLER=/path/to/setup.exe` 直接复用
+- 如果你已经提前构建好了桌面安装包，也可以传 `DESKTOP_INSTALLER=/path/to/setup.exe` 直接复用主推荐版（Tauri Win10/11）；如果同时提前构建好了 Win7 兼容版，可传 `DESKTOP_ELECTRON_INSTALLER=/path/to/win7-setup.exe`；仅需主版本时可传 `SKIP_ELECTRON=1` 跳过 Win7 包构建
 
 生成物在：
 

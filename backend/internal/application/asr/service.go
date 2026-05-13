@@ -113,6 +113,7 @@ const (
 	batchSubmitTimeout = 30 * time.Minute
 	snippetPollTimeout = 2 * time.Minute
 	snippetPollEvery   = 1200 * time.Millisecond
+	DefaultLanguage    = "auto"
 )
 
 var transcriptionMarkupPattern = regexp.MustCompile(`(?i)language\s+[a-z_-]+<asr_text>|</?asr_text>`)
@@ -149,6 +150,10 @@ func (s *Service) SetHotwordProvider(provider HotwordProvider) {
 }
 
 func (s *Service) newBatchSubmitRequest(ctx context.Context, localFilePath, audioURL string, dictID *uint64, language string, useITN *bool, hotwords []string, progress func(BatchSubmitProgress)) (BatchSubmitRequest, error) {
+	normalizedLanguage, err := NormalizeLanguage(language)
+	if err != nil {
+		return BatchSubmitRequest{}, err
+	}
 	mergedHotwords := normalizeHotwords(hotwords)
 	if s.hotwordProvider != nil && dictID != nil && *dictID > 0 {
 		dictHotwords, err := s.hotwordProvider.HotwordsForDict(ctx, *dictID)
@@ -162,19 +167,19 @@ func (s *Service) newBatchSubmitRequest(ctx context.Context, localFilePath, audi
 		AudioURL:      strings.TrimSpace(audioURL),
 		LocalFilePath: strings.TrimSpace(localFilePath),
 		DictID:        dictID,
-		Language:      normalizeLanguage(language),
+		Language:      normalizedLanguage,
 		UseITN:        useITN,
 		Hotwords:      mergedHotwords,
 		Progress:      progress,
 	}, nil
 }
 
-func normalizeLanguage(value string) string {
+func NormalizeLanguage(value string) (string, error) {
 	language := strings.TrimSpace(value)
-	if language == "" {
-		return "auto"
+	if language == "" || strings.EqualFold(language, DefaultLanguage) {
+		return DefaultLanguage, nil
 	}
-	return language
+	return language, nil
 }
 
 func normalizeHotwords(values []string) []string {
@@ -208,6 +213,10 @@ func mergeHotwords(left []string, right []string) []string {
 func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTaskRequest) (*TaskResponse, error) {
 	audioURL := strings.TrimSpace(req.AudioURL)
 	resultText := strings.TrimSpace(req.ResultText)
+	language, err := NormalizeLanguage(req.Language)
+	if err != nil {
+		return nil, err
+	}
 
 	if req.Type == domain.TaskTypeBatch && audioURL == "" {
 		return nil, fmt.Errorf("audio_url is required for batch transcription")
@@ -239,7 +248,7 @@ func (s *Service) CreateTask(ctx context.Context, userID uint64, req *CreateTask
 		Duration:          req.Duration,
 		DictID:            req.DictID,
 		WorkflowID:        req.WorkflowID,
-		Language:          normalizeLanguage(req.Language),
+		Language:          language,
 		UseITN:            req.UseITN,
 		Hotwords:          normalizeHotwords(req.Hotwords),
 	}
@@ -301,7 +310,7 @@ func (s *Service) TranscribeSnippet(ctx context.Context, req *TranscribeSnippetR
 		return nil, fmt.Errorf("asr batch engine is not configured")
 	}
 
-	submitReq, err := s.newBatchSubmitRequest(ctx, strings.TrimSpace(req.LocalFilePath), "", req.DictID, normalizeLanguage(req.Language), req.UseITN, req.Hotwords, nil)
+	submitReq, err := s.newBatchSubmitRequest(ctx, strings.TrimSpace(req.LocalFilePath), "", req.DictID, req.Language, req.UseITN, req.Hotwords, nil)
 	if err != nil {
 		return nil, err
 	}

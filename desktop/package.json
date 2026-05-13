@@ -2,7 +2,7 @@
   "name": "asr-desktop",
   "displayName": "巨鲨语音助手",
   "type": "module",
-  "version": "0.3.9",
+  "version": "0.6.6",
   "private": true,
   "scripts": {
     "predev": "node ./scripts/sync-version.mjs",
@@ -11,11 +11,7 @@
     "build": "vue-tsc -b && vite build",
     "pretauri": "node ./scripts/sync-version.mjs",
     "tauri": "tauri",
-    "doctor:win": "bash ./scripts/doctor-windows-cross.sh",
-    "prebuild:win": "node ./scripts/sync-version.mjs",
-    "build:win": "bash ./scripts/build-windows-cross.sh",
-    "prebuild:win:debug": "node ./scripts/sync-version.mjs",
-    "build:win:debug": "bash ./scripts/build-windows-cross.sh --debug"
+    "build:win": "node ./scripts/sync-version.mjs && pnpm tauri build --target x86_64-pc-windows-msvc --runner cargo-xwin"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",

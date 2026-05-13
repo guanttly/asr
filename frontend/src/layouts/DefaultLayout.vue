@@ -77,10 +77,6 @@ const menuIconShapes: Record<string, IconShape[]> = {
     { tag: 'circle', attrs: { cx: 12, cy: 8, r: 3 } },
     { tag: 'path', attrs: { d: 'M5 19a7 7 0 0 1 14 0' } },
   ],
-  roles: [
-    { tag: 'path', attrs: { d: 'M12 3.5 18.5 6v5c0 4.2-2.68 7.27-6.5 9-3.82-1.73-6.5-4.8-6.5-9V6l6.5-2.5Z' } },
-    { tag: 'path', attrs: { d: 'm9.5 12 1.7 1.7 3.3-3.7' } },
-  ],
   openapi: [
     { tag: 'rect', attrs: { x: 4, y: 5.5, width: 7, height: 13, rx: 2 } },
     { tag: 'path', attrs: { d: 'M7 9h2' } },
@@ -229,7 +225,6 @@ const menuOptions = computed<MenuOption[]>(() => {
       icon: renderMenuIcon('systemSection', '系统管理'),
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
-        { label: '角色管理', key: '/system/roles', icon: renderMenuIcon('roles', '角色管理') },
         { label: '对接管理', key: '/system/openapi', icon: renderMenuIcon('openapi', '对接管理') },
       ],
     },
@@ -272,8 +267,6 @@ const currentPath = computed(() => {
     return '/system/openapi'
   if (path.startsWith('/system/users'))
     return '/system/users'
-  if (path.startsWith('/system/roles'))
-    return '/system/roles'
   if (path.startsWith('/terminology'))
     return '/terminology'
   if (path.startsWith('/transcription'))

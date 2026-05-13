@@ -13,6 +13,27 @@ export interface ProductCapabilitiesPayload {
 export interface ProductFeaturesPayload {
 	edition: ProductEdition
 	capabilities: ProductCapabilitiesPayload
+	supported_languages: ProductLanguagePayload[]
+	hardware_tier: ProductEdition
+	hardware_requirements: Partial<Record<ProductEdition, HardwareProfilePayload>>
+}
+
+export interface ProductLanguagePayload {
+	code: string
+	label: string
+}
+
+export interface HardwareSpecPayload {
+	cpu: string
+	memory: string
+	storage: string
+	acceleration: string
+}
+
+export interface HardwareProfilePayload {
+	tier: ProductEdition
+	minimum: HardwareSpecPayload
+	recommended: HardwareSpecPayload
 }
 
 export interface VoiceControlPayload {

@@ -284,7 +284,7 @@ const selectedNodeHasDraftChanges = computed(() => {
     || normalizeConfigForCompare(selectedNode.value.configText) !== normalizeConfigForCompare(nodeDraft.configText)
 })
 let highlightTimer: ReturnType<typeof setTimeout> | null = null
-const audioFileAccept = 'audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm'
+const audioFileAccept = '.wav,.mp3'
 
 function prettyJSON(value: unknown) {
   return JSON.stringify(value, null, 2)

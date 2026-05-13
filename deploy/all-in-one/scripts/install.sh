@@ -169,6 +169,18 @@ print_access_summary() {
   fi
 }
 
+print_hardware_requirements() {
+  EDITION=${ASR_PRODUCT_EDITION:-${PRODUCT_EDITION:-standard}}
+  case "$EDITION" in
+    advanced)
+      echo "硬件要求（高级版）: 最低 CPU 16核 / 内存 32G / 存储 500G SSD / 算力 A10；推荐 A100。"
+      ;;
+    *)
+      echo "硬件要求（标准版）: 最低 CPU 8核 / 内存 16G / 存储 200G SSD / 算力 RTX 3090；推荐 CPU 16核 / 内存 32G / 存储 500G SSD / 算力 A10 或 A100。"
+      ;;
+  esac
+}
+
 ensure_tls_env_defaults() {
   PRIMARY_IP=$(detect_primary_ip || true)
   HOST_NAME=$(hostname 2>/dev/null || printf 'localhost')
@@ -200,7 +212,7 @@ ensure_tls_env_defaults() {
 
 wait_for_service_health() {
   CONTAINER_NAME="$1"
-  ATTEMPTS=${2:-60}
+  ATTEMPTS=${2:-90}
 
   INDEX=0
   LAST_STATUS=""
@@ -230,12 +242,14 @@ wait_for_service_health() {
           return 0
         fi
         ;;
-      unhealthy|exited|dead)
+      unhealthy)
         if docker exec "$CONTAINER_NAME" sh -lc '/app/scripts/healthcheck.sh' >/tmp/asr-manual-healthcheck.log 2>&1; then
           echo "Docker 健康状态为 $STATUS，但容器内部健康检查已通过。"
           rm -f /tmp/asr-manual-healthcheck.log
           return 0
         fi
+        ;;
+      exited|dead)
         return 1
         ;;
     esac
@@ -363,4 +377,5 @@ echo "版本: $RELEASE_VERSION"
 echo "镜像: $RELEASE_IMAGE"
 echo "备份目录: $BACKUP_DIR"
 echo "注意: 默认启用自签名 HTTPS，浏览器首次访问会提示证书不受信任；接受证书后即可正常使用网页端实时录音。"
+print_hardware_requirements
 print_access_summary

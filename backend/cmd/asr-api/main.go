@@ -171,6 +171,7 @@ func (a *meetingBatchEngineAdapter) SubmitBatch(ctx context.Context, req appmeet
 	result, err := a.client.SubmitBatch(ctx, asrengine.BatchTranscribeRequest{
 		AudioURL:      req.AudioURL,
 		LocalFilePath: req.LocalFilePath,
+		Language:      req.Language,
 	})
 	if err != nil {
 		return nil, err

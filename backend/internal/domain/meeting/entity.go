@@ -23,6 +23,7 @@ type Meeting struct {
 	ExternalTaskID string        `json:"external_task_id,omitempty"`
 	LocalFilePath  string        `json:"local_file_path,omitempty"`
 	Duration       float64       `json:"duration"` // seconds
+	Language       string        `json:"language"`
 	Status         MeetingStatus `json:"status"`
 	SyncFailCount  int           `json:"sync_fail_count"`
 	LastSyncError  string        `json:"last_sync_error,omitempty"`

@@ -87,6 +87,12 @@ func (h *MeetingHandler) Upload(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	language, _, _, err := parseASROptions(c)
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 
 	userID := middleware.UserIDFromContext(c)
 	title := strings.TrimSpace(c.PostForm("title"))
@@ -102,6 +108,7 @@ func (h *MeetingHandler) Upload(c *gin.Context) {
 		},
 		Title:      title,
 		WorkflowID: workflowID,
+		Language:   language,
 	})
 	if err != nil {
 		_ = os.Remove(audioFile.AbsolutePath)

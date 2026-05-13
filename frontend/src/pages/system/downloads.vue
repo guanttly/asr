@@ -16,10 +16,42 @@ const userStore = useUserStore()
 
 const CERT_DOWNLOAD_PATH = '/downloads/certs/tls.crt'
 
+type ClientWindowsFamily = 'legacy' | 'win10+' | 'unknown'
+
 const loading = ref(false)
 const artifacts = ref<DownloadArtifact[]>([])
+const clientWindowsFamily = ref<ClientWindowsFamily>('unknown')
 
-const latestArtifact = computed(() => artifacts.value[0] ?? null)
+const win10Artifacts = computed(() => artifacts.value.filter(item => item.platform === 'win10+'))
+const win7Artifacts = computed(() => artifacts.value.filter(item => item.platform === 'win7'))
+const otherArtifacts = computed(() => artifacts.value.filter(item => item.platform !== 'win7' && item.platform !== 'win10+'))
+
+const latestArtifact = computed(() => {
+  if (clientWindowsFamily.value === 'legacy')
+    return win7Artifacts.value[0] ?? otherArtifacts.value[0] ?? win10Artifacts.value[0] ?? null
+
+  if (clientWindowsFamily.value === 'win10+')
+    return win10Artifacts.value[0] ?? otherArtifacts.value[0] ?? win7Artifacts.value[0] ?? null
+
+  return win10Artifacts.value[0] ?? otherArtifacts.value[0] ?? win7Artifacts.value[0] ?? null
+})
+
+const recommendationTitle = computed(() => {
+  if (clientWindowsFamily.value === 'legacy')
+    return '当前系统推荐'
+  if (clientWindowsFamily.value === 'win10+')
+    return '当前系统推荐'
+  return '最新推荐'
+})
+
+const recommendationHint = computed(() => {
+  if (clientWindowsFamily.value === 'legacy')
+    return '已识别为旧版 Windows，优先展示兼容版安装包。'
+  if (clientWindowsFamily.value === 'win10+')
+    return '已识别为 Windows 10 / 11，优先展示推荐版安装包。'
+  return '未识别到明确的 Windows 版本，默认优先展示 Win10 / 11 推荐版。'
+})
+
 const hasLogin = computed(() => Boolean(userStore.token))
 const certDownloadPath = computed(() => CERT_DOWNLOAD_PATH)
 const certDownloadUrl = computed(() => {
@@ -27,6 +59,28 @@ const certDownloadUrl = computed(() => {
     return CERT_DOWNLOAD_PATH
   return new URL(CERT_DOWNLOAD_PATH, window.location.origin).toString()
 })
+
+function detectClientWindowsFamily(): ClientWindowsFamily {
+  if (typeof navigator === 'undefined')
+    return 'unknown'
+
+  const match = navigator.userAgent.match(/Windows NT (\d+)\.(\d+)/i)
+  if (!match)
+    return 'unknown'
+
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (!Number.isFinite(major) || !Number.isFinite(minor))
+    return 'unknown'
+
+  if (major >= 10)
+    return 'win10+'
+
+  if (major === 6 && minor <= 3)
+    return 'legacy'
+
+  return 'unknown'
+}
 
 function formatSize(sizeBytes: number) {
   if (!Number.isFinite(sizeBytes) || sizeBytes <= 0)
@@ -51,6 +105,22 @@ function formatTime(value: string) {
     return '未知时间'
 
   return parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatArtifactPlatform(platform?: DownloadArtifact['platform']) {
+  if (platform === 'win7')
+    return 'Win7 兼容版'
+  if (platform === 'win10+')
+    return 'Win10/11 推荐版'
+  return '通用安装包'
+}
+
+function getArtifactTagType(platform?: DownloadArtifact['platform']) {
+  if (platform === 'win7')
+    return 'warning'
+  if (platform === 'win10+')
+    return 'success'
+  return 'info'
 }
 
 async function loadArtifacts() {
@@ -79,6 +149,7 @@ async function handleCopyLink(url: string) {
 }
 
 onMounted(() => {
+  clientWindowsFamily.value = detectClientWindowsFamily()
   loadArtifacts()
 })
 
@@ -105,6 +176,10 @@ function handlePortalEntry() {
 
             <div class="mt-4 rounded-3 border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-7 text-amber-800">
               浏览器端实时语音采集依赖安全上下文。远程网页访问时，实时录音通常需要 HTTPS 或 localhost；如果只是 HTTP 页面，建议优先下载终端客户端，或在服务器前面接入 HTTPS 反向代理。
+            </div>
+
+            <div class="mt-3 rounded-3 border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-7 text-sky-900">
+              桌面端分为两个安装包：Windows 10 / 11 用户请下载“推荐版（Tauri）”；仅 Windows 7 SP1 用户需要安装“Win7 兼容版（Electron 22）”。两者在下面的列表区分别展示，请根据系统选择对应安装包。
             </div>
 
             <div class="mt-5 flex flex-wrap gap-3 text-sm text-slate/78">
@@ -134,13 +209,19 @@ function handlePortalEntry() {
 
           <div class="download-highlight">
             <div class="text-xs font-700 uppercase tracking-[0.18em] text-teal-700/78">
-              最新推荐
+              {{ recommendationTitle }}
             </div>
             <template v-if="latestArtifact">
+              <div class="mt-2 text-xs leading-6 text-slate/72">
+                {{ recommendationHint }}
+              </div>
               <div class="mt-3 text-lg font-700 text-ink break-all">
                 {{ latestArtifact.name }}
               </div>
               <div class="mt-3 flex flex-wrap gap-2 text-xs text-slate/72">
+                <NTag size="small" round :bordered="false" :type="getArtifactTagType(latestArtifact.platform)">
+                  {{ formatArtifactPlatform(latestArtifact.platform) }}
+                </NTag>
                 <NTag size="small" round :bordered="false" type="success">
                   {{ formatSize(latestArtifact.size_bytes) }}
                 </NTag>
@@ -262,33 +343,126 @@ function handlePortalEntry() {
           </div>
         </template>
 
-        <div v-if="artifacts.length" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <article v-for="artifact in artifacts" :key="artifact.name" class="download-card">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="download-card-title">
-                  {{ artifact.name }}
-                </div>
-                <div class="mt-2 text-xs text-slate/68">
-                  更新时间 {{ formatTime(artifact.modified_at) }}
-                </div>
+        <div v-if="artifacts.length" class="flex flex-col gap-6">
+          <section v-if="win10Artifacts.length" class="download-group">
+            <header class="download-group__header">
+              <div class="download-group__title">
+                Windows 10 / 11 推荐版
+                <NTag size="small" round :bordered="false" type="success" class="ml-2">
+                  Tauri
+                </NTag>
               </div>
-              <NTag size="small" round :bordered="false" type="success">
-                {{ formatSize(artifact.size_bytes) }}
-              </NTag>
+              <div class="download-group__hint">
+                适用于 Windows 10 1803 以上、Windows 11；调用系统 WebView2，安装包更小，运行性能更优。
+              </div>
+            </header>
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <article v-for="artifact in win10Artifacts" :key="artifact.name" class="download-card">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="download-card-title">
+                      {{ artifact.name }}
+                    </div>
+                    <div class="mt-2 text-xs text-slate/68">
+                      更新时间 {{ formatTime(artifact.modified_at) }}
+                    </div>
+                  </div>
+                  <NTag size="small" round :bordered="false" type="success">
+                    {{ formatSize(artifact.size_bytes) }}
+                  </NTag>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-2">
+                  <a :href="artifact.download_url" class="inline-flex">
+                    <NButton type="primary" color="#0f766e" secondary>
+                      下载
+                    </NButton>
+                  </a>
+                  <NButton tertiary @click="handleCopyLink(artifact.download_url)">
+                    复制链接
+                  </NButton>
+                </div>
+              </article>
             </div>
+          </section>
 
-            <div class="mt-5 flex flex-wrap gap-2">
-              <a :href="artifact.download_url" class="inline-flex">
-                <NButton type="primary" color="#0f766e" secondary>
-                  下载
-                </NButton>
-              </a>
-              <NButton tertiary @click="handleCopyLink(artifact.download_url)">
-                复制链接
-              </NButton>
+          <section v-if="win7Artifacts.length" class="download-group">
+            <header class="download-group__header">
+              <div class="download-group__title">
+                Windows 7 兼容版
+                <NTag size="small" round :bordered="false" type="warning" class="ml-2">
+                  Electron 22
+                </NTag>
+              </div>
+              <div class="download-group__hint">
+                仅适用于 Windows 7 SP1；包体较大但无需额外安装 WebView2。Win10 以上用户请使用上方推荐版。
+              </div>
+            </header>
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <article v-for="artifact in win7Artifacts" :key="artifact.name" class="download-card download-card--legacy">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="download-card-title">
+                      {{ artifact.name }}
+                    </div>
+                    <div class="mt-2 text-xs text-slate/68">
+                      更新时间 {{ formatTime(artifact.modified_at) }}
+                    </div>
+                  </div>
+                  <NTag size="small" round :bordered="false" type="warning">
+                    {{ formatSize(artifact.size_bytes) }}
+                  </NTag>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-2">
+                  <a :href="artifact.download_url" class="inline-flex">
+                    <NButton type="primary" color="#b45309" secondary>
+                      下载
+                    </NButton>
+                  </a>
+                  <NButton tertiary @click="handleCopyLink(artifact.download_url)">
+                    复制链接
+                  </NButton>
+                </div>
+              </article>
             </div>
-          </article>
+          </section>
+
+          <section v-if="otherArtifacts.length" class="download-group">
+            <header class="download-group__header">
+              <div class="download-group__title">
+                其他安装包
+              </div>
+              <div class="download-group__hint">
+                未能从文件名识别目标平台的安装包，需手动选择。
+              </div>
+            </header>
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <article v-for="artifact in otherArtifacts" :key="artifact.name" class="download-card">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="download-card-title">
+                      {{ artifact.name }}
+                    </div>
+                    <div class="mt-2 text-xs text-slate/68">
+                      更新时间 {{ formatTime(artifact.modified_at) }}
+                    </div>
+                  </div>
+                  <NTag size="small" round :bordered="false" type="info">
+                    {{ formatSize(artifact.size_bytes) }}
+                  </NTag>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-2">
+                  <a :href="artifact.download_url" class="inline-flex">
+                    <NButton type="primary" color="#0f766e" secondary>
+                      下载
+                    </NButton>
+                  </a>
+                  <NButton tertiary @click="handleCopyLink(artifact.download_url)">
+                    复制链接
+                  </NButton>
+                </div>
+              </article>
+            </div>
+          </section>
         </div>
 
         <div v-else class="flex items-center justify-center py-10">
@@ -472,6 +646,31 @@ function handlePortalEntry() {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 250, 0.92));
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.download-card--legacy {
+  border-color: rgba(217, 119, 6, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.85));
+}
+
+.download-group__header {
+  margin-bottom: 0.85rem;
+}
+
+.download-group__title {
+  display: flex;
+  align-items: center;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.download-group__hint {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: rgba(71, 85, 105, 0.78);
+  line-height: 1.6;
 }
 
 .download-card-title {

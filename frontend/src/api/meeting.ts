@@ -4,7 +4,7 @@ export function getMeetings(params?: { offset?: number, limit?: number }) {
   return request.get('/api/meetings', { params })
 }
 
-export function createMeeting(payload: { title: string, audio_url: string, duration?: number, workflow_id?: number }) {
+export function createMeeting(payload: { title: string, audio_url: string, duration?: number, workflow_id?: number, language?: string }) {
   return request.post('/api/meetings', payload)
 }
 

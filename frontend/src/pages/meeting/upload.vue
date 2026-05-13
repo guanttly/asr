@@ -122,7 +122,7 @@ onMounted(loadWorkflows)
       <NForm label-placement="top">
         <NFormItem label="会议音频文件">
           <div class="grid w-full gap-3">
-            <input ref="fileInput" type="file" accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm" multiple class="hidden" @change="handleFileSelected">
+            <input ref="fileInput" type="file" accept=".wav,.mp3" multiple class="hidden" @change="handleFileSelected">
             <div class="flex flex-wrap items-center gap-2">
               <NButton type="primary" color="#0f766e" secondary @click="handleChooseFile">
                 选择音频文件
@@ -132,7 +132,7 @@ onMounted(loadWorkflows)
               </NButton>
             </div>
             <div class="rounded-2 border border-dashed border-gray-300 bg-[#fbfdff] px-4 py-3 text-sm text-slate">
-              上传后会直接创建会议记录，并由会议应用独立提交转写与摘要处理。支持单个大文件，也支持一次选择多个小文件批量提交。
+              上传后会直接创建会议记录，并由会议应用独立提交转写与摘要处理。支持 wav/mp3 单个大文件，也支持一次选择多个小文件批量提交。
             </div>
             <div class="text-xs text-slate/80">
               {{ totalSelectedSizeText }}

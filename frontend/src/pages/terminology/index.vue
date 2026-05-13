@@ -12,6 +12,7 @@ import {
   getTermDicts,
   getTermEntries,
   getTermRules,
+  importTermEntries,
   updateTermDict,
   updateTermEntry,
   updateTermRule,
@@ -37,6 +38,8 @@ interface RuleItem {
   replacement: string
   enabled: boolean
   sort_order: number
+  priority?: number
+  conflict_group?: string
 }
 
 type RuleMatchType = 'literal' | 'regex' | 'number_normalize'
@@ -74,16 +77,20 @@ const ruleLoading = ref(false)
 const dictSaving = ref(false)
 const entrySaving = ref(false)
 const ruleSaving = ref(false)
+const importingEntries = ref(false)
 const deletingDictId = ref<number | null>(null)
 const deletingEntryId = ref<number | null>(null)
 const deletingRuleId = ref<number | null>(null)
 const showDictModal = ref(false)
 const showEntryModal = ref(false)
 const showRuleModal = ref(false)
+const showImportModal = ref(false)
 const editingDictId = ref<number | null>(null)
 const editingEntryId = ref<number | null>(null)
 const editingRuleId = ref<number | null>(null)
 const currentDictId = ref<number | null>(null)
+const importFileInput = ref<HTMLInputElement | null>(null)
+const lastImportResult = ref<{ imported: number, skipped: number } | null>(null)
 const detailTab = ref<'entries' | 'rules'>('entries')
 const dicts = ref<DictItem[]>([])
 const entries = ref<EntryItem[]>([])
@@ -112,6 +119,22 @@ const currentDict = computed(() => dicts.value.find(item => item.id === currentD
 const dictModalTitle = computed(() => editingDictId.value ? '编辑术语词库' : '新建术语词库')
 const entryModalTitle = computed(() => editingEntryId.value ? '编辑词条' : '新增词条')
 const ruleModalTitle = computed(() => editingRuleId.value ? '编辑纠错规则' : '新增纠错规则')
+const ruleConflictWarnings = computed(() => {
+  const groups = new Map<string, RuleItem[]>()
+  for (const rule of rules.value) {
+    if (!rule.enabled || rule.match_type === 'number_normalize')
+      continue
+    const key = rule.conflict_group?.trim() || `${rule.match_type}:${rule.pattern.trim()}`
+    if (!key.endsWith(':')) {
+      const items = groups.get(key) || []
+      items.push(rule)
+      groups.set(key, items)
+    }
+  }
+  return Array.from(groups.entries())
+    .filter(([, items]) => items.length > 1)
+    .map(([key, items]) => `${key} 存在 ${items.length} 条启用规则，请调整优先级或关闭重复规则。`)
+})
 
 const ruleMatchMeta: Record<RuleMatchType, RuleMatchMeta> = {
   literal: {
@@ -362,7 +385,7 @@ const entryColumns = [
 const ruleColumns = [
   { title: '纠错方式', key: 'match_type', width: 140, render: (row: RuleItem) => ruleMatchLabel(row.match_type) },
   { title: '预览效果', key: 'preview', minWidth: 360, render: (row: RuleItem) => renderRulePreview(row) },
-  { title: '执行顺序', key: 'sort_order', width: 96 },
+  { title: '优先级', key: 'priority', width: 96, render: (row: RuleItem) => row.priority || row.sort_order || 100 },
   {
     title: '状态',
     key: 'enabled',
@@ -476,6 +499,59 @@ async function loadEntries(dictId = currentDictId.value) {
   finally {
     entryLoading.value = false
   }
+}
+
+function openImportModal() {
+  if (!currentDictId.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  lastImportResult.value = null
+  showImportModal.value = true
+}
+
+function chooseImportFile() {
+  importFileInput.value?.click()
+}
+
+async function handleImportFileSelected(event: Event) {
+  const file = (event.target as HTMLInputElement | null)?.files?.[0]
+  if (!file || !currentDictId.value)
+    return
+  if (file.size > 5 * 1024 * 1024) {
+    message.warning('导入文件不能超过 5MB')
+    return
+  }
+  const formData = new FormData()
+  formData.append('file', file)
+  importingEntries.value = true
+  try {
+    const result = await importTermEntries(currentDictId.value, formData)
+    lastImportResult.value = result.data
+    message.success(`已导入 ${result.data.imported} 条词条`)
+    await loadEntries(currentDictId.value)
+  }
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || '词条导入失败，请确认文件格式为 CSV/TSV/TXT/XLSX')
+  }
+  finally {
+    importingEntries.value = false
+    if (importFileInput.value)
+      importFileInput.value.value = ''
+  }
+}
+
+function downloadImportTemplate() {
+  const blob = new Blob(['correct_term,wrong_variants\n示例标准词,错误写法1|错误写法2\n'], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = 'terminology-import-template.csv'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 async function loadRules(dictId = currentDictId.value) {
@@ -665,6 +741,7 @@ async function handleSubmitRule() {
       replacement: ruleForm.matchType === 'number_normalize' ? '' : ruleForm.replacement.trim(),
       enabled: true,
       sort_order: ruleForm.sortOrder || 100,
+      priority: ruleForm.sortOrder || 100,
     }
 
     if (editingRuleId.value) {
@@ -781,6 +858,9 @@ onMounted(loadDicts)
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && loadEntries(currentDictId)">
                 刷新
               </NButton>
+              <NButton :disabled="!currentDictId" quaternary size="small" @click="openImportModal">
+                批量导入
+              </NButton>
               <NButton :disabled="!currentDictId" quaternary size="small" @click="openCreateEntryModal">
                 新增词条
               </NButton>
@@ -788,6 +868,11 @@ onMounted(loadDicts)
             <NDataTable flex-height class="flex-1 min-h-0" :columns="entryColumns" :data="entries" :loading="entryLoading" :pagination="{ pageSize: 8 }" size="small" />
           </NTabPane>
           <NTabPane name="rules" tab="纠错规则">
+            <div v-if="ruleConflictWarnings.length" class="mb-3 grid gap-2 shrink-0">
+              <NAlert v-for="warning in ruleConflictWarnings" :key="warning" type="warning" :show-icon="false">
+                {{ warning }}
+              </NAlert>
+            </div>
             <div class="mb-3 flex justify-end gap-2 shrink-0">
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && loadRules(currentDictId)">
                 刷新
@@ -819,6 +904,29 @@ onMounted(loadDicts)
           </NButton>
         </div>
       </NForm>
+    </NModal>
+
+    <NModal v-model:show="showImportModal" preset="card" title="批量导入词条" class="modal-card max-w-140">
+      <div class="grid gap-4 text-sm leading-7 text-slate">
+        <NAlert type="info" :show-icon="false">
+          支持 CSV/TSV/TXT/XLSX 文件，单次最多 5000 行且文件不超过 5MB。表头可使用 correct_term 与 wrong_variants；已存在或本次重复的标准词会跳过。
+        </NAlert>
+        <input ref="importFileInput" type="file" accept=".csv,.tsv,.txt,.xlsx" class="hidden" @change="handleImportFileSelected">
+        <div v-if="lastImportResult" class="rounded-2 bg-mist/70 px-3 py-2 text-xs text-slate">
+          已导入 {{ lastImportResult.imported }} 条，跳过 {{ lastImportResult.skipped }} 条。
+        </div>
+        <div class="modal-footer-row">
+          <NButton @click="downloadImportTemplate">
+            下载模板
+          </NButton>
+          <NButton @click="showImportModal = false">
+            关闭
+          </NButton>
+          <NButton type="primary" color="#0f766e" :loading="importingEntries" @click="chooseImportFile">
+            选择文件导入
+          </NButton>
+        </div>
+      </div>
     </NModal>
 
     <NModal v-model:show="showEntryModal" preset="card" :title="entryModalTitle" class="modal-card max-w-160">

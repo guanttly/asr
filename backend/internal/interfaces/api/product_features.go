@@ -21,8 +21,11 @@ type productCapabilitiesPayload struct {
 }
 
 type productFeaturesPayload struct {
-	Edition      pkgconfig.ProductEdition   `json:"edition"`
-	Capabilities productCapabilitiesPayload `json:"capabilities"`
+	Edition              pkgconfig.ProductEdition             `json:"edition"`
+	Capabilities         productCapabilitiesPayload           `json:"capabilities"`
+	SupportedLanguages   []pkgconfig.ProductLanguage          `json:"supported_languages"`
+	HardwareTier         pkgconfig.ProductEdition             `json:"hardware_tier"`
+	HardwareRequirements map[string]pkgconfig.HardwareProfile `json:"hardware_requirements"`
 }
 
 type featureGate struct {
@@ -43,6 +46,9 @@ func (g featureGate) payload() productFeaturesPayload {
 			Voiceprint:   g.features.Voiceprint,
 			VoiceControl: g.features.VoiceControl,
 		},
+		SupportedLanguages:   g.features.SupportedLanguages,
+		HardwareTier:         g.features.HardwareTier,
+		HardwareRequirements: g.features.HardwareRequirements,
 	}
 }
 

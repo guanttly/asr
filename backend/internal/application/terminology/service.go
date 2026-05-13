@@ -28,6 +28,7 @@ const (
 	terminologySeedStateKey            = "terminology_seed_initialized_v1"
 	terminologyDefaultRuleSeedStateKey = "terminology_default_rules_seeded_v1"
 	terminologySeedDictionaryListLimit = 1000
+	maxBatchImportEntries              = 5000
 )
 
 // NewService creates a new terminology application service.
@@ -192,12 +193,14 @@ func (s *Service) GetDictRules(ctx context.Context, dictID uint64) ([]RuleRespon
 	items := make([]RuleResponse, len(rules))
 	for i, rule := range rules {
 		items[i] = RuleResponse{
-			ID:          rule.ID,
-			MatchType:   string(rule.MatchType),
-			Pattern:     rule.Pattern,
-			Replacement: rule.Replacement,
-			Enabled:     rule.Enabled,
-			SortOrder:   rule.SortOrder,
+			ID:            rule.ID,
+			MatchType:     string(rule.MatchType),
+			Pattern:       rule.Pattern,
+			Replacement:   rule.Replacement,
+			Enabled:       rule.Enabled,
+			SortOrder:     rule.SortOrder,
+			Priority:      normalizeRulePriorityValue(rule.Priority, rule.SortOrder),
+			ConflictGroup: rule.ConflictGroup,
 		}
 	}
 
@@ -206,7 +209,7 @@ func (s *Service) GetDictRules(ctx context.Context, dictID uint64) ([]RuleRespon
 
 // CreateRule creates a correction rule under a dictionary.
 func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*RuleResponse, error) {
-	rule, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder)
+	rule, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder, req.Priority, req.ConflictGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -215,16 +218,18 @@ func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*Rule
 	}
 
 	return &RuleResponse{
-		ID:          rule.ID,
-		MatchType:   string(rule.MatchType),
-		Pattern:     rule.Pattern,
-		Replacement: rule.Replacement,
-		Enabled:     rule.Enabled,
-		SortOrder:   rule.SortOrder,
+		ID:            rule.ID,
+		MatchType:     string(rule.MatchType),
+		Pattern:       rule.Pattern,
+		Replacement:   rule.Replacement,
+		Enabled:       rule.Enabled,
+		SortOrder:     rule.SortOrder,
+		Priority:      normalizeRulePriorityValue(rule.Priority, rule.SortOrder),
+		ConflictGroup: rule.ConflictGroup,
 	}, nil
 }
 
-func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string, enabled bool, sortOrder int) (*domain.CorrectionRule, error) {
+func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string, enabled bool, sortOrder, priority int, conflictGroup string) (*domain.CorrectionRule, error) {
 	typeValue := domain.RuleMatchType(strings.TrimSpace(matchType))
 	if typeValue == "" {
 		typeValue = domain.RuleMatchLiteral
@@ -250,16 +255,29 @@ func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string,
 	if sortOrder <= 0 {
 		sortOrder = 100
 	}
+	priority = normalizeRulePriorityValue(priority, sortOrder)
 
 	rule := &domain.CorrectionRule{
-		DictID:      dictID,
-		MatchType:   typeValue,
-		Pattern:     pattern,
-		Replacement: replacement,
-		Enabled:     enabled,
-		SortOrder:   sortOrder,
+		DictID:        dictID,
+		MatchType:     typeValue,
+		Pattern:       pattern,
+		Replacement:   replacement,
+		Enabled:       enabled,
+		SortOrder:     sortOrder,
+		Priority:      priority,
+		ConflictGroup: strings.TrimSpace(conflictGroup),
 	}
 	return rule, nil
+}
+
+func normalizeRulePriorityValue(priority, sortOrder int) int {
+	if priority > 0 {
+		return priority
+	}
+	if sortOrder > 0 {
+		return sortOrder
+	}
+	return 100
 }
 
 // UpdateRule updates a correction rule.
@@ -268,7 +286,7 @@ func (s *Service) UpdateRule(ctx context.Context, req *UpdateRuleRequest) (*Rule
 	if err != nil {
 		return nil, err
 	}
-	next, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder)
+	next, err := normalizeRuleRequest(req.DictID, req.MatchType, req.Pattern, req.Replacement, req.Enabled, req.SortOrder, req.Priority, req.ConflictGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -278,16 +296,20 @@ func (s *Service) UpdateRule(ctx context.Context, req *UpdateRuleRequest) (*Rule
 	rule.Replacement = next.Replacement
 	rule.Enabled = next.Enabled
 	rule.SortOrder = next.SortOrder
+	rule.Priority = next.Priority
+	rule.ConflictGroup = next.ConflictGroup
 	if err := s.ruleRepo.Update(ctx, rule); err != nil {
 		return nil, err
 	}
 	return &RuleResponse{
-		ID:          rule.ID,
-		MatchType:   string(rule.MatchType),
-		Pattern:     rule.Pattern,
-		Replacement: rule.Replacement,
-		Enabled:     rule.Enabled,
-		SortOrder:   rule.SortOrder,
+		ID:            rule.ID,
+		MatchType:     string(rule.MatchType),
+		Pattern:       rule.Pattern,
+		Replacement:   rule.Replacement,
+		Enabled:       rule.Enabled,
+		SortOrder:     rule.SortOrder,
+		Priority:      normalizeRulePriorityValue(rule.Priority, rule.SortOrder),
+		ConflictGroup: rule.ConflictGroup,
 	}, nil
 }
 
@@ -583,14 +605,71 @@ func meetingMemoRules() []domain.CorrectionRule {
 }
 
 // BatchImport imports multiple term entries at once.
-func (s *Service) BatchImport(ctx context.Context, req *BatchImportRequest) error {
-	entries := make([]domain.TermEntry, len(req.Entries))
-	for i, e := range req.Entries {
-		entries[i] = domain.TermEntry{
-			DictID:        req.DictID,
-			CorrectTerm:   e.CorrectTerm,
-			WrongVariants: e.WrongVariants,
-		}
+func (s *Service) BatchImport(ctx context.Context, req *BatchImportRequest) (*BatchImportResult, error) {
+	if len(req.Entries) > maxBatchImportEntries {
+		return nil, fmt.Errorf("单次导入最多支持 %d 条词条", maxBatchImportEntries)
 	}
-	return s.entryRepo.BatchCreate(ctx, entries)
+
+	existingEntries, err := s.entryRepo.ListByDict(ctx, req.DictID)
+	if err != nil {
+		return nil, err
+	}
+	existingTerms := map[string]struct{}{}
+	for _, entry := range existingEntries {
+		existingTerms[normalizeTermKey(entry.CorrectTerm)] = struct{}{}
+	}
+
+	entries := make([]domain.TermEntry, 0, len(req.Entries))
+	skipped := 0
+	seenInImport := map[string]struct{}{}
+	for _, e := range req.Entries {
+		correctTerm := strings.TrimSpace(e.CorrectTerm)
+		if correctTerm == "" {
+			skipped++
+			continue
+		}
+		termKey := normalizeTermKey(correctTerm)
+		if _, ok := existingTerms[termKey]; ok {
+			skipped++
+			continue
+		}
+		if _, ok := seenInImport[termKey]; ok {
+			skipped++
+			continue
+		}
+		seenInImport[termKey] = struct{}{}
+		entries = append(entries, domain.TermEntry{
+			DictID:        req.DictID,
+			CorrectTerm:   correctTerm,
+			WrongVariants: normalizeStringSlice(e.WrongVariants),
+		})
+	}
+	if len(entries) == 0 {
+		return &BatchImportResult{Imported: 0, Skipped: skipped}, nil
+	}
+	if err := s.entryRepo.BatchCreate(ctx, entries); err != nil {
+		return nil, err
+	}
+	return &BatchImportResult{Imported: len(entries), Skipped: skipped}, nil
+}
+
+func normalizeTermKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizeStringSlice(values []string) []string {
+	items := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		items = append(items, trimmed)
+	}
+	return items
 }

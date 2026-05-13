@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { SCENE_MODES } from '@/constants/product'
@@ -8,6 +8,14 @@ import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
 const appWindow = getCurrentWindow()
+const dragHandleActive = ref(false)
+
+const DRAG_HANDLE_RADIUS_RATIO = 0.45
+const DRAG_START_THRESHOLD_PX = 4
+
+let pendingDrag: { startX: number, startY: number } | null = null
+let dragInProgress = false
+let suppressNextClick = false
 
 const orbState = computed(() => {
   if (!appStore.isRecording) return 'idle'
@@ -19,20 +27,105 @@ async function openSettings() {
   await invoke('open_settings_window').catch(() => undefined)
 }
 
-function isInteractiveTarget(target: EventTarget | null) {
-  return target instanceof Element && Boolean(target.closest('button, input, textarea, select, a, [data-no-drag]'))
+function isFormTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest('input, textarea, select, a, [data-no-drag]'))
 }
 
-async function startDrag(event: MouseEvent) {
-  if (isInteractiveTarget(event.target))
-    return
-  await appWindow.startDragging().catch(() => undefined)
+function isInsideCenterDragHandle(event: MouseEvent, element: HTMLElement) {
+  const rect = element.getBoundingClientRect()
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  const deltaX = event.clientX - centerX
+  const deltaY = event.clientY - centerY
+  const radius = Math.min(rect.width, rect.height) * DRAG_HANDLE_RADIUS_RATIO
+  return Math.hypot(deltaX, deltaY) <= radius
 }
+
+function updateDragHandle(event: MouseEvent) {
+  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  dragHandleActive.value = element ? isInsideCenterDragHandle(event, element) : false
+}
+
+function clearPendingDrag() {
+  pendingDrag = null
+  window.removeEventListener('mousemove', handleDragMove)
+  window.removeEventListener('mouseup', endDrag)
+}
+
+function endDrag() {
+  clearPendingDrag()
+  if (dragInProgress) {
+    dragInProgress = false
+    // Tauri 没有 stopDragging（系统接管 mouseup 自动结束），
+    // Electron Win7 用此调用通知主进程结束 cursor 轮询拖拽。
+    const stop = (appWindow as { stopDragging?: () => Promise<void> }).stopDragging
+    if (typeof stop === 'function')
+      void stop.call(appWindow).catch(() => undefined)
+  }
+}
+
+function handleDragMove(event: MouseEvent) {
+  if (!pendingDrag)
+    return
+
+  const moved = Math.hypot(event.clientX - pendingDrag.startX, event.clientY - pendingDrag.startY)
+  if (moved < DRAG_START_THRESHOLD_PX)
+    return
+
+  pendingDrag = null
+  window.removeEventListener('mousemove', handleDragMove)
+  dragInProgress = true
+  suppressNextClick = true
+  window.setTimeout(() => {
+    suppressNextClick = false
+  }, 500)
+  void appWindow.startDragging().catch(() => undefined)
+}
+
+function startDrag(event: MouseEvent) {
+  if (isFormTarget(event.target))
+    return
+
+  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  if (!element || !isInsideCenterDragHandle(event, element))
+    return
+
+  pendingDrag = { startX: event.clientX, startY: event.clientY }
+  window.addEventListener('mousemove', handleDragMove)
+  window.addEventListener('mouseup', endDrag, { once: true })
+}
+
+function suppressClickAfterDrag(event: MouseEvent) {
+  if (!suppressNextClick)
+    return
+
+  suppressNextClick = false
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+onBeforeUnmount(() => {
+  clearPendingDrag()
+  if (dragInProgress) {
+    dragInProgress = false
+    const stop = (appWindow as { stopDragging?: () => Promise<void> }).stopDragging
+    if (typeof stop === 'function')
+      void stop.call(appWindow).catch(() => undefined)
+  }
+})
 </script>
 
 <template>
-  <div class="recorder-shell" title="右键打开设置" @contextmenu.prevent="openSettings" @mousedown.left="startDrag">
-    <div class="orb-frame" :data-state="orbState">
+  <div class="recorder-shell" title="右键打开设置" @contextmenu.prevent="openSettings">
+    <div
+      class="orb-frame"
+      :class="{ 'drag-handle': dragHandleActive }"
+      :data-state="orbState"
+      @mousemove="updateDragHandle"
+      @mouseleave="dragHandleActive = false"
+      @mousedown.left="startDrag"
+      @click.capture="suppressClickAfterDrag"
+    >
       <MicButton />
     </div>
   </div>
@@ -65,8 +158,13 @@ async function startDrag(event: MouseEvent) {
     0 6px 20px rgba(15, 118, 110, 0.18),
     0 1px 0 rgba(255, 255, 255, 0.95) inset,
     0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+  cursor: pointer;
   transition: border-color 0.3s ease, box-shadow 0.3s ease, background 0.3s ease, transform 0.25s ease;
   animation: orb-breath 3.2s ease-in-out infinite;
+}
+
+.orb-frame :deep(*) {
+  cursor: pointer;
 }
 
 .orb-frame:hover {

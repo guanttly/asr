@@ -25,6 +25,11 @@ export interface VoiceControlConfig {
   enabled: boolean
 }
 
+export interface ProductLanguageOption {
+  code: string
+  label: string
+}
+
 function defaultProductCapabilities(): ProductCapabilities {
   return {
     [PRODUCT_CAPABILITY_KEYS.REALTIME]: true,
@@ -36,6 +41,7 @@ function defaultProductCapabilities(): ProductCapabilities {
 }
 
 interface PersistedState {
+  packagedServerUrl: string
   serverUrl: string
   token: string
   deviceAlias: string
@@ -63,6 +69,7 @@ const DEFAULT_RECOGNITION: RecognitionSettings = {
 
 function defaultPersistedState(): PersistedState {
   return {
+    packagedServerUrl: DEFAULT_SERVER_URL,
     serverUrl: DEFAULT_SERVER_URL,
     token: '',
     deviceAlias: '',
@@ -80,10 +87,42 @@ function defaultPersistedState(): PersistedState {
   }
 }
 
+function isLoopbackServerUrl(raw?: string | null) {
+  try {
+    const hostname = new URL(normalizeServerUrl(raw)).hostname.toLowerCase()
+    return hostname === 'localhost' || hostname === '127.0.0.1'
+  }
+  catch {
+    return false
+  }
+}
+
+function resolvePersistedServerUrl(parsed: Partial<PersistedState> | null | undefined, defaults: PersistedState) {
+  const currentPackagedServerUrl = defaults.packagedServerUrl
+  const persistedServerUrl = parsed?.serverUrl ? normalizeServerUrl(parsed.serverUrl) : ''
+  if (!persistedServerUrl)
+    return currentPackagedServerUrl
+
+  const previousPackagedServerUrl = parsed?.packagedServerUrl ? normalizeServerUrl(parsed.packagedServerUrl) : ''
+  if (previousPackagedServerUrl) {
+    if (previousPackagedServerUrl !== currentPackagedServerUrl && persistedServerUrl === previousPackagedServerUrl)
+      return currentPackagedServerUrl
+    return persistedServerUrl
+  }
+
+  // 旧版本没有记录打包默认地址，且常把 localhost 写进持久化设置；
+  // 仅在当前安装包已切到非本机地址时，才把这类历史默认值迁过来。
+  if (!isLoopbackServerUrl(currentPackagedServerUrl) && isLoopbackServerUrl(persistedServerUrl))
+    return currentPackagedServerUrl
+
+  return persistedServerUrl
+}
+
 function normalizePersistedState(parsed?: Partial<PersistedState> | null): PersistedState {
   const defaults = defaultPersistedState()
   return {
-    serverUrl: normalizeServerUrl(parsed?.serverUrl || defaults.serverUrl),
+    packagedServerUrl: defaults.packagedServerUrl,
+    serverUrl: resolvePersistedServerUrl(parsed, defaults),
     token: parsed?.token || '',
     deviceAlias: parsed?.deviceAlias || '',
     machineCode: parsed?.machineCode || '',
@@ -117,7 +156,23 @@ function serializePersistedState(state: PersistedState) {
 }
 
 function loadPersisted(): PersistedState {
-  return parsePersistedState(localStorage.getItem(SETTINGS_STORAGE_KEY)) || defaultPersistedState()
+  const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
+  const parsed = parsePersistedState(raw)
+  if (parsed) {
+    const serialized = serializePersistedState(parsed)
+    if (raw !== serialized)
+      localStorage.setItem(SETTINGS_STORAGE_KEY, serialized)
+    return parsed
+  }
+  return defaultPersistedState()
+}
+
+function defaultProductLanguages(): ProductLanguageOption[] {
+  return [
+    { code: 'zh-CN', label: '普通话' },
+    { code: 'zh', label: '中文' },
+    { code: 'en-US', label: '英文（美）' },
+  ]
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -143,6 +198,7 @@ export const useAppStore = defineStore('app', () => {
   })
   const productEdition = ref<ProductEdition>(PRODUCT_EDITIONS.STANDARD)
   const productCapabilities = reactive<ProductCapabilities>(defaultProductCapabilities())
+  const productSupportedLanguages = ref<ProductLanguageOption[]>(defaultProductLanguages())
   const productFeaturesLoaded = ref(false)
   const voiceControlLoaded = ref(false)
   const voiceCommandActive = ref(false)
@@ -167,6 +223,7 @@ export const useAppStore = defineStore('app', () => {
 
   function snapshotState(): PersistedState {
     return {
+      packagedServerUrl: DEFAULT_SERVER_URL,
       serverUrl: serverUrl.value,
       token: token.value,
       deviceAlias: deviceAlias.value,
@@ -295,6 +352,7 @@ export const useAppStore = defineStore('app', () => {
 
   function applyProductFeatures(payload?: {
     edition?: string
+    supported_languages?: ProductLanguageOption[]
     capabilities?: {
       realtime?: boolean
       batch?: boolean
@@ -309,6 +367,9 @@ export const useAppStore = defineStore('app', () => {
     productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.MEETING] === true
     productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICEPRINT] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.VOICEPRINT] === true
     productCapabilities[PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL] = payload?.capabilities?.[PRODUCT_API_CAPABILITY_KEYS.VOICE_CONTROL] === true
+    productSupportedLanguages.value = Array.isArray(payload?.supported_languages) && payload.supported_languages.length > 0
+      ? payload.supported_languages.filter(item => typeof item.code === 'string' && typeof item.label === 'string')
+      : defaultProductLanguages()
     productFeaturesLoaded.value = true
     if (!productCapabilities[PRODUCT_CAPABILITY_KEYS.MEETING]) {
       sceneMode.value = SCENE_MODES.REPORT
@@ -381,6 +442,7 @@ export const useAppStore = defineStore('app', () => {
     voiceControl,
     productEdition,
     productCapabilities,
+    productSupportedLanguages,
     productFeaturesLoaded,
     voiceControlLoaded,
     voiceCommandActive,

@@ -96,6 +96,12 @@ const metrics = computed(() => {
   ]
 })
 
+const hardwareProfiles = computed(() => {
+  return Object.values(appStore.productHardwareRequirements || {})
+    .filter(Boolean)
+    .sort((left, right) => (left?.tier === 'standard' ? -1 : 1) - (right?.tier === 'standard' ? -1 : 1))
+})
+
 const alertReasonOptions = [
   { label: '全部告警', value: 'all' },
   { label: '同步重试过多', value: 'repeated_sync_failure' },
@@ -714,6 +720,31 @@ onMounted(loadOverview)
               <NTag :type="(overview?.post_process_failed_count ?? 0) > 0 ? 'warning' : 'success'" round size="small">
                 {{ (overview?.post_process_failed_count ?? 0) > 0 ? '需介入' : '正常' }}
               </NTag>
+            </div>
+          </div>
+          <div class="rounded-2.5 bg-mist/60 p-3.5 md:col-span-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="text-xs text-slate/70">
+                硬件要求
+              </div>
+              <NTag type="info" round size="small">
+                当前 {{ appStore.productHardwareTier === 'advanced' ? '高级版' : '标准版' }}
+              </NTag>
+            </div>
+            <div class="mt-3 grid gap-3 xl:grid-cols-2">
+              <div v-for="profile in hardwareProfiles" :key="profile?.tier" class="rounded-2 border border-white/70 bg-white/65 p-3">
+                <div class="text-sm font-700 text-ink">
+                  {{ profile?.tier === 'advanced' ? '高级版' : '标准版' }}
+                </div>
+                <div class="mt-2 grid gap-2 text-xs leading-6 text-slate/80">
+                  <div>
+                    <span class="font-600 text-slate">最低：</span>{{ profile?.minimum.cpu }} / {{ profile?.minimum.memory }} / {{ profile?.minimum.storage }} / {{ profile?.minimum.acceleration }}
+                  </div>
+                  <div>
+                    <span class="font-600 text-slate">推荐：</span>{{ profile?.recommended.cpu }} / {{ profile?.recommended.memory }} / {{ profile?.recommended.storage }} / {{ profile?.recommended.acceleration }}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

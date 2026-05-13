@@ -80,12 +80,33 @@ const (
 )
 
 type ProductFeatures struct {
-	Edition      ProductEdition `json:"edition"`
-	Realtime     bool           `json:"realtime"`
-	Batch        bool           `json:"batch"`
-	Meeting      bool           `json:"meeting"`
-	Voiceprint   bool           `json:"voiceprint"`
-	VoiceControl bool           `json:"voice_control"`
+	Edition              ProductEdition             `json:"edition"`
+	Realtime             bool                       `json:"realtime"`
+	Batch                bool                       `json:"batch"`
+	Meeting              bool                       `json:"meeting"`
+	Voiceprint           bool                       `json:"voiceprint"`
+	VoiceControl         bool                       `json:"voice_control"`
+	SupportedLanguages   []ProductLanguage          `json:"supported_languages"`
+	HardwareTier         ProductEdition             `json:"hardware_tier"`
+	HardwareRequirements map[string]HardwareProfile `json:"hardware_requirements"`
+}
+
+type ProductLanguage struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+}
+
+type HardwareSpec struct {
+	CPU          string `json:"cpu"`
+	Memory       string `json:"memory"`
+	Storage      string `json:"storage"`
+	Acceleration string `json:"acceleration"`
+}
+
+type HardwareProfile struct {
+	Tier        ProductEdition `json:"tier"`
+	Minimum     HardwareSpec   `json:"minimum"`
+	Recommended HardwareSpec   `json:"recommended"`
 }
 
 type ProductConfig struct {
@@ -102,13 +123,17 @@ func (c ProductConfig) NormalizedEdition() ProductEdition {
 }
 
 func (c ProductConfig) Features() ProductFeatures {
+	edition := c.NormalizedEdition()
 	features := ProductFeatures{
-		Edition:      c.NormalizedEdition(),
-		Realtime:     true,
-		Batch:        true,
-		Meeting:      false,
-		Voiceprint:   false,
-		VoiceControl: false,
+		Edition:              edition,
+		Realtime:             true,
+		Batch:                true,
+		Meeting:              false,
+		Voiceprint:           false,
+		VoiceControl:         false,
+		SupportedLanguages:   defaultProductLanguages(),
+		HardwareTier:         edition,
+		HardwareRequirements: defaultHardwareProfiles(),
 	}
 	if features.Edition == ProductEditionAdvanced {
 		features.Meeting = true
@@ -116,6 +141,49 @@ func (c ProductConfig) Features() ProductFeatures {
 		features.VoiceControl = true
 	}
 	return features
+}
+
+func defaultProductLanguages() []ProductLanguage {
+	return []ProductLanguage{
+		{Code: "zh-CN", Label: "普通话"},
+		{Code: "zh", Label: "中文"},
+		{Code: "en-US", Label: "英文（美）"},
+	}
+}
+
+func defaultHardwareProfiles() map[string]HardwareProfile {
+	return map[string]HardwareProfile{
+		string(ProductEditionStandard): {
+			Tier: ProductEditionStandard,
+			Minimum: HardwareSpec{
+				CPU:          "8 核",
+				Memory:       "16 GB",
+				Storage:      "200 GB SSD",
+				Acceleration: "RTX 3090",
+			},
+			Recommended: HardwareSpec{
+				CPU:          "16 核",
+				Memory:       "32 GB",
+				Storage:      "500 GB SSD",
+				Acceleration: "A10 / A100",
+			},
+		},
+		string(ProductEditionAdvanced): {
+			Tier: ProductEditionAdvanced,
+			Minimum: HardwareSpec{
+				CPU:          "16 核",
+				Memory:       "32 GB",
+				Storage:      "500 GB SSD",
+				Acceleration: "A10",
+			},
+			Recommended: HardwareSpec{
+				CPU:          "16 核及以上",
+				Memory:       "32 GB 及以上",
+				Storage:      "500 GB SSD 及以上",
+				Acceleration: "A100",
+			},
+		},
+	}
 }
 
 // ServiceConfig holds downstream service endpoints.

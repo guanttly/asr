@@ -1088,7 +1088,7 @@ onBeforeUnmount(() => {
       <NTabs type="line" animated>
         <NTabPane name="upload" tab="上传本地音频">
           <div class="flex flex-wrap items-center gap-3 pt-3">
-            <NInput :value="selectedFile?.name || ''" readonly placeholder="请选择 wav / mp3 / m4a / flac 等音频文件" class="w-full sm:!w-80" />
+            <NInput :value="selectedFile?.name || ''" readonly placeholder="请选择 wav / mp3 音频文件" class="w-full sm:!w-80" />
             <NButton quaternary @click="handleChooseFile">
               选择文件
             </NButton>
@@ -1137,7 +1137,7 @@ onBeforeUnmount(() => {
       <input
         ref="fileInput"
         type="file"
-        accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm"
+        accept=".wav,.mp3"
         class="hidden"
         @change="handleFileSelected"
       >

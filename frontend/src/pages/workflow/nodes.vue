@@ -45,7 +45,7 @@ const nodeTestOutput = ref('')
 const nodeTestDetail = ref<Record<string, unknown> | string | null>(null)
 const nodeTestAudioInputRef = ref<HTMLInputElement | null>(null)
 const nodeTestAudioFile = ref<File | null>(null)
-const audioFileAccept = 'audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm'
+const audioFileAccept = '.wav,.mp3'
 
 const filteredNodeTypes = computed(() => {
   const value = keyword.value.trim().toLowerCase()

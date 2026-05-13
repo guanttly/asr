@@ -3,6 +3,8 @@ package api
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -23,8 +25,10 @@ func NewOpenPlatformHandler(service *appopenplatform.Service) *OpenPlatformHandl
 }
 
 func (h *OpenPlatformHandler) RegisterAdmin(group *gin.RouterGroup) {
+	group.GET("/openapi/docs", h.adminOnly(), h.GetDocs)
 	open := group.Group("/openplatform")
 	open.Use(h.adminOnly())
+	open.GET("/docs", h.GetDocs)
 	open.GET("/capabilities", h.ListCapabilities)
 	open.GET("/apps", h.ListApps)
 	open.POST("/apps", h.CreateApp)
@@ -43,6 +47,34 @@ func (h *OpenPlatformHandler) RegisterOpenAuth(group *gin.RouterGroup) {
 
 func (h *OpenPlatformHandler) ListCapabilities(c *gin.Context) {
 	response.Success(c, gin.H{"items": h.service.ListCapabilities()})
+}
+
+func (h *OpenPlatformHandler) GetDocs(c *gin.Context) {
+	content, err := readOpenAPIDocs()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	response.Success(c, gin.H{
+		"format":       "markdown",
+		"content":      content,
+		"capabilities": h.service.ListCapabilities(),
+	})
+}
+
+func readOpenAPIDocs() (string, error) {
+	candidates := []string{
+		filepath.Join("..", "docs", "openapi", "README.md"),
+		filepath.Join("docs", "openapi", "README.md"),
+		filepath.Join("..", "..", "docs", "openapi", "README.md"),
+	}
+	for _, path := range candidates {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			return string(content), nil
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 func (h *OpenPlatformHandler) ListApps(c *gin.Context) {

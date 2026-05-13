@@ -31,12 +31,14 @@ const (
 
 // CorrectionRule defines a specific correction rule.
 type CorrectionRule struct {
-	ID          uint64        `json:"id"`
-	DictID      uint64        `json:"dict_id"`
-	MatchType   RuleMatchType `json:"match_type"`
-	Pattern     string        `json:"pattern"`
-	Replacement string        `json:"replacement"`
-	Enabled     bool          `json:"enabled"`
-	SortOrder   int           `json:"sort_order"`
-	CreatedAt   time.Time     `json:"created_at"`
+	ID            uint64        `json:"id"`
+	DictID        uint64        `json:"dict_id"`
+	MatchType     RuleMatchType `json:"match_type"`
+	Pattern       string        `json:"pattern"`
+	Replacement   string        `json:"replacement"`
+	Enabled       bool          `json:"enabled"`
+	SortOrder     int           `json:"sort_order"`
+	Priority      int           `json:"priority"`
+	ConflictGroup string        `json:"conflict_group"`
+	CreatedAt     time.Time     `json:"created_at"`
 }

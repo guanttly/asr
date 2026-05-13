@@ -49,17 +49,21 @@
 - 发布包解压后的根目录固定为 asr-all-in-one，便于新版本直接覆盖到同一路径后执行升级。
 - 目标服务器解压后执行 install.sh 或 install.sh upgrade，即可自动 load 镜像并启动或原地升级服务。
 - 如果直接执行 `.run` 文件，会自动解包到当前目录并执行 install.sh。
-- 升级时数据目录继续复用 runtime/mysql、runtime/uploads、runtime/downloads 和 runtime/tmp，install.sh 会额外备份当前 .env 与 compose 文件。
+- 如果在已有 `asr-all-in-one` 目录上再次执行新的 `.run`，安装包会先解包到临时目录，再同步到现有目录：保留现有 `.env`、runtime/mysql、runtime/uploads、runtime/tmp 和已有证书，同时刷新 docker-compose.yml、安装脚本、离线镜像包与 runtime/downloads，并清理旧版本残留的发布文件。
+- 这样既能避免 MySQL 数据目录因属主为容器用户而在覆盖解包时触发 tar 报错，也能确保升级后实际运行的是新版本 compose 和下载资源；install.sh 会额外备份当前 .env 与 compose 文件。
 - install.sh 会等待容器健康检查通过；如果升级后服务未通过健康检查，脚本会尝试回滚到上一版镜像。
 - install.sh 完成后会输出当前证书的 SAN、推荐访问地址，以及 Windows Chrome/Edge 与 Firefox 的自签证书导入提示。
 - 首次安装时，admin-api 会按 `.env` 中的 `ASR_BOOTSTRAP_ADMIN_USERNAME`、`ASR_BOOTSTRAP_ADMIN_PASSWORD`、`ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME` 自动创建管理员账号；如果同名管理员已存在，则不会覆盖旧密码。
 - 打包时如果传入 `--server-host` 和端口参数，桌面客户端会以内置 HTTPS 默认地址重新构建，并自动放到 `runtime/downloads`。
-- 当前 Windows 桌面发布构建会为 WebView2 附加忽略证书错误参数，便于内网自签名 HTTPS 直接访问；如果 HTTPS 失败，客户端仍会按现有逻辑回退尝试 HTTP。
+- Win10/11 推荐版由 `desktop/`（Tauri）打包，Win7 兼容版由 `desktop-electron/`（Electron 22）打包；发布脚本会同时启动两者并按文件名中的 `_win10_` / `_win7_` 标识让公共下载页分组展示。
+- 如果仅需发 Win10/11 主推荐版，可传 `--skip-electron` 跳过 Win7 包构建；如果手边已有提前打好的安装包，可用 `--desktop-installer <path>` 和 `--desktop-electron-installer <path>` 直接复用。
+- Tauri 在 Windows 上使用系统 WebView2（Win10 1803+ 后预装）；Win7 用户请下载 Win7 兼容版。
 
 ## 卸载
 
 - 执行 `sh uninstall.sh` 可以停止并删除当前容器，但保留 runtime 数据目录和 `.env`。
 - 执行 `sh uninstall.sh purge` 可以同时清空 runtime/mysql、runtime/uploads、runtime/downloads、runtime/tmp、runtime/certs 和 backups。
+- `purge` 会在普通 `rm -rf` 遇到 mysql 用户写入的受限文件时，自动回退到容器内 root 清理，避免因为 runtime/mysql 被 chown 成 mysql:mysql 而删不干净。
 - 执行 `sh uninstall.sh purge --remove-image` 会额外尝试删除本地离线镜像标签。
 
 ## 外部依赖

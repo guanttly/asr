@@ -1,9 +1,11 @@
-mod injector;
 mod hotkeys;
+mod injector;
 mod tray;
 
 pub use injector::{inject_text, read_clipboard};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
@@ -11,20 +13,17 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
 fn install_windows_permission_handler<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use webview2_com::{
-        PermissionRequestedEventHandler,
         Microsoft::Web::WebView2::Win32::{
-            COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
-            COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
-            COREWEBVIEW2_PERMISSION_STATE_ALLOW, ICoreWebView2,
-            ICoreWebView2PermissionRequestedEventArgs,
+            ICoreWebView2, ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_KIND,
+            COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ,
+            COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
         },
+        PermissionRequestedEventHandler,
     };
 
     if let Err(err) = window.with_webview(|webview| unsafe {
@@ -40,23 +39,25 @@ fn install_windows_permission_handler<R: tauri::Runtime>(window: &tauri::Webview
         let mut token = 0i64;
         if let Err(err) = core.add_PermissionRequested(
             &PermissionRequestedEventHandler::create(Box::new(
-                |_: Option<ICoreWebView2>, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
-                let Some(args) = args else {
-                    return Ok(());
-                };
+                |_: Option<ICoreWebView2>,
+                 args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
 
-                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
-                args.PermissionKind(&mut kind)?;
+                    let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                    args.PermissionKind(&mut kind)?;
 
-                if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
-                    || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
-                    || kind == COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ
-                {
-                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
-                }
+                    if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE
+                        || kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA
+                        || kind == COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ
+                    {
+                        args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                    }
 
-                Ok(())
-            })),
+                    Ok(())
+                },
+            )),
             &mut token,
         ) {
             log_runtime(&format!("failed to add PermissionRequested handler: {err}"));
@@ -67,6 +68,66 @@ fn install_windows_permission_handler<R: tauri::Runtime>(window: &tauri::Webview
     }) {
         log_runtime(&format!("failed to access native webview: {err}"));
     }
+}
+
+#[cfg(target_os = "windows")]
+fn install_windows_certificate_handler<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2, ICoreWebView2ServerCertificateErrorDetectedEventArgs,
+            ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+        },
+        ServerCertificateErrorDetectedEventHandler,
+    };
+    use windows::core::Interface as _;
+
+    if let Err(err) = window.with_webview(|webview| unsafe {
+        let controller = webview.controller();
+        let core = match controller.CoreWebView2() {
+            Ok(core) => core,
+            Err(err) => {
+                log_runtime(&format!("failed to get CoreWebView2 for certificate handler: {err}"));
+                return;
+            }
+        };
+
+        let core14: ICoreWebView2_14 = match core.cast() {
+            Ok(core14) => core14,
+            Err(err) => {
+                log_runtime(&format!("failed to cast CoreWebView2 to ICoreWebView2_14: {err}"));
+                return;
+            }
+        };
+
+        let mut token = 0i64;
+        if let Err(err) = core14.add_ServerCertificateErrorDetected(
+            &ServerCertificateErrorDetectedEventHandler::create(Box::new(
+                |_: Option<ICoreWebView2>,
+                 args: Option<ICoreWebView2ServerCertificateErrorDetectedEventArgs>| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+
+                    args.SetAction(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW)?;
+                    Ok(())
+                },
+            )),
+            &mut token,
+        ) {
+            log_runtime(&format!("failed to add ServerCertificateErrorDetected handler: {err}"));
+            return;
+        }
+
+        log_runtime("installed windows ServerCertificateErrorDetected handler");
+    }) {
+        log_runtime(&format!("failed to access native webview for certificate handler: {err}"));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_windows_webview_handlers<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    install_windows_permission_handler(window);
+    install_windows_certificate_handler(window);
 }
 
 fn runtime_log_path() -> PathBuf {
@@ -192,25 +253,6 @@ fn restore_main_window_position<R: tauri::Runtime>(window: &tauri::WebviewWindow
     }
 }
 
-#[cfg(target_os = "windows")]
-fn should_ignore_certificate_errors() -> bool {
-    matches!(
-        option_env!("ASR_DESKTOP_IGNORE_CERT_ERRORS"),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn append_webview2_argument(arguments: &mut String, argument: &str) {
-    if arguments.split_whitespace().any(|item| item == argument) {
-        return;
-    }
-    if !arguments.trim().is_empty() {
-        arguments.push(' ');
-    }
-    arguments.push_str(argument);
-}
-
 fn tray_enabled() -> bool {
     true
 }
@@ -326,8 +368,7 @@ async fn save_pdf_file(suggested_name: String, pdf_base64: String) -> Result<boo
         target_path.set_extension("pdf");
     }
 
-    fs::write(&target_path, pdf_bytes)
-        .map_err(|err| format!("failed to write pdf file: {err}"))?;
+    fs::write(&target_path, pdf_bytes).map_err(|err| format!("failed to write pdf file: {err}"))?;
 
     log_runtime(&format!("saved pdf file to {}", target_path.display()));
 
@@ -347,7 +388,11 @@ fn open_devtools(app: tauri::AppHandle, window: tauri::WebviewWindow) {
     // 优先打开调用者所在窗口的 DevTools
     window.open_devtools();
     // 同时打开另一个窗口的 DevTools（调试两个窗口通信问题时很有用）
-    let other_label = if window.label() == "settings" { "main" } else { "settings" };
+    let other_label = if window.label() == "settings" {
+        "main"
+    } else {
+        "settings"
+    };
     if let Some(other) = app.get_webview_window(other_label) {
         other.open_devtools();
     }
@@ -413,10 +458,10 @@ pub(crate) fn open_settings_window_internal(app: &tauri::AppHandle) -> Result<()
     let window = builder.build().map_err(|err| err.to_string())?;
     log_runtime("[window] created settings window");
 
-    // 注意：install_windows_permission_handler 必须在 build() 之后调用，
-    // 不可省略——设置页面"检测麦克风"功能依赖此 handler 自动授权。
+    // 注意：Windows WebView2 handlers 必须在 build() 之后调用，
+    // 不可省略——设置页面的权限授权和 HTTPS 证书放行都依赖这里。
     #[cfg(target_os = "windows")]
-    install_windows_permission_handler(&window);
+    install_windows_webview_handlers(&window);
 
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
@@ -456,19 +501,6 @@ pub fn run() {
         log_runtime(&format!("panic: {panic_info}"));
     }));
 
-    // WebView2 browser arguments must be set before Tauri creates the environment.
-    #[cfg(target_os = "windows")]
-    {
-        let mut webview2_arguments = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
-            .unwrap_or_default();
-        append_webview2_argument(&mut webview2_arguments, "--allow-running-insecure-content");
-        if should_ignore_certificate_errors() {
-            append_webview2_argument(&mut webview2_arguments, "--ignore-certificate-errors");
-            log_runtime("configured WebView2 to ignore certificate errors");
-        }
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webview2_arguments);
-    }
-
     let exe_path = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
@@ -493,6 +525,13 @@ pub fn run() {
             save_pdf_file
         ])
         .setup(move |app| {
+            let window = app
+                .get_webview_window("main")
+                .ok_or_else(|| {
+                    log_runtime("main window not found in tauri config");
+                    std::io::Error::new(std::io::ErrorKind::Other, "main window missing")
+                })?;
+
             if enable_tray {
                 if let Err(err) = tray::setup_tray(&app.handle()) {
                     log_runtime(&format!("tray setup failed: {err}"));
@@ -506,35 +545,31 @@ pub fn run() {
             }
 
             // Hide on close only when tray support is enabled; otherwise allow normal exit.
-            if let Some(window) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                install_windows_permission_handler(&window);
+            #[cfg(target_os = "windows")]
+            install_windows_webview_handlers(&window);
 
-                let _ = window.set_always_on_top(true);
-                restore_main_window_position(&window);
+            let _ = window.set_always_on_top(true);
+            restore_main_window_position(&window);
 
-                if let Some(icon) = app.default_window_icon().cloned() {
-                    let _ = window.set_icon(icon);
+            if let Some(icon) = app.default_window_icon().cloned() {
+                let _ = window.set_icon(icon);
+            }
+
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Moved(position) = event {
+                    persist_main_window_position(position);
                 }
 
-                let window_clone = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Moved(position) = event {
-                        persist_main_window_position(position);
-                    }
-
-                    if enable_tray && matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
-                            return;
-                        };
-                        api.prevent_close();
-                        persist_main_window_position_from_window(&window_clone);
-                        let _ = window_clone.hide();
-                    }
-                });
-            } else {
-                log_runtime("main window not found during setup");
-            }
+                if enable_tray && matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                        return;
+                    };
+                    api.prevent_close();
+                    persist_main_window_position_from_window(&window_clone);
+                    let _ = window_clone.hide();
+                }
+            });
 
             if let Err(err) = show_main_window(&app.handle()) {
                 log_runtime(&format!("failed to show main window: {err}"));

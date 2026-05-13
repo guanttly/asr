@@ -13,6 +13,7 @@ const appStore = useAppStore()
 const settingsOpen = ref(false)
 const meetingEnabled = computed(() => appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
 const activeTab = ref<MainTab>('history')
+const isElectronDesktop = typeof window !== 'undefined' && Boolean((window as { __electronBridge__?: unknown }).__electronBridge__)
 
 const userLabel = computed(() => appStore.displayName || appStore.username || '未连接')
 const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCode.slice(0, 12) : '未生成')
@@ -22,7 +23,7 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
 
 <template>
   <div class="settings-window">
-    <header class="hero">
+    <header v-if="!isElectronDesktop" class="hero">
       <img src="/logo.png" alt="ASR" class="hero-logo">
       <div class="hero-copy">
         <p class="hero-tag">Desktop Voice Dictation</p>
@@ -30,21 +31,43 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
         <p class="hero-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
         <p class="hero-version" :title="buildTitle">{{ buildLabel }}</p>
       </div>
-      <button
-        class="hero-gear"
-        :class="{ active: settingsOpen }"
-        type="button"
-        :aria-label="settingsOpen ? '收起连接设置' : '展开连接设置'"
-        @click="settingsOpen = !settingsOpen"
-      >
-        <svg viewBox="0 0 24 24" width="18" height="18">
-          <path
-            fill="currentColor"
-            d="M19.14 12.94a7.5 7.5 0 0 0 .05-1.88l2.04-1.6a.5.5 0 0 0 .12-.64l-1.93-3.34a.5.5 0 0 0-.6-.22l-2.4.97a7.6 7.6 0 0 0-1.62-.94l-.36-2.55a.5.5 0 0 0-.5-.43h-3.86a.5.5 0 0 0-.5.43l-.36 2.55c-.58.23-1.13.55-1.62.94l-2.4-.97a.5.5 0 0 0-.6.22L2.66 8.82a.5.5 0 0 0 .12.64l2.04 1.6a7.5 7.5 0 0 0 0 1.88l-2.04 1.6a.5.5 0 0 0-.12.64l1.93 3.34a.5.5 0 0 0 .6.22l2.4-.97c.49.39 1.04.71 1.62.94l.36 2.55a.5.5 0 0 0 .5.43h3.86a.5.5 0 0 0 .5-.43l.36-2.55c.58-.23 1.13-.55 1.62-.94l2.4.97a.5.5 0 0 0 .6-.22l1.93-3.34a.5.5 0 0 0-.12-.64l-2.04-1.6zM12 15.5a3.5 3.5 0 1 1 0-7a3.5 3.5 0 0 1 0 7"
-          />
-        </svg>
-      </button>
+      <div class="hero-actions">
+        <button
+          class="hero-gear"
+          :class="{ active: settingsOpen }"
+          type="button"
+          :aria-label="settingsOpen ? '收起连接设置' : '展开连接设置'"
+          @mousedown.stop
+          @click="settingsOpen = !settingsOpen"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18">
+            <path
+              fill="currentColor"
+              d="M19.14 12.94a7.5 7.5 0 0 0 .05-1.88l2.04-1.6a.5.5 0 0 0 .12-.64l-1.93-3.34a.5.5 0 0 0-.6-.22l-2.4.97a7.6 7.6 0 0 0-1.62-.94l-.36-2.55a.5.5 0 0 0-.5-.43h-3.86a.5.5 0 0 0-.5.43l-.36 2.55c-.58.23-1.13.55-1.62.94l-2.4-.97a.5.5 0 0 0-.6.22L2.66 8.82a.5.5 0 0 0 .12.64l2.04 1.6a7.5 7.5 0 0 0 0 1.88l-2.04 1.6a.5.5 0 0 0-.12.64l1.93 3.34a.5.5 0 0 0 .6.22l2.4-.97c.49.39 1.04.71 1.62.94l.36 2.55a.5.5 0 0 0 .5.43h3.86a.5.5 0 0 0 .5-.43l.36-2.55c.58-.23 1.13-.55 1.62-.94l2.4.97a.5.5 0 0 0 .6-.22l1.93-3.34a.5.5 0 0 0-.12-.64l-2.04-1.6zM12 15.5a3.5 3.5 0 1 1 0-7a3.5 3.5 0 0 1 0 7"
+            />
+          </svg>
+        </button>
+      </div>
     </header>
+
+    <div v-else class="native-toolbar">
+      <div class="native-copy">
+        <p class="native-title">巨鲨语音助手</p>
+        <p class="native-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
+      </div>
+      <div class="native-actions">
+        <p class="hero-version" :title="buildTitle">{{ buildLabel }}</p>
+        <button
+          class="toolbar-settings"
+          :class="{ active: settingsOpen }"
+          type="button"
+          :aria-label="settingsOpen ? '收起连接设置' : '展开连接设置'"
+          @click="settingsOpen = !settingsOpen"
+        >
+          {{ settingsOpen ? '收起设置' : '连接设置' }}
+        </button>
+      </div>
+    </div>
 
     <div class="tab-bar">
       <button class="tab-item" :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">
@@ -119,6 +142,13 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
   min-width: 0;
 }
 
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .hero-copy h1 {
   font-size: 18px;
   font-weight: 700;
@@ -182,6 +212,87 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
   color: #ffffff;
   border-color: #0f766e;
   transform: rotate(60deg);
+}
+
+.hero-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.84);
+  color: #475569;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.hero-close:hover {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
+.native-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px 4px;
+}
+
+.native-copy {
+  min-width: 0;
+}
+
+.native-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.native-subtitle {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.toolbar-settings {
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.toolbar-settings:hover {
+  background: #ffffff;
+  border-color: rgba(15, 118, 110, 0.32);
+}
+
+.toolbar-settings.active {
+  background: #0f766e;
+  color: #ffffff;
+  border-color: #0f766e;
 }
 
 .tab-bar {

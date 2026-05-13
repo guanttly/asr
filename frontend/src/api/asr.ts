@@ -8,6 +8,7 @@ export interface CreateTranscriptionTaskPayload {
   type: TranscriptionTaskType
   dict_id?: number
   workflow_id?: number
+  language?: string
   result_text?: string
   duration?: number
 }

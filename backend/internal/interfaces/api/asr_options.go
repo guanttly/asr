@@ -8,20 +8,22 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	appasr "github.com/lgt/asr/internal/application/asr"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 )
 
 func parseASROptions(c *gin.Context) (string, *bool, []string, error) {
 	language := strings.TrimSpace(c.PostForm("language"))
-	if language == "" {
-		language = "auto"
+	normalizedLanguage, err := appasr.NormalizeLanguage(language)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	useITN, err := parseOptionalBoolForm(c, "use_itn")
 	if err != nil {
 		return "", nil, nil, err
 	}
-	return language, useITN, parseHotwords(c.PostForm("hotwords")), nil
+	return normalizedLanguage, useITN, parseHotwords(c.PostForm("hotwords")), nil
 }
 
 func parseOptionalBoolForm(c *gin.Context, key string) (*bool, error) {

@@ -10,7 +10,7 @@ import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
 import { appendRuntimeLog, debugLog, getRuntimeLogPath, readRuntimeLogTail } from '@/utils/debug'
 import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
-import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
+import { DEFAULT_SERVER_URL, FALLBACK_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 const appStore = useAppStore()
 const { settings, reset } = useSettings()
@@ -83,6 +83,17 @@ const authMessageType = ref<'success' | 'error' | 'info'>('info')
 const hotkeyMessage = ref('')
 const hotkeyMessageType = ref<'success' | 'error' | 'info'>('info')
 const capturingHotkeyAction = ref<HotkeyActionId | null>(null)
+const isElectronDesktop = typeof window !== 'undefined' && Boolean((window as { __electronBridge__?: unknown }).__electronBridge__)
+const supportsMouseGlobalHotkeys = computed(() => !isElectronDesktop)
+const serverHint = FALLBACK_SERVER_URL
+  ? `打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：${DEFAULT_SERVER_URL}；连接失败时会自动回退到 ${FALLBACK_SERVER_URL}。`
+  : `打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：${DEFAULT_SERVER_URL}`
+const hotkeySectionHint = computed(() => {
+  if (supportsMouseGlobalHotkeys.value)
+    return 'Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
+
+  return '当前 Win7 兼容版仅支持键盘全局热键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
+})
 
 const modifierOnlyCodes = new Set([
   'ControlLeft',
@@ -144,7 +155,12 @@ function stopHotkeyCapture() {
 
 function beginHotkeyCapture(actionId: HotkeyActionId) {
   capturingHotkeyAction.value = actionId
-  setHotkeyMessage('info', '请直接按下组合键，支持鼠标侧键；Esc 取消，Backspace/Delete 清空。')
+  setHotkeyMessage(
+    'info',
+    supportsMouseGlobalHotkeys.value
+      ? '请直接按下组合键，支持鼠标侧键；Esc 取消，Backspace/Delete 清空。'
+      : '请直接按下键盘组合；当前 Win7 兼容版不支持鼠标侧键全局热键。Esc 取消，Backspace/Delete 清空。',
+  )
 }
 
 function applyHotkeyBinding(actionId: HotkeyActionId, binding: Partial<HotkeyBinding> | null) {
@@ -231,6 +247,11 @@ function handleHotkeyCaptureMousedown(event: MouseEvent) {
 
   event.preventDefault()
   event.stopPropagation()
+
+  if (!supportsMouseGlobalHotkeys.value) {
+    setHotkeyMessage('info', '当前 Win7 兼容版仅支持键盘全局热键，请改用键盘组合。')
+    return
+  }
 
   const button = event.button === 3 ? HOTKEY_MOUSE_BUTTONS.BACK : HOTKEY_MOUSE_BUTTONS.FORWARD
   void applyHotkeyBinding(actionId, {
@@ -374,7 +395,7 @@ onBeforeUnmount(() => {
   <div class="settings-panel">
     <section class="settings-section">
       <h4 class="section-title">连接与身份</h4>
-      <p class="section-hint">打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：{{ DEFAULT_SERVER_URL }}</p>
+      <p class="section-hint">{{ serverHint }}</p>
       <div class="field">
         <label>服务器地址</label>
         <input
@@ -450,7 +471,7 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">全局热键</h4>
-      <p class="section-hint">Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。</p>
+      <p class="section-hint">{{ hotkeySectionHint }}</p>
       <div class="hotkey-list">
         <article
           v-for="definition in hotkeyDefinitions"
@@ -809,7 +830,8 @@ onBeforeUnmount(() => {
 }
 
 .field input[type="text"],
-.field input[type="password"] {
+.field input[type="password"],
+.field select {
   width: 100%;
   padding: 6px 8px;
   font-size: 12px;
@@ -822,7 +844,8 @@ onBeforeUnmount(() => {
 }
 
 .field input[type="text"]:focus,
-.field input[type="password"]:focus {
+.field input[type="password"]:focus,
+.field select:focus {
   border-color: #0f766e;
 }
 

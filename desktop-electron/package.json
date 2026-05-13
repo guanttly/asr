@@ -1,0 +1,31 @@
+{
+  "name": "asr-desktop-electron",
+  "displayName": "巨鲨语音助手 (Win7)",
+  "type": "module",
+  "version": "0.5.4",
+  "private": true,
+  "description": "Electron 22 客户端，专门用于打 Windows 7 兼容的安装包；UI 复用 desktop/src 同一套 Vue 代码。",
+  "main": "dist-electron/main/index.cjs",
+  "scripts": {
+    "predev": "node ../desktop/scripts/sync-version.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build:renderer": "vite build",
+    "build:main": "node scripts/build-main.mjs",
+    "build": "pnpm build:renderer && pnpm build:main",
+    "build:win": "node ../desktop/scripts/sync-version.mjs && pnpm build && node scripts/build-win.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "electron": "22.3.27",
+    "electron-builder": "24.13.3",
+    "esbuild": "^0.24.0",
+    "typescript": "~5.4.5",
+    "unocss": "^66.1.0",
+    "unplugin-auto-import": "^19.1.1",
+    "vite": "^5.4.10",
+    "vue": "^3.5.13",
+    "vue-tsc": "^2.2.8"
+  }
+}

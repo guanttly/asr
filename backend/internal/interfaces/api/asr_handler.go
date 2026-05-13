@@ -338,6 +338,12 @@ func (h *ASRHandler) UploadRealtimeTaskFile(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	language, _, _, err := parseASROptions(c)
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 
 	userID := middleware.UserIDFromContext(c)
 	result, err := h.audioService.CreateRealtimeTaskFromAudio(c.Request.Context(), userID, appaudio.CreateRealtimeTaskRequest{
@@ -349,6 +355,7 @@ func (h *ASRHandler) UploadRealtimeTaskFile(c *gin.Context) {
 		},
 		ResultText: resultText,
 		WorkflowID: workflowID,
+		Language:   language,
 	})
 	if err != nil {
 		_ = os.Remove(audioFile.AbsolutePath)

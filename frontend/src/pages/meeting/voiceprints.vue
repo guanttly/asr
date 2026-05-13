@@ -503,7 +503,7 @@ onBeforeUnmount(() => {
           <input
             ref="fileInput"
             type="file"
-            accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.opus,.webm"
+            accept=".wav,.mp3"
             class="hidden"
             @change="handleFileSelected"
           >
@@ -635,7 +635,7 @@ onBeforeUnmount(() => {
               </NButton>
             </div>
             <div class="mt-2 text-xs leading-6 text-slate">
-              {{ selectedFile ? `${selectedFile.name} · ${Math.max(1, Math.round(selectedFile.size / 1024))} KB` : '支持 wav / mp3 / m4a / flac / ogg / opus / webm，也支持直接录音生成 wav。' }}
+              {{ selectedFile ? `${selectedFile.name} · ${Math.max(1, Math.round(selectedFile.size / 1024))} KB` : '支持 wav / mp3，也支持直接录音生成 wav。' }}
             </div>
             <div v-if="isRecording" class="mt-2 text-xs leading-6 text-amber-700">
               请保持单人近讲，按上方示例文案自然朗读 15 到 30 秒后再停止录音。

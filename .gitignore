@@ -9,6 +9,9 @@ bin/
 backend/vendor/
 backend/cmd/*/__debug_bin*
 
+# Desktop YY-Thunks 大小写 shim（per-machine 软链，由 build.rs 生成）
+desktop/src-tauri/vendor/yy-thunks/case-shim/
+
 # Node
 frontend/node_modules/
 frontend/dist/
@@ -45,3 +48,5 @@ deploy/all-in-one/dist/
 speaker-diarization-offline.tar.gz
 
 **/**/__pycache__
+dist-*
+.cache

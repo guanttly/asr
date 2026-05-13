@@ -18,6 +18,7 @@ type downloadableArtifact struct {
 	SizeBytes   int64     `json:"size_bytes"`
 	ModifiedAt  time.Time `json:"modified_at"`
 	DownloadURL string    `json:"download_url"`
+	Platform    string    `json:"platform"`
 }
 
 // DownloadHandler exposes package download listings for mounted desktop builds.
@@ -81,6 +82,7 @@ func (h *DownloadHandler) List(c *gin.Context) {
 			SizeBytes:   info.Size(),
 			ModifiedAt:  info.ModTime(),
 			DownloadURL: h.buildDownloadURL(entry.Name()),
+			Platform:    classifyArtifactPlatform(entry.Name()),
 		})
 	}
 
@@ -110,6 +112,22 @@ func isPublicDownloadArtifact(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// classifyArtifactPlatform 根据安装包文件名推断目标 Windows 版本：
+// - 含 "_win7_" 或 "-win7-" 视为 Windows 7 兼容包（Electron 22 打出来的）
+// - 含 "_win10_" / "-win10-" / "win10+" 视为 Win10/11 推荐版（Tauri 打出来的）
+// - 其余归为 "other"，前端会展示在通用区。
+func classifyArtifactPlatform(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "_win7_"), strings.Contains(lower, "-win7-"), strings.Contains(lower, ".win7."):
+		return "win7"
+	case strings.Contains(lower, "_win10_"), strings.Contains(lower, "-win10-"), strings.Contains(lower, "win10+"), strings.Contains(lower, "win11"):
+		return "win10+"
+	default:
+		return "other"
 	}
 }
 

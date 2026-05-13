@@ -33,6 +33,11 @@ type BatchImportRequest struct {
 	Entries []CreateEntryRequest `json:"entries" binding:"required,dive"`
 }
 
+type BatchImportResult struct {
+	Imported int `json:"imported"`
+	Skipped  int `json:"skipped"`
+}
+
 // DictResponse is the DTO for a dictionary.
 type DictResponse struct {
 	ID     uint64 `json:"id"`
@@ -49,31 +54,37 @@ type EntryResponse struct {
 
 // RuleResponse is the DTO for a correction rule.
 type RuleResponse struct {
-	ID          uint64 `json:"id"`
-	MatchType   string `json:"match_type"`
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
-	Enabled     bool   `json:"enabled"`
-	SortOrder   int    `json:"sort_order"`
+	ID            uint64 `json:"id"`
+	MatchType     string `json:"match_type"`
+	Pattern       string `json:"pattern"`
+	Replacement   string `json:"replacement"`
+	Enabled       bool   `json:"enabled"`
+	SortOrder     int    `json:"sort_order"`
+	Priority      int    `json:"priority"`
+	ConflictGroup string `json:"conflict_group"`
 }
 
 // CreateRuleRequest is the DTO for adding a correction rule.
 type CreateRuleRequest struct {
-	DictID      uint64 `json:"dict_id"`
-	MatchType   string `json:"match_type"`
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
-	Enabled     bool   `json:"enabled"`
-	SortOrder   int    `json:"sort_order"`
+	DictID        uint64 `json:"dict_id"`
+	MatchType     string `json:"match_type"`
+	Pattern       string `json:"pattern"`
+	Replacement   string `json:"replacement"`
+	Enabled       bool   `json:"enabled"`
+	SortOrder     int    `json:"sort_order"`
+	Priority      int    `json:"priority"`
+	ConflictGroup string `json:"conflict_group"`
 }
 
 // UpdateRuleRequest is the DTO for updating a correction rule.
 type UpdateRuleRequest struct {
-	ID          uint64 `json:"id"`
-	DictID      uint64 `json:"dict_id"`
-	MatchType   string `json:"match_type"`
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
-	Enabled     bool   `json:"enabled"`
-	SortOrder   int    `json:"sort_order"`
+	ID            uint64 `json:"id"`
+	DictID        uint64 `json:"dict_id"`
+	MatchType     string `json:"match_type"`
+	Pattern       string `json:"pattern"`
+	Replacement   string `json:"replacement"`
+	Enabled       bool   `json:"enabled"`
+	SortOrder     int    `json:"sort_order"`
+	Priority      int    `json:"priority"`
+	ConflictGroup string `json:"conflict_group"`
 }

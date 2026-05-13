@@ -19,6 +19,7 @@ type MeetingModel struct {
 	ExternalTaskID string  `gorm:"type:varchar(128);index"`
 	LocalFilePath  string  `gorm:"type:varchar(1024)"`
 	Duration       float64
+	Language       string `gorm:"type:varchar(16);not null;default:'auto'"`
 	Status         string `gorm:"type:varchar(20);not null;default:'uploaded'"`
 	SyncFailCount  int    `gorm:"not null;default:0"`
 	LastSyncError  string `gorm:"type:text"`
@@ -74,6 +75,7 @@ func (r *MeetingRepo) Create(ctx context.Context, meeting *domain.Meeting) error
 		ExternalTaskID: meeting.ExternalTaskID,
 		LocalFilePath:  meeting.LocalFilePath,
 		Duration:       meeting.Duration,
+		Language:       meeting.Language,
 		Status:         string(meeting.Status),
 		SyncFailCount:  meeting.SyncFailCount,
 		LastSyncError:  meeting.LastSyncError,
@@ -118,6 +120,7 @@ func (r *MeetingRepo) Update(ctx context.Context, meeting *domain.Meeting) error
 		"local_file_path":  meeting.LocalFilePath,
 		"status":           string(meeting.Status),
 		"duration":         meeting.Duration,
+		"language":         meeting.Language,
 		"sync_fail_count":  meeting.SyncFailCount,
 		"last_sync_error":  meeting.LastSyncError,
 		"last_sync_at":     meeting.LastSyncAt,
@@ -181,6 +184,7 @@ func (r *MeetingRepo) toDomain(model *MeetingModel) *domain.Meeting {
 		ExternalTaskID: model.ExternalTaskID,
 		LocalFilePath:  model.LocalFilePath,
 		Duration:       model.Duration,
+		Language:       model.Language,
 		Status:         domain.MeetingStatus(model.Status),
 		SyncFailCount:  model.SyncFailCount,
 		LastSyncError:  model.LastSyncError,

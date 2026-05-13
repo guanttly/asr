@@ -14,12 +14,12 @@
       {
         "label": "main",
         "title": "巨鲨语音助手",
-        "width": 116,
-        "height": 116,
-        "minWidth": 116,
-        "minHeight": 116,
-        "maxWidth": 116,
-        "maxHeight": 116,
+        "width": 180,
+        "height": 180,
+        "minWidth": 180,
+        "minHeight": 180,
+        "maxWidth": 180,
+        "maxHeight": 180,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -40,9 +40,6 @@
     "active": true,
     "targets": "all",
     "windows": {
-      "webviewInstallMode": {
-        "type": "offlineInstaller"
-      },
       "nsis": {
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico",

@@ -9,6 +9,7 @@ type CreateMeetingRequest struct {
 	LocalFilePath string  `json:"-"`
 	Duration      float64 `json:"duration"`
 	WorkflowID    *uint64 `json:"workflow_id,omitempty"`
+	Language      string  `json:"language"`
 }
 
 // MeetingResponse is the DTO returned to clients.
@@ -18,6 +19,7 @@ type MeetingResponse struct {
 	Duration      float64    `json:"duration"`
 	Status        string     `json:"status"`
 	WorkflowID    *uint64    `json:"workflow_id,omitempty"`
+	Language      string     `json:"language"`
 	SyncFailCount int        `json:"sync_fail_count"`
 	LastSyncError string     `json:"last_sync_error,omitempty"`
 	LastSyncAt    *time.Time `json:"last_sync_at,omitempty"`

@@ -93,7 +93,7 @@ func parseUploadedAudio(c *gin.Context, fieldName string, maxAudioSizeMB int64) 
 
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if !isSupportedAudioExtension(ext) {
-		return nil, "", &audioUploadError{statusCode: http.StatusBadRequest, message: "unsupported audio file type"}
+		return nil, "", &audioUploadError{statusCode: http.StatusBadRequest, message: "音频格式不支持，仅支持 wav/mp3"}
 	}
 
 	return fileHeader, ext, nil
@@ -199,7 +199,7 @@ func publicRequestBaseURL(c *gin.Context) string {
 
 func isSupportedAudioExtension(ext string) bool {
 	switch ext {
-	case ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".webm":
+	case ".wav", ".mp3":
 		return true
 	default:
 		return false

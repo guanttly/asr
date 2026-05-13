@@ -28,9 +28,11 @@
 #   JWT_SECRET          JWT 签名密钥
 #   ASR_SERVICE_URL     外部 ASR 服务地址
 #   SPEAKER_SERVICE_URL 说话人服务地址
-#   DESKTOP_INSTALLER   桌面端安装包路径
-#   DRY_RUN=1           仅演练命令，不真正产出发布包
-#   示例：make release-all-in-one VERSION=0.4.0 HTTP_PORT=11010 HTTPS_PORT=11011 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:11001 SPEAKER_SERVICE_URL=http://host.docker.internal:11002
+#   DESKTOP_INSTALLER          桌面端（Tauri Win10/11）安装包路径
+#   DESKTOP_ELECTRON_INSTALLER Win7 兼容版（Electron 22）安装包路径
+#   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
+#   DRY_RUN=1                  仅演练命令，不真正产出发布包
+#   示例：make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.6.2
 
 # --- Backend ---
 .PHONY: build-gateway build-asr-api build-admin-api build-nlp-api
@@ -104,7 +106,7 @@ docker-build:
 
 # 生成一体化发布包，参数透传给 deploy/all-in-one/scripts/build-release.sh。
 release-all-in-one:
-	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DRY_RUN),--dry-run,)
+	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
 
 # --- Utilities ---
 # 清理常见构建产物与前端缓存。

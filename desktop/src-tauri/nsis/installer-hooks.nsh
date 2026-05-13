@@ -1,3 +1,6 @@
+!include LogicLib.nsh
+!include WinVer.nsh
+
 !macro NSIS_HOOK_POSTINSTALL
   SetOutPath "$INSTDIR"
   File "/oname=app-icon.ico" "${INSTALLERICON}"

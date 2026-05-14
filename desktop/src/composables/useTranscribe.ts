@@ -3,7 +3,7 @@ import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
-import { authedFetch, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
+import { authedFetch, createTimeoutSignal, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
 
@@ -14,6 +14,8 @@ const MAX_SPEECH_RMS = 0.08
 const NOISE_FLOOR_SMOOTHING = 0.08
 const PRE_ROLL_CHUNKS = 1
 const MAX_SEGMENT_CHUNKS = 60
+const REALTIME_WORKFLOW_TIMEOUT_MS = 3 * 1000
+const AUTO_INJECT_TIMEOUT_MS = 2 * 1000
 // 防止用户在会议/报告模式间误切换或者误录产生无意义任务：
 // 1) 录音时长低于 MIN_MEETING_DURATION_SECONDS 时直接丢弃；
 // 2) 没有任何识别文本时直接丢弃。
@@ -105,12 +107,29 @@ export function useTranscribe() {
     return /[A-Z0-9\u3400-\u9FFF]/i.test(normalizeText(value))
   }
 
+  async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutFactory: () => T): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((resolve) => {
+          timer = setTimeout(() => resolve(timeoutFactory()), timeoutMs)
+        }),
+      ])
+    }
+    finally {
+      if (timer)
+        clearTimeout(timer)
+    }
+  }
+
   async function applyRealtimeWorkflow(text: string) {
     const workflowId = await ensureRealtimeWorkflowBinding()
     if (workflowId == null)
       return text
 
     status.value = 'processing'
+    const { signal, cleanup } = createTimeoutSignal(REALTIME_WORKFLOW_TIMEOUT_MS)
     try {
       const resp = await authedFetch(`/api/admin/workflows/${workflowId}/execute`, {
         method: 'POST',
@@ -118,10 +137,13 @@ export function useTranscribe() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ input_text: text }),
+        signal,
       })
       const json = await readResponseEnvelope<{ final_text?: string, status?: string, error_message?: string }>(resp)
       if (!resp.ok)
         throw new Error(json.message || `工作流执行失败: ${resp.status}`)
+      if (json.data?.status === 'failed')
+        throw new Error(json.data.error_message || json.message || '实时工作流执行失败')
 
       const hasFinalText = Object.prototype.hasOwnProperty.call(json.data || {}, 'final_text')
       const output = normalizeText(hasFinalText ? json.data?.final_text : text)
@@ -138,6 +160,14 @@ export function useTranscribe() {
       return output
     }
     catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        await debugLog('transcribe.workflow', 'realtime workflow request timed out, fallback to raw text', {
+          workflowId,
+          timeoutMs: REALTIME_WORKFLOW_TIMEOUT_MS,
+        })
+        return text
+      }
+
       await debugLog('transcribe.workflow', 'realtime workflow execution failed, fallback to raw text', error instanceof Error ? {
         workflowId,
         message: error.message,
@@ -146,6 +176,7 @@ export function useTranscribe() {
       return text
     }
     finally {
+      cleanup()
       if (status.value === 'processing')
         status.value = 'uploading'
     }
@@ -266,7 +297,10 @@ export function useTranscribe() {
 
             // Auto-inject to cursor
             if (appStore.autoInject) {
-              const result = await injectText(text)
+              const result = await withTimeout(injectText(text), AUTO_INJECT_TIMEOUT_MS, () => ({
+                success: false,
+                message: '文本注入超时，已跳过本次自动粘贴',
+              }))
               if (!result.success) {
                 lastError.value = result.message
                 void debugLog('inject.error', 'failed to inject transcript', result)

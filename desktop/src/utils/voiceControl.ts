@@ -1,4 +1,4 @@
-import { authedFetch, ensureVoiceWorkflowBinding, readResponseEnvelope } from './auth'
+import { authedFetch, createTimeoutSignal, ensureVoiceWorkflowBinding, readResponseEnvelope } from './auth'
 
 export interface VoiceControlPayload {
   command_timeout_ms: number
@@ -99,18 +99,6 @@ function resolveWorkflowOutput(payload?: WorkflowExecutionPayload | null) {
   }
 
   return ''
-}
-
-function createTimeoutSignal(timeoutMs?: number) {
-  if (!timeoutMs || timeoutMs <= 0 || typeof AbortController === 'undefined')
-    return { signal: undefined, cleanup: () => {} }
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  return {
-    signal: controller.signal,
-    cleanup: () => clearTimeout(timer),
-  }
 }
 
 export async function primeVoiceControlAssets(force = false) {

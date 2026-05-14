@@ -43,7 +43,7 @@ export async function debugLog(scope: string, message: string, payload?: unknown
   if (!isDebugEnabled())
     return
 
-  await appendRuntimeLog(scope, line)
+  void appendRuntimeLog(scope, line)
 }
 
 export async function readRuntimeLogTail(lines = 120) {

@@ -7,6 +7,7 @@ export interface InjectResult {
 }
 
 let injectionQueue = Promise.resolve()
+const POWERSHELL_PASTE_TIMEOUT_MS = 1500
 
 const WINDOWS_NATIVE_PASTE_SCRIPT = `
 Add-Type -TypeDefinition @"
@@ -172,9 +173,28 @@ function sendCtrlV(): Promise<void> {
     ], { windowsHide: true })
 
     let stderr = ''
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled)
+        return
+      settled = true
+      child.kill()
+      reject(new Error(`powershell paste timed out after ${POWERSHELL_PASTE_TIMEOUT_MS}ms`))
+    }, POWERSHELL_PASTE_TIMEOUT_MS)
+
     child.stderr.on('data', (chunk) => { stderr += String(chunk) })
-    child.on('error', reject)
+    child.on('error', (error) => {
+      if (settled)
+        return
+      settled = true
+      clearTimeout(timeout)
+      reject(error)
+    })
     child.on('close', (code) => {
+      if (settled)
+        return
+      settled = true
+      clearTimeout(timeout)
       if (code === 0)
         resolve()
       else

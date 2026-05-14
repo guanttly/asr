@@ -62,6 +62,18 @@ function mergeHeaders(headers?: HeadersInit, extra?: Record<string, string>) {
   return merged
 }
 
+export function createTimeoutSignal(timeoutMs?: number) {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortController === 'undefined')
+    return { signal: undefined, cleanup: () => {} }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timer),
+  }
+}
+
 async function fetchWithServerFallback(path: string, init?: RequestInit) {
   const appStore = useAppStore()
   const candidates = buildServerCandidates(appStore.serverUrl)

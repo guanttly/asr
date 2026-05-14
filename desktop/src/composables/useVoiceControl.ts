@@ -153,7 +153,10 @@ export function useVoiceControl() {
       // Already waiting for a command — bypass wake detection and only classify the command intent.
       setProcessing(true)
       try {
-        const result = await classifyVoiceIntent(text, { bypassWake: true })
+        const result = await classifyVoiceIntent(text, {
+          bypassWake: true,
+          timeoutMs: getCommandTimeoutMs(),
+        })
         consecutiveFailures = 0
         void debugLog('voice.command', 'classify result', { text, result })
         const nextScene = resolveSceneModeFromVoiceIntent(result.intent)
@@ -188,7 +191,7 @@ export function useVoiceControl() {
 
     setProcessing(true)
     try {
-      const result = await classifyVoiceIntent(text)
+      const result = await classifyVoiceIntent(text, { timeoutMs: getCommandTimeoutMs() })
       void debugLog('voice.command', 'wake workflow result', { text, result })
       if (!result.wake_matched)
         return { swallow: false }

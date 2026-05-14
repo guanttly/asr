@@ -9,6 +9,7 @@
   "scripts": {
     "predev": "node ../desktop/scripts/sync-version.mjs",
     "dev": "node scripts/dev.mjs",
+    "build:helper": "node scripts/build-helper.mjs",
     "build:renderer": "vite build",
     "build:main": "node scripts/build-main.mjs",
     "build": "pnpm build:renderer && pnpm build:main",

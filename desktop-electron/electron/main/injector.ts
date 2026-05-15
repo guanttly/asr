@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, clipboard } from 'electron'
@@ -6,11 +6,52 @@ import { app, clipboard } from 'electron'
 export interface InjectResult {
   success: boolean
   message: string
+  targetId?: string
+  displayName?: string
+  state?: string
+}
+
+export interface InputBridgeTargetView {
+  targetId: string
+  displayName: string
+  status: string
+  processName?: string
+  topTitle?: string
+  controlClassName?: string
+  appType?: string
+  lastUsedAt?: number
+  useCount?: number
+}
+
+export interface InputBridgeStateView {
+  supported: boolean
+  state: string
+  lockedTarget?: InputBridgeTargetView | null
+  candidateTarget?: InputBridgeTargetView | null
+  history: InputBridgeTargetView[]
+  message: string
+}
+
+interface BridgeResponse<T> {
+  id?: string | number | null
+  result?: T
+  error?: { code: string, message: string }
+}
+
+interface PendingRequest<T> {
+  resolve: (value: T) => void
+  reject: (error: Error) => void
+  timeout: NodeJS.Timeout
 }
 
 let injectionQueue = Promise.resolve()
-const NATIVE_HELPER_TIMEOUT_MS = 1500
-const INJECT_HELPER_NAME = 'asr-inject-helper.exe'
+let bridgeProcess: ChildProcessWithoutNullStreams | null = null
+let bridgeStdoutBuffer = ''
+let nextBridgeId = 1
+const pendingBridgeRequests = new Map<string, PendingRequest<unknown>>()
+
+const BRIDGE_REQUEST_TIMEOUT_MS = 4500
+const BRIDGE_NAME = 'voice-input-bridge.exe'
 
 function enqueueInjection<T>(task: () => Promise<T>) {
   const run = injectionQueue.then(task, task)
@@ -18,101 +59,127 @@ function enqueueInjection<T>(task: () => Promise<T>) {
   return run
 }
 
-function resolveInjectHelperPath() {
-  const devHelperPath = path.join(__dirname, '..', '..', 'build', 'native', 'win32-x64', INJECT_HELPER_NAME)
-  const packagedHelperPath = path.join(process.resourcesPath, 'bin', INJECT_HELPER_NAME)
-  const candidate = app.isPackaged ? packagedHelperPath : devHelperPath
+function resolveBridgePath() {
+  const devBridgePath = path.join(__dirname, '..', '..', 'build', 'native', 'win32-x64', BRIDGE_NAME)
+  const packagedBridgePath = path.join(process.resourcesPath, 'bin', BRIDGE_NAME)
+  const candidate = app.isPackaged ? packagedBridgePath : devBridgePath
   return fs.existsSync(candidate) ? candidate : ''
 }
 
-function parseHelperResult(stdout: string): InjectResult | null {
-  const lines = stdout
-    .split(/\r?\n/u)
-    .map(line => line.trim())
-    .filter(Boolean)
-  const line = lines.at(-1)
-  if (!line)
-    return null
+function ensureBridgeProcess() {
+  if (bridgeProcess && !bridgeProcess.killed)
+    return bridgeProcess
 
-  const tabIndex = line.indexOf('\t')
-  if (tabIndex <= 0)
-    return null
+  const bridgePath = resolveBridgePath()
+  if (!bridgePath)
+    throw new Error('未找到 Windows 输入桥组件，请重新构建或重新安装应用')
 
-  const flag = line.slice(0, tabIndex)
-  if (flag !== '0' && flag !== '1')
-    return null
+  bridgeStdoutBuffer = ''
+  bridgeProcess = spawn(bridgePath, ['--stdio'], {
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
 
-  return {
-    success: flag === '1',
-    message: line.slice(tabIndex + 1) || (flag === '1' ? '注入成功' : '注入失败'),
+  bridgeProcess.stdout.setEncoding('utf8')
+  bridgeProcess.stderr.setEncoding('utf8')
+  bridgeProcess.stdout.on('data', chunk => handleBridgeStdout(String(chunk)))
+  bridgeProcess.stderr.on('data', chunk => console.warn('[voice-input-bridge]', String(chunk).trim()))
+  bridgeProcess.on('error', error => rejectAllPending(error))
+  bridgeProcess.on('close', code => {
+    const error = new Error(`输入桥进程已退出: ${code ?? 'unknown'}`)
+    bridgeProcess = null
+    rejectAllPending(error)
+  })
+
+  return bridgeProcess
+}
+
+function handleBridgeStdout(chunk: string) {
+  bridgeStdoutBuffer += chunk
+  while (true) {
+    const newlineIndex = bridgeStdoutBuffer.indexOf('\n')
+    if (newlineIndex < 0)
+      break
+
+    const line = bridgeStdoutBuffer.slice(0, newlineIndex).trim()
+    bridgeStdoutBuffer = bridgeStdoutBuffer.slice(newlineIndex + 1)
+    if (!line)
+      continue
+
+    let response: BridgeResponse<unknown>
+    try {
+      response = JSON.parse(line) as BridgeResponse<unknown>
+    }
+    catch (error) {
+      console.warn('[voice-input-bridge] bad json response', line, error)
+      continue
+    }
+
+    const id = String(response.id ?? '')
+    const pending = pendingBridgeRequests.get(id)
+    if (!pending)
+      continue
+
+    pendingBridgeRequests.delete(id)
+    clearTimeout(pending.timeout)
+    if (response.error)
+      pending.reject(new Error(response.error.message || response.error.code))
+    else
+      pending.resolve(response.result)
   }
 }
 
-// Win7 注入改为独立原生 helper：避免 PowerShell / Add-Type 被安全策略拦截，
-// 并复用与 Tauri Windows 端一致的 Win32 粘贴策略。
-function runNativeInjectHelper(text: string): Promise<InjectResult> {
+function rejectAllPending(error: Error) {
+  for (const pending of pendingBridgeRequests.values()) {
+    clearTimeout(pending.timeout)
+    pending.reject(error)
+  }
+  pendingBridgeRequests.clear()
+}
+
+function sendBridgeRequest<T>(method: string, params: Record<string, unknown> = {}, timeoutMs = BRIDGE_REQUEST_TIMEOUT_MS): Promise<T> {
+  if (process.platform !== 'win32')
+    return Promise.reject(new Error('当前操作系统不支持 Windows 输入桥'))
+
   return new Promise((resolve, reject) => {
-    const helperPath = resolveInjectHelperPath()
-    if (!helperPath) {
-      resolve({
-        success: false,
-        message: '未找到 Win7 原生注入组件，请重新构建或重新安装应用',
-      })
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = ensureBridgeProcess()
+    }
+    catch (error) {
+      reject(error as Error)
       return
     }
 
-    const child = spawn(helperPath, [], {
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-
-    let stderr = ''
-    let stdout = ''
-    let settled = false
-    const finish = (result?: InjectResult, error?: Error) => {
-      if (settled)
-        return
-      settled = true
-      clearTimeout(timeout)
-      if (error)
-        reject(error)
-      else if (result)
-        resolve(result)
-      else
-        reject(new Error('native inject helper returned no result'))
-    }
-
+    const id = String(nextBridgeId++)
     const timeout = setTimeout(() => {
-      if (settled)
-        return
-      child.kill()
-      finish(undefined, new Error(`native inject helper timed out after ${NATIVE_HELPER_TIMEOUT_MS}ms`))
-    }, NATIVE_HELPER_TIMEOUT_MS)
+      pendingBridgeRequests.delete(id)
+      reject(new Error(`输入桥请求 ${method} 超时`))
+    }, timeoutMs)
 
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.on('error', (error) => {
-      finish(undefined, error)
+    pendingBridgeRequests.set(id, { resolve: resolve as (value: unknown) => void, reject, timeout })
+    child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
+      if (!error)
+        return
+      pendingBridgeRequests.delete(id)
+      clearTimeout(timeout)
+      reject(error)
     })
-    child.on('close', (code) => {
-      if (settled)
-        return
-
-      const result = parseHelperResult(stdout)
-      if (result) {
-        finish(result)
-        return
-      }
-
-      const details = stderr.trim() || stdout.trim()
-      finish(undefined, new Error(`native inject helper exited with code ${code}: ${details || 'no output'}`))
-    })
-
-    child.stdin.end(text)
   })
 }
 
-export function injectText(text: string): Promise<InjectResult> {
+function unsupportedState(): InputBridgeStateView {
+  return {
+    supported: false,
+    state: 'Unsupported',
+    lockedTarget: null,
+    candidateTarget: null,
+    history: [],
+    message: '当前操作系统不支持 Windows 输入目标绑定。',
+  }
+}
+
+export function injectText(text: string, source = 'desktop-electron', segmentId?: string): Promise<InjectResult> {
   return enqueueInjection(async () => {
     if (process.platform !== 'win32') {
       return {
@@ -122,14 +189,63 @@ export function injectText(text: string): Promise<InjectResult> {
     }
 
     try {
-      return await runNativeInjectHelper(text)
+      return await sendBridgeRequest<InjectResult>('text.paste', {
+        text,
+        source,
+        segmentId,
+      }, 6500)
     }
     catch (err) {
-      return { success: false, message: `模拟按键失败: ${(err as Error).message}` }
+      return { success: false, message: `输入桥写入失败: ${(err as Error).message}` }
     }
   })
 }
 
-export function readClipboard(): string {
-  return clipboard.readText()
+export async function getInputBridgeState(): Promise<InputBridgeStateView> {
+  if (process.platform !== 'win32')
+    return unsupportedState()
+  return await sendBridgeRequest<InputBridgeStateView>('state.get')
+}
+
+export async function lockInputTarget(): Promise<InjectResult> {
+  if (process.platform !== 'win32')
+    return { success: false, message: '当前操作系统不支持输入目标绑定' }
+  return await sendBridgeRequest<InjectResult>('target.lockCurrent')
+}
+
+export async function unlockInputTarget(): Promise<InjectResult> {
+  if (process.platform !== 'win32')
+    return { success: false, message: '当前操作系统不支持输入目标绑定' }
+  return await sendBridgeRequest<InjectResult>('target.unlock')
+}
+
+export async function useHistoryTarget(targetId: string): Promise<InjectResult> {
+  if (process.platform !== 'win32')
+    return { success: false, message: '当前操作系统不支持历史目标恢复' }
+  return await sendBridgeRequest<InjectResult>('target.useHistory', { targetId })
+}
+
+export async function deleteHistoryTarget(targetId: string): Promise<InjectResult> {
+  if (process.platform !== 'win32')
+    return { success: false, message: '当前操作系统不支持历史目标管理' }
+  return await sendBridgeRequest<InjectResult>('target.deleteHistory', { targetId })
+}
+
+export async function flashInputTargetOverlay(durationMs = 2000): Promise<InjectResult> {
+  if (process.platform !== 'win32')
+    return { success: false, message: '当前操作系统不支持 Overlay 提示' }
+  return await sendBridgeRequest<InjectResult>('overlay.flash', { durationMs })
+}
+
+export async function readClipboard(): Promise<string> {
+  if (process.platform !== 'win32')
+    return clipboard.readText()
+  return await sendBridgeRequest<string>('clipboard.readText')
+}
+
+export function disposeInputBridge() {
+  rejectAllPending(new Error('输入桥进程已关闭'))
+  if (bridgeProcess && !bridgeProcess.killed)
+    bridgeProcess.kill()
+  bridgeProcess = null
 }

@@ -4,12 +4,14 @@ import path from 'node:path'
 import { bindWindowController, registerIpc } from './ipc'
 import { resolveTrayIcon, setupTray } from './tray'
 import { disposeHotkeys, setHotkeyEmitter } from './hotkeys'
+import { disposeInputBridge, lockInputTarget } from './injector'
 import { loadMainWindowState, persistMainWindowState } from './window-state'
 
 // 关闭 Win7 上不支持的硬件加速特性，提高启动稳定性；
 // Win10/11 用户走 Tauri 客户端，不会进入这条分支。
 app.commandLine.appendSwitch('ignore-certificate-errors')
 app.commandLine.appendSwitch('allow-insecure-localhost')
+app.commandLine.appendSwitch('allow-running-insecure-content')
 app.disableHardwareAcceleration()
 
 const RENDERER_DEV_URL = process.env.ELECTRON_RENDERER_URL || ''
@@ -101,6 +103,8 @@ function ensureMainWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
     },
   })
 
@@ -161,6 +165,8 @@ async function ensureSettingsWindow(): Promise<BrowserWindow> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webSecurity: false,
+      allowRunningInsecureContent: true,
     },
   })
 
@@ -219,10 +225,20 @@ setHotkeyEmitter((action) => {
   switch (action) {
     case 'toggleSettingsWindow':
       toggleSettingsWindow()
-      break
+      return true
     case 'toggleFloatingWindow':
       toggleMainWindow()
-      break
+      return true
+    case 'lockInputTarget':
+      void lockInputTarget().then((result) => {
+        if (!result.success)
+          console.warn('[input-bridge] lock target from hotkey failed:', result.message)
+      }).catch((error) => {
+        console.warn('[input-bridge] lock target from hotkey failed:', error)
+      })
+      return true
+    default:
+      return false
   }
 })
 
@@ -256,4 +272,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => { isQuitting = true })
-app.on('will-quit', () => disposeHotkeys())
+app.on('will-quit', () => {
+  disposeHotkeys()
+  disposeInputBridge()
+})

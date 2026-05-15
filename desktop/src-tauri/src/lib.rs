@@ -1,5 +1,6 @@
 mod hotkeys;
 mod injector;
+mod input_bridge;
 mod tray;
 
 pub use injector::{inject_text, read_clipboard};
@@ -74,8 +75,8 @@ fn install_windows_permission_handler<R: tauri::Runtime>(window: &tauri::Webview
 fn install_windows_certificate_handler<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use webview2_com::{
         Microsoft::Web::WebView2::Win32::{
-            ICoreWebView2, ICoreWebView2ServerCertificateErrorDetectedEventArgs,
-            ICoreWebView2_14, COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
+            ICoreWebView2, ICoreWebView2ServerCertificateErrorDetectedEventArgs, ICoreWebView2_14,
+            COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW,
         },
         ServerCertificateErrorDetectedEventHandler,
     };
@@ -86,7 +87,9 @@ fn install_windows_certificate_handler<R: tauri::Runtime>(window: &tauri::Webvie
         let core = match controller.CoreWebView2() {
             Ok(core) => core,
             Err(err) => {
-                log_runtime(&format!("failed to get CoreWebView2 for certificate handler: {err}"));
+                log_runtime(&format!(
+                    "failed to get CoreWebView2 for certificate handler: {err}"
+                ));
                 return;
             }
         };
@@ -94,7 +97,9 @@ fn install_windows_certificate_handler<R: tauri::Runtime>(window: &tauri::Webvie
         let core14: ICoreWebView2_14 = match core.cast() {
             Ok(core14) => core14,
             Err(err) => {
-                log_runtime(&format!("failed to cast CoreWebView2 to ICoreWebView2_14: {err}"));
+                log_runtime(&format!(
+                    "failed to cast CoreWebView2 to ICoreWebView2_14: {err}"
+                ));
                 return;
             }
         };
@@ -120,7 +125,9 @@ fn install_windows_certificate_handler<R: tauri::Runtime>(window: &tauri::Webvie
 
         log_runtime("installed windows ServerCertificateErrorDetected handler");
     }) {
-        log_runtime(&format!("failed to access native webview for certificate handler: {err}"));
+        log_runtime(&format!(
+            "failed to access native webview for certificate handler: {err}"
+        ));
     }
 }
 
@@ -515,6 +522,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inject_text,
             read_clipboard,
+            input_bridge::input_bridge_get_state,
+            input_bridge::input_bridge_lock_current,
+            input_bridge::input_bridge_unlock,
+            input_bridge::input_bridge_use_history,
+            input_bridge::input_bridge_delete_history,
+            input_bridge::input_bridge_flash_overlay,
+            input_bridge::input_bridge_paste_text,
             get_machine_identity,
             open_settings_window,
             configure_hotkeys,
@@ -525,12 +539,10 @@ pub fn run() {
             save_pdf_file
         ])
         .setup(move |app| {
-            let window = app
-                .get_webview_window("main")
-                .ok_or_else(|| {
-                    log_runtime("main window not found in tauri config");
-                    std::io::Error::new(std::io::ErrorKind::Other, "main window missing")
-                })?;
+            let window = app.get_webview_window("main").ok_or_else(|| {
+                log_runtime("main window not found in tauri config");
+                std::io::Error::new(std::io::ErrorKind::Other, "main window missing")
+            })?;
 
             if enable_tray {
                 if let Err(err) = tray::setup_tray(&app.handle()) {

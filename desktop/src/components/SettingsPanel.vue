@@ -5,6 +5,7 @@ import { useDesktopHotkeys } from '@/composables/useDesktopHotkeys'
 import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useSettings } from '@/composables/useSettings'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
+import { useInputBridge, type InputBridgeStateView, type InputBridgeTargetView } from '@/composables/useInputBridge'
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
@@ -17,9 +18,12 @@ const { settings, reset } = useSettings()
 const recorder = useAudioRecorder()
 const voiceControl = useVoiceControl()
 const desktopHotkeys = useDesktopHotkeys()
+const inputBridge = useInputBridge()
 const machineIdentity = ref<MachineIdentity | null>(null)
 const runtimeLogPath = ref('')
 const runtimeLogTail = ref('')
+const inputBridgeState = ref<InputBridgeStateView | null>(null)
+const inputBridgeLoading = ref(false)
 const hotkeyDefinitions = HOTKEY_ACTION_DEFINITIONS
 const RECOGNITION_CHUNK_MS = 200
 const RECOGNITION_PRESETS = [
@@ -82,6 +86,8 @@ const authMessage = ref('')
 const authMessageType = ref<'success' | 'error' | 'info'>('info')
 const hotkeyMessage = ref('')
 const hotkeyMessageType = ref<'success' | 'error' | 'info'>('info')
+const inputBridgeMessage = ref('')
+const inputBridgeMessageType = ref<'success' | 'error' | 'info'>('info')
 const capturingHotkeyAction = ref<HotkeyActionId | null>(null)
 const isElectronDesktop = typeof window !== 'undefined' && Boolean((window as { __electronBridge__?: unknown }).__electronBridge__)
 const supportsMouseGlobalHotkeys = computed(() => !isElectronDesktop)
@@ -93,6 +99,31 @@ const hotkeySectionHint = computed(() => {
     return 'Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
 
   return '当前 Win7 兼容版仅支持键盘全局热键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
+})
+const lockedInputTarget = computed(() => inputBridgeState.value?.lockedTarget || null)
+const candidateInputTarget = computed(() => inputBridgeState.value?.candidateTarget || null)
+const inputBridgeStateLabel = computed(() => {
+  const state = inputBridgeState.value?.state || 'Idle'
+  const labels: Record<string, string> = {
+    Unsupported: '不可用',
+    Idle: '未绑定',
+    CandidateReady: '检测到候选框',
+    Locked: '已绑定',
+    Recovering: '正在恢复',
+    FallbackCurrentFocus: '当前焦点兜底',
+    Invalid: '目标失效',
+  }
+  return labels[state] || state
+})
+const inputBridgeStatusClass = computed(() => {
+  const state = inputBridgeState.value?.state
+  if (state === 'Locked')
+    return 'valid'
+  if (state === 'Invalid' || state === 'Unsupported')
+    return 'invalid'
+  if (state === 'CandidateReady' || state === 'FallbackCurrentFocus' || state === 'Recovering')
+    return 'warning'
+  return 'idle'
 })
 
 const modifierOnlyCodes = new Set([
@@ -137,6 +168,99 @@ function setAuthMessage(type: 'success' | 'error' | 'info', message: string) {
 function setHotkeyMessage(type: 'success' | 'error' | 'info', message: string) {
   hotkeyMessageType.value = type
   hotkeyMessage.value = message
+}
+
+function setInputBridgeMessage(type: 'success' | 'error' | 'info', message: string) {
+  inputBridgeMessageType.value = type
+  inputBridgeMessage.value = message
+}
+
+function formatTargetMeta(target?: InputBridgeTargetView | null) {
+  if (!target)
+    return '暂无目标'
+  const parts = [target.processName, target.controlClassName].filter(Boolean)
+  return parts.join(' / ') || target.status
+}
+
+function formatTargetUsedAt(value?: number) {
+  if (!value)
+    return '未写入'
+  return new Date(value).toLocaleString()
+}
+
+async function refreshInputBridgeState(silent = false) {
+  inputBridgeLoading.value = true
+  try {
+    inputBridgeState.value = await inputBridge.getState()
+    if (!silent)
+      setInputBridgeMessage(inputBridgeState.value.supported ? 'info' : 'error', inputBridgeState.value.message)
+  }
+  catch (error) {
+    setInputBridgeMessage('error', error instanceof Error ? error.message : '读取输入桥状态失败')
+  }
+  finally {
+    inputBridgeLoading.value = false
+  }
+}
+
+async function flashInputTarget() {
+  inputBridgeLoading.value = true
+  try {
+    const result = await inputBridge.flashOverlay(2000)
+    setInputBridgeMessage(result.success ? 'success' : 'error', result.message)
+    await refreshInputBridgeState(true)
+  }
+  catch (error) {
+    setInputBridgeMessage('error', error instanceof Error ? error.message : '提示输入目标失败')
+  }
+  finally {
+    inputBridgeLoading.value = false
+  }
+}
+
+async function unlockInputTarget() {
+  inputBridgeLoading.value = true
+  try {
+    const result = await inputBridge.unlock()
+    setInputBridgeMessage(result.success ? 'success' : 'error', result.message)
+    await refreshInputBridgeState(true)
+  }
+  catch (error) {
+    setInputBridgeMessage('error', error instanceof Error ? error.message : '解除输入目标失败')
+  }
+  finally {
+    inputBridgeLoading.value = false
+  }
+}
+
+async function useHistoryInputTarget(targetId: string) {
+  inputBridgeLoading.value = true
+  try {
+    const result = await inputBridge.useHistory(targetId)
+    setInputBridgeMessage(result.success ? 'success' : 'error', result.message)
+    await refreshInputBridgeState(true)
+  }
+  catch (error) {
+    setInputBridgeMessage('error', error instanceof Error ? error.message : '切换历史目标失败')
+  }
+  finally {
+    inputBridgeLoading.value = false
+  }
+}
+
+async function deleteHistoryInputTarget(targetId: string) {
+  inputBridgeLoading.value = true
+  try {
+    const result = await inputBridge.deleteHistory(targetId)
+    setInputBridgeMessage(result.success ? 'success' : 'error', result.message)
+    await refreshInputBridgeState(true)
+  }
+  catch (error) {
+    setInputBridgeMessage('error', error instanceof Error ? error.message : '删除历史目标失败')
+  }
+  finally {
+    inputBridgeLoading.value = false
+  }
 }
 
 function shouldShowHotkeyAction(actionId: HotkeyActionId) {
@@ -379,6 +503,7 @@ watch(() => serializeHotkeyBindings(appStore.hotkeys), () => {
 onMounted(() => {
   void syncIdentityAndLogin(false)
   void refreshRuntimeLogs()
+  void refreshInputBridgeState(true)
   void voiceControl.ensureLoaded()
   window.addEventListener('keydown', handleHotkeyCaptureKeydown, true)
   window.addEventListener('mousedown', handleHotkeyCaptureMousedown, true)
@@ -467,6 +592,44 @@ onBeforeUnmount(() => {
           <span class="toggle-slider" />
         </label>
       </div>
+    </section>
+
+    <section class="settings-section">
+      <h4 class="section-title">语音写入目标</h4>
+      <p class="section-hint">先点击 RIS 报告输入框，再按“绑定语音写入目标”热键；识别文本会优先写入该绑定目标，历史目标可自动恢复。</p>
+      <div class="bridge-status" :class="inputBridgeStatusClass">
+        <div class="bridge-status-head">
+          <span>当前状态</span>
+          <strong>{{ inputBridgeStateLabel }}</strong>
+        </div>
+        <div class="bridge-target-name">
+          {{ lockedInputTarget?.displayName || candidateInputTarget?.displayName || inputBridgeState?.message || '暂无可写入目标' }}
+        </div>
+        <div class="bridge-target-meta">
+          {{ formatTargetMeta(lockedInputTarget || candidateInputTarget) }}
+        </div>
+      </div>
+      <div class="field action-row bridge-actions">
+        <button class="action-btn" :disabled="inputBridgeLoading" @click="refreshInputBridgeState(false)">刷新状态</button>
+        <button class="action-btn" :disabled="inputBridgeLoading || !lockedInputTarget" @click="flashInputTarget">提示目标</button>
+        <button class="action-btn" :disabled="inputBridgeLoading || !lockedInputTarget" @click="unlockInputTarget">解除绑定</button>
+      </div>
+      <div v-if="inputBridgeState?.history.length" class="bridge-history">
+        <article v-for="target in inputBridgeState.history" :key="target.targetId" class="bridge-history-item">
+          <div class="bridge-history-main">
+            <strong>{{ target.displayName }}</strong>
+            <span>{{ formatTargetMeta(target) }}</span>
+            <span>最近写入：{{ formatTargetUsedAt(target.lastUsedAt) }} · {{ target.useCount || 0 }} 次</span>
+          </div>
+          <div class="bridge-history-actions">
+            <button class="action-btn compact" :disabled="inputBridgeLoading" @click="useHistoryInputTarget(target.targetId)">使用</button>
+            <button class="action-btn compact" :disabled="inputBridgeLoading" @click="deleteHistoryInputTarget(target.targetId)">删除</button>
+          </div>
+        </article>
+      </div>
+      <p v-if="inputBridgeMessage" class="auth-message" :class="inputBridgeMessageType">
+        {{ inputBridgeMessage }}
+      </p>
     </section>
 
     <section class="settings-section">
@@ -852,6 +1015,111 @@ onBeforeUnmount(() => {
 .field input[type="range"] {
   width: 100%;
   accent-color: #0f766e;
+}
+
+.bridge-status {
+  margin: 0 4px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.bridge-status.valid {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(240, 253, 244, 0.85);
+}
+
+.bridge-status.warning {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: rgba(255, 251, 235, 0.85);
+}
+
+.bridge-status.invalid {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 242, 242, 0.86);
+}
+
+.bridge-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.bridge-status-head strong {
+  color: #16202c;
+  font-size: 12px;
+}
+
+.bridge-target-name {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f2937;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.bridge-target-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #64748b;
+  word-break: break-word;
+}
+
+.bridge-actions {
+  margin-top: 8px;
+}
+
+.bridge-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.bridge-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.bridge-history-main {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bridge-history-main strong {
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.bridge-history-main span {
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.bridge-history-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .hotkey-list {

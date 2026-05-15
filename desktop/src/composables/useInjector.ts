@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { useInputBridge } from './useInputBridge'
 
 interface InjectResult {
   success: boolean
@@ -6,8 +7,10 @@ interface InjectResult {
 }
 
 export function useInjector() {
+  const inputBridge = useInputBridge()
+
   const injectText = async (text: string): Promise<InjectResult> => {
-    return invoke<InjectResult>('inject_text', { text })
+    return inputBridge.pasteText(text, 'asr-final')
   }
 
   const readClipboard = async (): Promise<string> => {

@@ -10,7 +10,7 @@ const helperDir = path.join(projectDir, 'native', 'inject-helper')
 const helperManifestPath = path.join(helperDir, 'Cargo.toml')
 const helperTargetDir = path.join(helperDir, 'target')
 const helperOutputDir = path.join(projectDir, 'build', 'native', 'win32-x64')
-const helperName = 'asr-inject-helper.exe'
+const helperName = 'voice-input-bridge.exe'
 const helperToolchain = '1.77.2'
 const helperTarget = 'x86_64-pc-windows-msvc'
 const builtHelperPath = path.join(helperTargetDir, helperTarget, 'release', helperName)
@@ -63,4 +63,4 @@ if (!fs.existsSync(builtHelperPath)) {
 
 fs.mkdirSync(helperOutputDir, { recursive: true })
 fs.copyFileSync(builtHelperPath, packagedHelperPath)
-console.log(`已生成 Win7 注入 helper: ${packagedHelperPath}`)
+console.log(`已生成 Win7 输入桥: ${packagedHelperPath}`)

@@ -13,8 +13,8 @@ files:
   - package.json
 
 extraResources:
-  - from: build/native/win32-x64/asr-inject-helper.exe
-    to: bin/asr-inject-helper.exe
+  - from: build/native/win32-x64/voice-input-bridge.exe
+    to: bin/voice-input-bridge.exe
   - from: ../desktop/src-tauri/icons/icon.png
     to: icons/icon.png
 

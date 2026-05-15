@@ -6,6 +6,7 @@ export const HOTKEY_ACTIONS = {
   CYCLE_SCENE_MODE: 'cycleSceneMode',
   ACTIVATE_REPORT_MODE: 'activateReportMode',
   ACTIVATE_MEETING_MODE: 'activateMeetingMode',
+  LOCK_INPUT_TARGET: 'lockInputTarget',
 } as const
 
 export type HotkeyActionId = typeof HOTKEY_ACTIONS[keyof typeof HOTKEY_ACTIONS]
@@ -116,6 +117,11 @@ export const HOTKEY_ACTION_DEFINITIONS: HotkeyActionDefinition[] = [
     description: '补充场景：直接切到会议模式，适合一键进入会议纪要流。',
     optional: true,
   },
+  {
+    id: HOTKEY_ACTIONS.LOCK_INPUT_TARGET,
+    title: '绑定语音写入目标',
+    description: '点击 RIS 报告输入框后按下此热键，之后即使切到 PACS 也优先写回该输入框。',
+  },
 ]
 
 export function createDefaultHotkeyBindings(): HotkeyBindings {
@@ -127,6 +133,7 @@ export function createDefaultHotkeyBindings(): HotkeyBindings {
     [HOTKEY_ACTIONS.CYCLE_SCENE_MODE]: createBinding({ type: 'keyboard', code: 'KeyM' }, { alt: true, shift: true }),
     [HOTKEY_ACTIONS.ACTIVATE_REPORT_MODE]: createBinding(null, {}, false),
     [HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE]: createBinding(null, {}, false),
+    [HOTKEY_ACTIONS.LOCK_INPUT_TARGET]: createBinding({ type: 'keyboard', code: 'KeyL' }, { ctrl: true, alt: true }),
   }
 }
 
@@ -182,6 +189,7 @@ export function normalizeHotkeyBindings(bindings?: Partial<HotkeyBindings> | nul
     [HOTKEY_ACTIONS.CYCLE_SCENE_MODE]: normalizeHotkeyBinding(bindings?.[HOTKEY_ACTIONS.CYCLE_SCENE_MODE] ?? defaults[HOTKEY_ACTIONS.CYCLE_SCENE_MODE]),
     [HOTKEY_ACTIONS.ACTIVATE_REPORT_MODE]: normalizeHotkeyBinding(bindings?.[HOTKEY_ACTIONS.ACTIVATE_REPORT_MODE] ?? defaults[HOTKEY_ACTIONS.ACTIVATE_REPORT_MODE]),
     [HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE]: normalizeHotkeyBinding(bindings?.[HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE] ?? defaults[HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE]),
+    [HOTKEY_ACTIONS.LOCK_INPUT_TARGET]: normalizeHotkeyBinding(bindings?.[HOTKEY_ACTIONS.LOCK_INPUT_TARGET] ?? defaults[HOTKEY_ACTIONS.LOCK_INPUT_TARGET]),
   }
 }
 

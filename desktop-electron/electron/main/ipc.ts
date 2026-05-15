@@ -7,7 +7,7 @@ import { networkInterfaces } from 'node:os'
 import { clearInterval, setInterval } from 'node:timers'
 
 import { configureHotkeys } from './hotkeys'
-import { injectText, readClipboard } from './injector'
+import { deleteHistoryTarget, flashInputTargetOverlay, getInputBridgeState, injectText, lockInputTarget, readClipboard, unlockInputTarget, useHistoryTarget } from './injector'
 import { runtimeLogPath, runtimeRootDir } from './window-state'
 
 interface WindowController {
@@ -208,6 +208,20 @@ export function registerIpc() {
     switch (channel) {
       case 'inject_text':
         return injectText(String(args.text ?? ''))
+      case 'input_bridge_get_state':
+        return getInputBridgeState()
+      case 'input_bridge_lock_current':
+        return lockInputTarget()
+      case 'input_bridge_unlock':
+        return unlockInputTarget()
+      case 'input_bridge_use_history':
+        return useHistoryTarget(String(args.targetId ?? ''))
+      case 'input_bridge_delete_history':
+        return deleteHistoryTarget(String(args.targetId ?? ''))
+      case 'input_bridge_flash_overlay':
+        return flashInputTargetOverlay(Number(args.durationMs ?? 2000))
+      case 'input_bridge_paste_text':
+        return injectText(String(args.text ?? ''), String(args.source ?? 'desktop-electron'), args.segmentId == null ? undefined : String(args.segmentId))
       case 'read_clipboard':
         return readClipboard()
       case 'configure_hotkeys':

@@ -28,15 +28,22 @@ export interface HotkeyConfigureResult {
 
 const HOTKEY_EVENT = 'desktop-hotkey-action'
 
-let emitter: ((action: string) => void) | null = null
+let emitter: ((action: string) => boolean | void) | null = null
 
-export function setHotkeyEmitter(fn: (action: string) => void) {
+export function setHotkeyEmitter(fn: (action: string) => boolean | void) {
   emitter = fn
 }
 
 function emitAction(action: string) {
-  if (emitter)
-    emitter(action)
+  if (emitter) {
+    try {
+      if (emitter(action) === true)
+        return
+    }
+    catch (err) {
+      console.warn('[hotkeys] action emitter failed', action, err)
+    }
+  }
 
   // 兜底：广播给所有可见窗口（与 Tauri Emitter 行为一致）
   for (const win of BrowserWindow.getAllWindows()) {

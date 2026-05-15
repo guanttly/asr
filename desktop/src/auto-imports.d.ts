@@ -76,6 +76,7 @@ declare global {
   const useHotkeyActions: typeof import('./composables/useHotkeyActions')['useHotkeyActions']
   const useId: typeof import('vue')['useId']
   const useInjector: typeof import('./composables/useInjector')['useInjector']
+  const useInputBridge: typeof import('./composables/useInputBridge')['useInputBridge']
   const useModel: typeof import('vue')['useModel']
   const useSettings: typeof import('./composables/useSettings')['useSettings']
   const useSlots: typeof import('vue')['useSlots']
@@ -98,6 +99,9 @@ declare global {
   // @ts-ignore
   export type { DesktopHotkeySyncResult } from './composables/useDesktopHotkeys'
   import('./composables/useDesktopHotkeys')
+  // @ts-ignore
+  export type { InputBridgeTargetView, InputBridgeStateView, InputBridgeCommandResult } from './composables/useInputBridge'
+  import('./composables/useInputBridge')
   // @ts-ignore
   export type { RecognitionSettings } from './composables/useSettings'
   import('./composables/useSettings')

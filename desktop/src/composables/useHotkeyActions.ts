@@ -2,6 +2,7 @@ import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES, type SceneMode } from '@/constant
 import { useAppStore } from '@/stores/app'
 import { debugLog } from '@/utils/debug'
 import { HOTKEY_ACTIONS, type HotkeyActionId } from '@/utils/hotkeys'
+import { useInputBridge } from './useInputBridge'
 import { useVoiceControl } from './useVoiceControl'
 
 function activateSceneMode(mode: SceneMode) {
@@ -91,6 +92,13 @@ function cycleSceneMode() {
   return activateSceneMode(nextMode)
 }
 
+async function lockInputTarget() {
+  const inputBridge = useInputBridge()
+  const result = await inputBridge.lockCurrent()
+  await debugLog('shortcut.action', 'locked input target from hotkey action', result)
+  return result.success
+}
+
 export function useHotkeyActions() {
   return {
     activateSceneMode,
@@ -109,6 +117,8 @@ export function useHotkeyActions() {
           return activateSceneMode(SCENE_MODES.REPORT)
         case HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE:
           return activateSceneMode(SCENE_MODES.MEETING)
+        case HOTKEY_ACTIONS.LOCK_INPUT_TARGET:
+          return lockInputTarget()
         default:
           return false
       }

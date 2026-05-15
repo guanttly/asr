@@ -438,49 +438,44 @@ FunctionEnd
 !endif
 
 !ifdef BUILD_UNINSTALLER
-Function un.UpgradePrompt_HasOption
-  Exch $R0
-  Push $R1
-  Push $R2
-
-  ${GetParameters} $R1
-  ClearErrors
-  ${GetOptions} "$R1" "$R0" $R2
-  IfErrors 0 +3
-    StrCpy $R0 "0"
-    Goto done
-
-  StrCpy $R0 "1"
-
-  done:
-  Pop $R2
-  Pop $R1
-  Exch $R0
-FunctionEnd
+Var UpgradePromptUninstallDeleteAppData
 
 Function un.UpgradePrompt_ConfirmManualUninstall
+  StrCpy $UpgradePromptUninstallDeleteAppData "0"
+
   ${If} ${Silent}
     Return
   ${EndIf}
-
-  Push "--uninstall-confirmed"
-  Call un.UpgradePrompt_HasOption
-  Pop $R9
-  StrCmp "$R9" "1" 0 +2
-    Return
 
   MessageBox MB_ICONQUESTION|MB_YESNOCANCEL "是否同时删除本地配置、缓存和历史数据？$\r$\n$\r$\n选择“是”会在卸载程序时一并清理旧数据；选择“否”只卸载程序文件。" IDYES upgrade_prompt_uninstall_yes IDNO upgrade_prompt_uninstall_no
   Quit
 
   upgrade_prompt_uninstall_yes:
-    Exec '"$EXEPATH" /S --uninstall-confirmed --delete-app-data'
-    Quit
+    StrCpy $UpgradePromptUninstallDeleteAppData "1"
+    Return
 
   upgrade_prompt_uninstall_no:
-    Exec '"$EXEPATH" /S --uninstall-confirmed'
-    Quit
+    Return
 
 FunctionEnd
+
+!macro customUnInstall
+  ${If} $UpgradePromptUninstallDeleteAppData == "1"
+    ${If} $installMode == "all"
+      SetShellVarContext current
+    ${EndIf}
+    RMDir /r "$APPDATA\${APP_FILENAME}"
+    !ifdef APP_PRODUCT_FILENAME
+      RMDir /r "$APPDATA\${APP_PRODUCT_FILENAME}"
+    !endif
+    !ifdef APP_PACKAGE_NAME
+      RMDir /r "$APPDATA\${APP_PACKAGE_NAME}"
+    !endif
+    ${If} $installMode == "all"
+      SetShellVarContext all
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 !endif
 

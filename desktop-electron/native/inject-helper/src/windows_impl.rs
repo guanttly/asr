@@ -2911,23 +2911,7 @@ fn accessibility_hint_is_precise(hint: &AccessibilityFocusHint, host_rect: &Rect
         .as_deref()
         .map(|value| value == "UIAutomation:Edit" || value == "UIAutomation:ComboBox")
         .unwrap_or(false);
-    // 富文本编辑器 / contenteditable 的 wrapper rect 可能跟 Chrome 渲染面积
-    // 接近（比如整页占据的"诊断意见"区域），此时 `rect_substantially_smaller`
-    // 判定为不精确，但只要 UIA 给到了具体的 Name / AutomationId，就说明
-    // 我们已经摸到了真实的 DOM 节点，不应该被退回到宿主。
-    let has_named_identity = hint
-        .automation_id
-        .as_deref()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        || hint
-            .control_name
-            .as_deref()
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-    precise_type
-        || has_named_identity
-        || rect_substantially_smaller(&hint.rect_hint, host_rect)
+    precise_type || rect_substantially_smaller(&hint.rect_hint, host_rect)
 }
 
 fn update_best_accessibility_candidate(
@@ -3113,13 +3097,15 @@ fn is_web_input_accessibility_focus(
         && smaller_than_host
         && has_text_pattern
         && type_can_host_point_text;
-    // 富文本/SPA 编辑器把整块内容区当成 Document/Custom + TextPattern 暴露，
-    // 此时 rect 不一定比宿主小，但只要已经拿到键盘焦点，就应该认为是用户
-    // 真正在编辑的目标。
-    let focused_text_doc =
-        has_keyboard_focus && has_text_pattern && (type_can_host_text_focus || control_type.is_none());
+    // 富文本/SPA 编辑器把内容区当成 Document/Custom + TextPattern 暴露——只在
+    // 它「比宿主明显小」时才接受，避免顶层 Document（Name 是 Chrome 页面 title）
+    // 被误判成可写入目标。
+    let focused_text_doc = has_keyboard_focus
+        && has_text_pattern
+        && type_can_host_text_focus
+        && smaller_than_host;
 
-    if !smaller_than_host && !has_value_pattern && !focused_text_doc {
+    if !smaller_than_host && !has_value_pattern {
         return false;
     }
 
@@ -3523,6 +3509,24 @@ fn uia_runtime_thread() {
             }
         }
 
+        // 用户最常见的使用顺序是：先打开 Chrome 点了 textarea，再切到 bridge UI
+        // 按热键。FocusChangedEvent 并不会在订阅时回放历史，因此显式查一次
+        // 当前焦点把缓存预热——只要 Chrome 已经活跃，这一次同步查询会把
+        // textarea 拉进 a11y 树并写入缓存。
+        if let Ok(seed) = automation.GetFocusedElement() {
+            if let Some(snapshot) = build_snapshot_for_element(&seed) {
+                append_log(&format!(
+                    "uia_runtime_seeded top=0x{:x} ctrl={} name={}",
+                    snapshot.top_hwnd,
+                    snapshot.control_type_label,
+                    snapshot.name.as_deref().unwrap_or("")
+                ));
+                if let Ok(mut guard) = UIA_LAST_FOCUS.lock() {
+                    *guard = Some(snapshot);
+                }
+            }
+        }
+
         // Park forever. Dropping `automation` here would tear down the
         // accessibility connection; we want it alive for the process
         // lifetime.
@@ -3549,6 +3553,13 @@ impl IUIAutomationFocusChangedEventHandler_Impl for UiaFocusHandler_Impl {
 
 fn capture_uia_focus_into_cache(element: &IUIAutomationElement) -> Option<()> {
     let snapshot = build_snapshot_for_element(element)?;
+    append_log(&format!(
+        "uia_focus_event_cached top=0x{:x} ctrl={} name={} rid_len={}",
+        snapshot.top_hwnd,
+        snapshot.control_type_label,
+        snapshot.name.as_deref().unwrap_or(""),
+        snapshot.runtime_id.len()
+    ));
     if let Ok(mut guard) = UIA_LAST_FOCUS.lock() {
         *guard = Some(snapshot);
     }
@@ -3584,7 +3595,7 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
         }
 
         let control_type = element.CurrentControlType().ok()?;
-        if !is_uia_acceptable_control_type(control_type) {
+        if !is_uia_cacheable_control_type(control_type) {
             return None;
         }
         let rect_uia = element.CurrentBoundingRectangle().ok()?;
@@ -3592,6 +3603,14 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
         let runtime_id = read_runtime_id(&handle.0, element)?;
         if runtime_id.is_empty() {
             return None;
+        }
+        // 拒绝顶层 Chrome 容器：如果 rect 跟整个顶层窗口贴边，几乎可以肯定
+        // 落到了 Document/Pane 这种"整页"目标上（Name 通常是页签 title）。
+        // 真正的 textarea 一定会比顶层窗口小一截。
+        if let Some(top_rect) = get_rect_hint(top_hwnd) {
+            if !rect_substantially_smaller(&rect, &top_rect) {
+                return None;
+            }
         }
 
         let name = element
@@ -3608,6 +3627,15 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
             .CurrentHasKeyboardFocus()
             .map(|value| value.0 != 0)
             .unwrap_or(false);
+
+        // 对 Document / Custom 这种比较泛的 ControlType，额外要求支持文本写入
+        // 的 pattern（ValuePattern 或 TextPattern），否则容易把"装样子的"
+        // 容器节点缓存下来。Edit / ComboBox 自带强语义，直接放行。
+        let is_strong_input_type =
+            control_type == UIA_EditControlTypeId || control_type == UIA_ComboBoxControlTypeId;
+        if !is_strong_input_type && !has_value_pattern && !has_text_pattern {
+            return None;
+        }
 
         Some(UiaFocusSnapshot {
             top_hwnd: top_hwnd as isize,
@@ -3672,13 +3700,13 @@ fn is_chromium_a11y_top_window(top_hwnd: HWND) -> bool {
         || is_wechat_window_class(&class_name)
 }
 
-fn is_uia_acceptable_control_type(control_type: UIA_CONTROLTYPE_ID) -> bool {
+/// 用于 UIA Runtime 缓存的更紧的过滤：明确剔除 `Pane`（Chrome 顶层渲染面）
+/// 和 `Text`（只读静态文本），只接受真正可能接收输入的节点。
+fn is_uia_cacheable_control_type(control_type: UIA_CONTROLTYPE_ID) -> bool {
     control_type == UIA_EditControlTypeId
         || control_type == UIA_DocumentControlTypeId
         || control_type == UIA_ComboBoxControlTypeId
         || control_type == UIA_CustomControlTypeId
-        || control_type == UIA_TextControlTypeId
-        || control_type == UIA_PaneControlTypeId
 }
 
 unsafe fn read_runtime_id(

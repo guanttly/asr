@@ -6,20 +6,25 @@ use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Mutex, Once};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use windows::Win32::Foundation::{POINT as UiaPoint, RECT as UiaRect};
+use windows::core::{implement, Interface};
+use windows::Win32::Foundation::{HWND as WinHwnd, POINT as UiaPoint, RECT as UiaRect};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, SAFEARRAY,
 };
+use windows::Win32::System::Ole::SafeArrayDestroy;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Descendants,
-    UIA_ComboBoxControlTypeId, UIA_CustomControlTypeId, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UIA_PaneControlTypeId, UIA_TextControlTypeId, UIA_TextPatternId,
-    UIA_ValuePatternId, UIA_CONTROLTYPE_ID,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
+    IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationLegacyIAccessiblePattern,
+    IUIAutomationTreeWalker, TreeScope_Descendants, UIA_ComboBoxControlTypeId,
+    UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+    UIA_LegacyIAccessiblePatternId, UIA_PaneControlTypeId, UIA_TextControlTypeId,
+    UIA_TextPatternId, UIA_ValuePatternId, UIA_CONTROLTYPE_ID,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GlobalFree, BOOL, HWND, LPARAM, LRESULT, POINT as SysPoint, RECT, SIZE, WPARAM,
@@ -100,6 +105,14 @@ struct RuntimeTarget {
     focus_hwnd: isize,
     process_id: u32,
     thread_id: u32,
+    /// UIA RuntimeId for the bound element. Present when binding lands on a
+    /// Chromium / WebView2 / WPF subtree we resolved through UI Automation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uia_runtime_id: Option<Vec<i32>>,
+    /// Describes which provider produced this runtime, e.g. "Chromium" / "Win32".
+    /// Used purely for logging + telemetry today; do not gate behavior on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uia_provider_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -244,6 +257,7 @@ impl Drop for ClipboardGuard {
 
 pub fn get_state() -> BridgeStateView {
     ensure_focus_tracker();
+    ensure_uia_runtime();
     let history = load_history();
     let candidate = detect_current_focused_editable().ok();
     let locked_item = history
@@ -287,6 +301,7 @@ pub fn get_state() -> BridgeStateView {
 
 pub fn lock_current_target() -> BridgeCommandResult {
     ensure_focus_tracker();
+    ensure_uia_runtime();
     match detect_current_focused_editable() {
         Ok(target) => {
             let config = load_config();
@@ -419,6 +434,7 @@ pub fn paste_text(
     segment_id: Option<&str>,
 ) -> BridgeCommandResult {
     ensure_focus_tracker();
+    ensure_uia_runtime();
     if text.is_empty() {
         return command_error("Invalid", "写入文本为空".to_string());
     }
@@ -730,8 +746,33 @@ fn detect_current_focused_editable() -> Result<InputTarget, String> {
     };
 
     if let Some(focus) = resolve_bindable_focus_hwnd(top, active_focus) {
-        if let Ok(target) = build_target(top, focus) {
-            return Ok(target);
+        // 任务 F：在 Chromium 路径上记录结构化日志，便于线上排查"为什么锁
+        // 到的是整页 / 是哪个 textarea"。日志只在 Chromium 类宿主下打，避免
+        // 干扰 Office / Win32 老用例的输出。
+        let is_chromium = is_web_accessibility_host_hwnd(focus);
+        if is_chromium {
+            log_chromium_lock_attempt(top, focus);
+        }
+        match build_target(top, focus) {
+            Ok(target) => {
+                if is_chromium {
+                    let resolved_via = if target.runtime.uia_runtime_id.is_some() {
+                        "uia"
+                    } else {
+                        "hwnd"
+                    };
+                    append_log(&format!(
+                        "chromium_lock_resolved target={} resolved_via={} display={}",
+                        target.id, resolved_via, target.display_name
+                    ));
+                }
+                return Ok(target);
+            }
+            Err(err) => {
+                if is_chromium {
+                    append_log(&format!("chromium_lock_build_failed error={err}"));
+                }
+            }
         }
     }
 
@@ -746,6 +787,40 @@ fn detect_current_focused_editable() -> Result<InputTarget, String> {
 
     let class_name = get_window_class_name(active_focus).unwrap_or_else(|_| "unknown".to_string());
     Err(format!("当前控件不是可写入输入框: {class_name}"))
+}
+
+fn log_chromium_lock_attempt(top: HWND, focus: HWND) {
+    let runtime_started = UIA_RUNTIME_STARTED.load(Ordering::SeqCst);
+    let disabled = uia_disabled();
+    let focus_cache = if let Ok(guard) = UIA_LAST_FOCUS.lock() {
+        guard.clone()
+    } else {
+        None
+    };
+    let cache_top = focus_cache
+        .as_ref()
+        .map(|s| s.top_hwnd)
+        .unwrap_or_default();
+    let cache_age_ms = focus_cache
+        .as_ref()
+        .map(|s| now_ms() - s.captured_at_ms)
+        .unwrap_or(-1);
+    let focus_runtime_id = focus_cache
+        .as_ref()
+        .map(|s| {
+            s.runtime_id
+                .iter()
+                .map(|v| format!("{v}"))
+                .collect::<Vec<_>>()
+                .join(":")
+        })
+        .unwrap_or_default();
+    let cache_top_match = cache_top == top as isize;
+    let focus_class = get_window_class_name(focus).unwrap_or_else(|_| "unknown".to_string());
+    append_log(&format!(
+        "chromium_lock_attempt top=0x{:x} focus=0x{:x} focus_class={} has_uia_runtime={} uia_disabled={} cache_age_ms={} cache_top_match={} focus_runtime_id={}",
+        top, focus, focus_class, runtime_started, disabled, cache_age_ms, cache_top_match, focus_runtime_id
+    ));
 }
 
 fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String> {
@@ -776,10 +851,29 @@ fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String>
     let hwnd_rect_hint = get_rect_hint(focus_hwnd);
     let accessibility_hint =
         detect_accessibility_focus_hint(top_hwnd, focus_hwnd, hwnd_rect_hint.as_ref());
-    let rect_hint = accessibility_hint
+
+    // 对 Chromium 类宿主额外查一遍长生命周期 UIA Runtime（任务 A/B/C）：
+    //   - 它会触发 Chrome 完整 a11y 树，使 <textarea> 节点暴露出来
+    //   - 拿到 Name / AutomationId / RuntimeId，喂给 signature 与 runtime
+    //   - 同一页面里不同的 textarea 因此会算出不同的 target_id / displayName
+    let uia_snapshot = if is_web_accessibility_host_hwnd(focus_hwnd) {
+        snapshot_chromium_focus(top_hwnd)
+    } else {
+        None
+    };
+
+    let rect_hint = uia_snapshot
         .as_ref()
-        .map(|hint| hint.rect_hint)
+        .map(|snap| snap.rect)
+        .or_else(|| accessibility_hint.as_ref().map(|hint| hint.rect_hint))
         .or(hwnd_rect_hint);
+    let uia_automation_id = uia_snapshot.as_ref().and_then(|snap| snap.automation_id.clone());
+    let uia_control_name = uia_snapshot.as_ref().and_then(|snap| snap.name.clone());
+    let uia_control_type_label = uia_snapshot
+        .as_ref()
+        .map(|snap| snap.control_type_label.clone());
+    let uia_runtime_id = uia_snapshot.as_ref().map(|snap| snap.runtime_id.clone());
+
     let app_type = classify_app(&process_name, top_title.as_deref());
     let priority = match app_type.as_str() {
         "RIS" => 100,
@@ -797,15 +891,15 @@ fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String>
         top_title: top_title.clone(),
         top_class_name,
         control_class_name: control_class_name.clone(),
-        automation_id: accessibility_hint
-            .as_ref()
-            .and_then(|hint| hint.automation_id.clone()),
-        control_name: accessibility_hint
-            .as_ref()
-            .and_then(|hint| hint.control_name.clone()),
-        control_type: accessibility_hint
-            .as_ref()
-            .and_then(|hint| hint.control_type.clone())
+        automation_id: uia_automation_id
+            .clone()
+            .or_else(|| accessibility_hint.as_ref().and_then(|h| h.automation_id.clone())),
+        control_name: uia_control_name
+            .clone()
+            .or_else(|| accessibility_hint.as_ref().and_then(|h| h.control_name.clone())),
+        control_type: uia_control_type_label
+            .clone()
+            .or_else(|| accessibility_hint.as_ref().and_then(|h| h.control_type.clone()))
             .or_else(|| Some("Win32".to_string())),
         rect_hint,
     };
@@ -814,7 +908,14 @@ fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String>
         &process_name,
         top_title.as_deref(),
         control_class_name.as_deref(),
+        signature.control_name.as_deref(),
     );
+
+    let uia_provider_kind = if uia_snapshot.is_some() {
+        Some("Chromium".to_string())
+    } else {
+        None
+    };
 
     Ok(InputTarget {
         id,
@@ -828,6 +929,8 @@ fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String>
             } else {
                 top_thread_id
             },
+            uia_runtime_id,
+            uia_provider_kind,
         },
         signature,
         app_type,
@@ -865,6 +968,19 @@ fn is_runtime_target_alive(runtime: &RuntimeTarget, signature: &TargetSignature)
     if let Some(expected) = signature.control_class_name.as_deref() {
         if let Ok(actual) = get_window_class_name(runtime.focus_hwnd) {
             if !class_matches(&actual, &expected.to_ascii_lowercase()) {
+                return false;
+            }
+        }
+    }
+
+    // 任务 E：Chromium 目标进一步检查 UIA RuntimeId 是否还能在树里找到。
+    // RuntimeId 在 Chrome 重启 / 整页 reload 后会失效 —— 失效时让 resolve
+    // 路径走 signature 二次匹配，避免拿到一个 HWND 还在但 DOM 节点已经
+    // 不是原 textarea 的"幽灵目标"。
+    if let Some(runtime_id) = runtime.uia_runtime_id.as_deref() {
+        if !runtime_id.is_empty() && !uia_disabled() {
+            let found = unsafe { find_uia_element_by_runtime_id(runtime.top_hwnd, runtime_id) };
+            if found.is_none() {
                 return false;
             }
         }
@@ -966,15 +1082,38 @@ fn focus_target(target: &InputTarget) -> Result<(), String> {
         if !is_web_like_target(target) {
             SetFocus(focus);
         } else {
-            append_log(&format!(
-                "focus_target_web_preserve_internal_focus target={} class={}",
-                target.id,
-                target
-                    .signature
-                    .control_class_name
-                    .as_deref()
-                    .unwrap_or_default()
-            ));
+            // 任务 E：Chromium 目标用 UIA runtime_id 把 textarea 重新拿回 caret，
+            // 这样即便用户中途点过 PACS / 别的输入框，写入依旧落在原 textarea。
+            let mut uia_focused = false;
+            if let Some(runtime_id) = target.runtime.uia_runtime_id.as_deref() {
+                if !runtime_id.is_empty() {
+                    if let Some(element) = find_uia_element_by_runtime_id(top, runtime_id) {
+                        if uia_focus_element(&element) {
+                            uia_focused = true;
+                            append_log(&format!(
+                                "focus_target_web_uia_refocus target={} provider={}",
+                                target.id,
+                                target
+                                    .runtime
+                                    .uia_provider_kind
+                                    .as_deref()
+                                    .unwrap_or("Chromium")
+                            ));
+                        }
+                    }
+                }
+            }
+            if !uia_focused {
+                append_log(&format!(
+                    "focus_target_web_preserve_internal_focus target={} class={}",
+                    target.id,
+                    target
+                        .signature
+                        .control_class_name
+                        .as_deref()
+                        .unwrap_or_default()
+                ));
+            }
         }
 
         for thread_id in attached_threads.into_iter().rev() {
@@ -1832,6 +1971,20 @@ fn make_target_id(signature: &TargetSignature) -> String {
     signature.top_title.hash(&mut hasher);
     signature.top_class_name.hash(&mut hasher);
     signature.control_class_name.hash(&mut hasher);
+    // 加入 UIA / accessibility 派生的字段，让同一 Chromium 页面里两个
+    // <textarea>（"影像所见" / "诊断意见"）能算出不同的 target id。
+    signature.automation_id.hash(&mut hasher);
+    signature.control_name.hash(&mut hasher);
+    if let Some(rect) = signature.rect_hint.as_ref() {
+        // Round to the nearest 16px to absorb minor layout jitter while
+        // still distinguishing controls that live in clearly different
+        // regions of the page.
+        let bucket = |v: i32| (v / 16) * 16;
+        bucket(rect.left).hash(&mut hasher);
+        bucket(rect.top).hash(&mut hasher);
+        bucket(rect.right - rect.left).hash(&mut hasher);
+        bucket(rect.bottom - rect.top).hash(&mut hasher);
+    }
     format!("target-{:016x}", hasher.finish())
 }
 
@@ -1839,6 +1992,7 @@ fn make_display_name(
     process_name: &str,
     title: Option<&str>,
     control_class: Option<&str>,
+    uia_name: Option<&str>,
 ) -> String {
     let app = if process_name.eq_ignore_ascii_case("chrome.exe")
         || process_name.eq_ignore_ascii_case("msedge.exe")
@@ -1866,9 +2020,16 @@ fn make_display_name(
     let title = title
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("输入窗口");
-    let control = control_class
+    // 控件部分优先使用 UIA Name（如 textarea 的 label「影像所见」），
+    // 这是用户在屏幕上看到的字面，比 HWND class 名「Chrome_RenderWidgetHostHWND」
+    // 友好得多；只有在 UIA 拿不到 Name 时才退回到类名。
+    let control_fallback = control_class
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("输入框");
+    let control = uia_name
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(control_fallback);
     format!("{app} - {title} - {control}")
 }
 
@@ -2750,7 +2911,23 @@ fn accessibility_hint_is_precise(hint: &AccessibilityFocusHint, host_rect: &Rect
         .as_deref()
         .map(|value| value == "UIAutomation:Edit" || value == "UIAutomation:ComboBox")
         .unwrap_or(false);
-    precise_type || rect_substantially_smaller(&hint.rect_hint, host_rect)
+    // 富文本编辑器 / contenteditable 的 wrapper rect 可能跟 Chrome 渲染面积
+    // 接近（比如整页占据的"诊断意见"区域），此时 `rect_substantially_smaller`
+    // 判定为不精确，但只要 UIA 给到了具体的 Name / AutomationId，就说明
+    // 我们已经摸到了真实的 DOM 节点，不应该被退回到宿主。
+    let has_named_identity = hint
+        .automation_id
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || hint
+            .control_name
+            .as_deref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+    precise_type
+        || has_named_identity
+        || rect_substantially_smaller(&hint.rect_hint, host_rect)
 }
 
 fn update_best_accessibility_candidate(
@@ -2826,6 +3003,13 @@ fn accessibility_candidate_score(
 
     if matches!(mode, AccessibilityProbeMode::Focused) && !has_keyboard_focus && !contains_cursor {
         score -= 35;
+    }
+
+    // 任务 D：键盘焦点 + TextPattern 的组合（典型的 contenteditable / 富文本）
+    // 在父 Pane 同样满足上面条件时容易输给"面积更大、score 一样"的祖先。
+    // 显式加分让真正持有 caret 的叶子节点胜出。
+    if has_keyboard_focus && has_text_pattern && contains_cursor {
+        score += 20;
     }
 
     score
@@ -2929,12 +3113,17 @@ fn is_web_input_accessibility_focus(
         && smaller_than_host
         && has_text_pattern
         && type_can_host_point_text;
+    // 富文本/SPA 编辑器把整块内容区当成 Document/Custom + TextPattern 暴露，
+    // 此时 rect 不一定比宿主小，但只要已经拿到键盘焦点，就应该认为是用户
+    // 真正在编辑的目标。
+    let focused_text_doc =
+        has_keyboard_focus && has_text_pattern && (type_can_host_text_focus || control_type.is_none());
 
-    if !smaller_than_host && !has_value_pattern {
+    if !smaller_than_host && !has_value_pattern && !focused_text_doc {
         return false;
     }
 
-    if has_value_pattern || type_accepts_text_without_focus {
+    if has_value_pattern || type_accepts_text_without_focus || focused_text_doc {
         return true;
     }
 
@@ -3218,4 +3407,411 @@ fn take_sticky_focus_target() -> Option<InputTarget> {
         }
     }
     build_target(sticky.top, sticky.focus).ok()
+}
+
+// =========================================================================
+// 常驻 UIA Runtime（任务 A + B）
+//
+// Chromium 默认不会暴露 <textarea> 等可访问性节点，必须有一个长期存活的
+// UIA 客户端连接才会触发完整 a11y 树构建。我们专门起一个后台线程，初始化
+// COM MTA，创建并持有一个 IUIAutomation 实例；同时订阅 FocusChangedEvent，
+// 把 Chromium 顶层窗口内可输入元素的 RuntimeId / Name 等信息缓存下来，
+// 供 build_target / focus_target 使用。
+//
+// 失败兜底：BRIDGE_DISABLE_UIA=1 环境变量可关闭这条路径，所有依赖该
+// runtime 的调用都会优雅返回 None，回退到现有 HWND 模式。
+// =========================================================================
+
+#[derive(Debug, Clone)]
+struct UiaFocusSnapshot {
+    top_hwnd: isize,
+    runtime_id: Vec<i32>,
+    rect: RectHint,
+    /// 原始 UIA control_type 数字。当前仅用于 telemetry，故标记 dead_code 抑制 lint。
+    #[allow(dead_code)]
+    control_type_id: i32,
+    control_type_label: String,
+    name: Option<String>,
+    automation_id: Option<String>,
+    /// 是否暴露 ValuePattern / TextPattern / 当前键盘焦点。保留以便后续基于
+    /// 这些状态做"是否需要重新 focus"的判断。
+    #[allow(dead_code)]
+    has_value_pattern: bool,
+    #[allow(dead_code)]
+    has_text_pattern: bool,
+    #[allow(dead_code)]
+    has_keyboard_focus: bool,
+    captured_at_ms: i64,
+}
+
+#[derive(Clone)]
+struct UiaHandle(IUIAutomation);
+// SAFETY: IUIAutomation supports free-threaded marshaling. The COM object is
+// safe to share across threads provided each calling thread has COM
+// initialized. Our callers either run on the dedicated UIA thread (MTA) or
+// initialize STA via ComInitGuard before touching it.
+unsafe impl Send for UiaHandle {}
+unsafe impl Sync for UiaHandle {}
+
+const UIA_SNAPSHOT_TTL_MS: i64 = 60_000;
+
+static UIA_RUNTIME_ONCE: Once = Once::new();
+static UIA_RUNTIME_STARTED: AtomicBool = AtomicBool::new(false);
+static UIA_HANDLE: OnceLock<UiaHandle> = OnceLock::new();
+static UIA_LAST_FOCUS: Mutex<Option<UiaFocusSnapshot>> = Mutex::new(None);
+
+fn uia_disabled() -> bool {
+    std::env::var_os("BRIDGE_DISABLE_UIA").is_some()
+}
+
+fn ensure_uia_runtime() {
+    if uia_disabled() {
+        return;
+    }
+    UIA_RUNTIME_ONCE.call_once(|| {
+        let _ = thread::Builder::new()
+            .name("voice-bridge-uia".to_string())
+            .spawn(uia_runtime_thread);
+    });
+}
+
+fn uia_runtime_thread() {
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+        if hr.is_err() {
+            append_log(&format!(
+                "uia_runtime_coinit_failed hr=0x{:08X}",
+                hr.0 as u32
+            ));
+            return;
+        }
+
+        let automation: IUIAutomation =
+            match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+                Ok(a) => a,
+                Err(err) => {
+                    append_log(&format!(
+                        "uia_runtime_cocreate_failed hr=0x{:08X}",
+                        err.code().0 as u32
+                    ));
+                    CoUninitialize();
+                    return;
+                }
+            };
+
+        // Save handle *before* subscribing — the focus event handler may
+        // immediately need it for runtime id conversion.
+        let _ = UIA_HANDLE.set(UiaHandle(automation.clone()));
+
+        // Touching the root element forces Chromium to activate its
+        // accessibility provider for the current desktop.
+        let _ = automation.GetRootElement();
+
+        let handler_impl = UiaFocusHandler;
+        let handler: IUIAutomationFocusChangedEventHandler = handler_impl.into();
+        match automation.AddFocusChangedEventHandler(None, &handler) {
+            Ok(()) => {
+                UIA_RUNTIME_STARTED.store(true, Ordering::SeqCst);
+                append_log("uia_runtime_started focus_event_subscribed=true");
+            }
+            Err(err) => {
+                append_log(&format!(
+                    "uia_focus_handler_register_failed hr=0x{:08X}",
+                    err.code().0 as u32
+                ));
+                UIA_RUNTIME_STARTED.store(true, Ordering::SeqCst);
+            }
+        }
+
+        // Park forever. Dropping `automation` here would tear down the
+        // accessibility connection; we want it alive for the process
+        // lifetime.
+        loop {
+            thread::park_timeout(Duration::from_secs(3600));
+        }
+    }
+}
+
+#[implement(IUIAutomationFocusChangedEventHandler)]
+struct UiaFocusHandler;
+
+impl IUIAutomationFocusChangedEventHandler_Impl for UiaFocusHandler_Impl {
+    fn HandleFocusChangedEvent(
+        &self,
+        sender: ::core::option::Option<&IUIAutomationElement>,
+    ) -> windows::core::Result<()> {
+        if let Some(element) = sender {
+            let _ = capture_uia_focus_into_cache(element);
+        }
+        Ok(())
+    }
+}
+
+fn capture_uia_focus_into_cache(element: &IUIAutomationElement) -> Option<()> {
+    let snapshot = build_snapshot_for_element(element)?;
+    if let Ok(mut guard) = UIA_LAST_FOCUS.lock() {
+        *guard = Some(snapshot);
+    }
+    Some(())
+}
+
+fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocusSnapshot> {
+    let handle = UIA_HANDLE.get()?;
+    unsafe {
+        let native_hwnd = element.CurrentNativeWindowHandle().ok()?;
+        let raw_hwnd = win_hwnd_to_raw(native_hwnd);
+        let top_hwnd = if raw_hwnd != 0 {
+            let root = GetAncestor(raw_hwnd, GA_ROOT);
+            if root != 0 {
+                root
+            } else {
+                raw_hwnd
+            }
+        } else {
+            // contentful UIA elements (DOM nodes) routinely report a zero
+            // native hwnd. Fall back to walking up the tree to find an
+            // ancestor that exposes one.
+            ancestor_native_hwnd(&handle.0, element).unwrap_or(0)
+        };
+        if top_hwnd == 0 {
+            return None;
+        }
+        if is_own_window(top_hwnd) {
+            return None;
+        }
+        if !is_chromium_a11y_top_window(top_hwnd) {
+            return None;
+        }
+
+        let control_type = element.CurrentControlType().ok()?;
+        if !is_uia_acceptable_control_type(control_type) {
+            return None;
+        }
+        let rect_uia = element.CurrentBoundingRectangle().ok()?;
+        let rect = rect_hint_from_uia_rect(rect_uia)?;
+        let runtime_id = read_runtime_id(&handle.0, element)?;
+        if runtime_id.is_empty() {
+            return None;
+        }
+
+        let name = element
+            .CurrentName()
+            .ok()
+            .and_then(|value| non_empty(value.to_string()));
+        let automation_id = element
+            .CurrentAutomationId()
+            .ok()
+            .and_then(|value| non_empty(value.to_string()));
+        let has_value_pattern = element.GetCurrentPattern(UIA_ValuePatternId).is_ok();
+        let has_text_pattern = element.GetCurrentPattern(UIA_TextPatternId).is_ok();
+        let has_keyboard_focus = element
+            .CurrentHasKeyboardFocus()
+            .map(|value| value.0 != 0)
+            .unwrap_or(false);
+
+        Some(UiaFocusSnapshot {
+            top_hwnd: top_hwnd as isize,
+            runtime_id,
+            rect,
+            control_type_id: control_type.0,
+            control_type_label: uia_control_type_label(control_type),
+            name,
+            automation_id,
+            has_value_pattern,
+            has_text_pattern,
+            has_keyboard_focus,
+            captured_at_ms: now_ms(),
+        })
+    }
+}
+
+unsafe fn ancestor_native_hwnd(
+    automation: &IUIAutomation,
+    element: &IUIAutomationElement,
+) -> Option<HWND> {
+    let walker = automation
+        .RawViewWalker()
+        .or_else(|_| automation.ControlViewWalker())
+        .ok()?;
+    let mut current = element.clone();
+    for _ in 0..MAX_ACCESSIBILITY_ANCESTORS {
+        let Ok(parent) = walker.GetParentElement(&current) else {
+            return None;
+        };
+        if let Ok(hwnd) = parent.CurrentNativeWindowHandle() {
+            let raw = win_hwnd_to_raw(hwnd);
+            if raw != 0 {
+                return Some(raw);
+            }
+        }
+        current = parent;
+    }
+    None
+}
+
+#[inline]
+fn win_hwnd_to_raw(hwnd: WinHwnd) -> HWND {
+    hwnd.0 as isize as HWND
+}
+
+#[inline]
+fn raw_to_win_hwnd(hwnd: HWND) -> WinHwnd {
+    WinHwnd(hwnd as *mut core::ffi::c_void)
+}
+
+fn is_chromium_a11y_top_window(top_hwnd: HWND) -> bool {
+    if top_hwnd == 0 {
+        return false;
+    }
+    let Ok(class_name) = get_window_class_name(top_hwnd) else {
+        return false;
+    };
+    let lower = class_name.to_ascii_lowercase();
+    lower.contains("chrome_widgetwin")
+        || lower.contains("mozillawindowclass")
+        || is_wechat_window_class(&class_name)
+}
+
+fn is_uia_acceptable_control_type(control_type: UIA_CONTROLTYPE_ID) -> bool {
+    control_type == UIA_EditControlTypeId
+        || control_type == UIA_DocumentControlTypeId
+        || control_type == UIA_ComboBoxControlTypeId
+        || control_type == UIA_CustomControlTypeId
+        || control_type == UIA_TextControlTypeId
+        || control_type == UIA_PaneControlTypeId
+}
+
+unsafe fn read_runtime_id(
+    automation: &IUIAutomation,
+    element: &IUIAutomationElement,
+) -> Option<Vec<i32>> {
+    let psa: *mut SAFEARRAY = element.GetRuntimeId().ok()?;
+    if psa.is_null() {
+        return None;
+    }
+    let mut data_ptr: *mut i32 = std::ptr::null_mut();
+    let length_res = automation.IntSafeArrayToNativeArray(psa, &mut data_ptr);
+    let _ = SafeArrayDestroy(psa);
+    let length = match length_res {
+        Ok(n) => n,
+        Err(_) => {
+            if !data_ptr.is_null() {
+                CoTaskMemFree(Some(data_ptr as *const _));
+            }
+            return None;
+        }
+    };
+    if length <= 0 || data_ptr.is_null() {
+        if !data_ptr.is_null() {
+            CoTaskMemFree(Some(data_ptr as *const _));
+        }
+        return None;
+    }
+    let mut out = Vec::with_capacity(length as usize);
+    for i in 0..length {
+        out.push(*data_ptr.add(i as usize));
+    }
+    CoTaskMemFree(Some(data_ptr as *const _));
+    Some(out)
+}
+
+/// Returns the most recent UIA snapshot for a Chromium top window.
+/// First consults the focus-event cache; if cold/stale, performs a
+/// synchronous `GetFocusedElement` query to refresh.
+fn snapshot_chromium_focus(top_hwnd: HWND) -> Option<UiaFocusSnapshot> {
+    if uia_disabled() {
+        return None;
+    }
+    ensure_uia_runtime();
+
+    if let Ok(guard) = UIA_LAST_FOCUS.lock() {
+        if let Some(snapshot) = guard.as_ref() {
+            let fresh = now_ms() - snapshot.captured_at_ms <= UIA_SNAPSHOT_TTL_MS;
+            if fresh && snapshot.top_hwnd == top_hwnd as isize {
+                return Some(snapshot.clone());
+            }
+        }
+    }
+
+    // Synchronous fallback: ask UIA for the currently focused element. This
+    // also runs through MTA marshaling so callers don't have to worry about
+    // their own apartment model.
+    let handle = UIA_HANDLE.get()?;
+    let element = unsafe { handle.0.GetFocusedElement().ok()? };
+    let snapshot = build_snapshot_for_element(&element)?;
+    if snapshot.top_hwnd == top_hwnd as isize {
+        if let Ok(mut guard) = UIA_LAST_FOCUS.lock() {
+            *guard = Some(snapshot.clone());
+        }
+        Some(snapshot)
+    } else {
+        None
+    }
+}
+
+/// Looks up a UIA element by its previously captured runtime id under the
+/// given top window. Used by `focus_target` / `is_runtime_target_alive` to
+/// re-resolve the bound `<textarea>` after the user has navigated away.
+unsafe fn find_uia_element_by_runtime_id(
+    top_hwnd: HWND,
+    runtime_id: &[i32],
+) -> Option<IUIAutomationElement> {
+    if uia_disabled() || runtime_id.is_empty() {
+        return None;
+    }
+    let handle = UIA_HANDLE.get()?;
+    let root = handle.0.ElementFromHandle(raw_to_win_hwnd(top_hwnd)).ok()?;
+    let walker = handle
+        .0
+        .RawViewWalker()
+        .or_else(|_| handle.0.ControlViewWalker())
+        .ok()?;
+    find_uia_descendant_by_runtime_id(&handle.0, &walker, root, runtime_id, 0)
+}
+
+unsafe fn find_uia_descendant_by_runtime_id(
+    automation: &IUIAutomation,
+    walker: &IUIAutomationTreeWalker,
+    element: IUIAutomationElement,
+    runtime_id: &[i32],
+    depth: u32,
+) -> Option<IUIAutomationElement> {
+    if depth > 64 {
+        return None;
+    }
+
+    if let Some(current_id) = read_runtime_id(automation, &element) {
+        if current_id == runtime_id {
+            return Some(element);
+        }
+    }
+
+    let mut child = walker.GetFirstChildElement(&element).ok();
+    let mut visited = 0u32;
+    while let Some(c) = child {
+        if visited > MAX_ACCESSIBILITY_DESCENDANTS as u32 {
+            break;
+        }
+        visited += 1;
+        if let Some(found) =
+            find_uia_descendant_by_runtime_id(automation, walker, c.clone(), runtime_id, depth + 1)
+        {
+            return Some(found);
+        }
+        child = walker.GetNextSiblingElement(&c).ok();
+    }
+    None
+}
+
+/// Best-effort focus restoration via UIA. Tries the LegacyIAccessible
+/// `Select` pattern first (which moves the DOM caret into the textarea),
+/// then falls back to setting keyboard focus on the element directly.
+unsafe fn uia_focus_element(element: &IUIAutomationElement) -> bool {
+    if let Ok(pattern_unknown) = element.GetCurrentPattern(UIA_LegacyIAccessiblePatternId) {
+        if let Ok(legacy) = pattern_unknown.cast::<IUIAutomationLegacyIAccessiblePattern>() {
+            // SELFLAG_TAKEFOCUS | SELFLAG_TAKESELECTION = 0x1 | 0x2
+            let _ = legacy.Select(0x3);
+        }
+    }
+    element.SetFocus().is_ok()
 }

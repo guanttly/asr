@@ -5,7 +5,7 @@ import type { OpenPlatformApp, OpenPlatformCallLog, OpenPlatformCapability, Open
 
 import MarkdownIt from 'markdown-it'
 import { NButton, NTag, useMessage } from 'naive-ui'
-import { computed, h, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, reactive, ref, watch } from 'vue'
 
 import {
   createOpenPlatformApp,
@@ -43,6 +43,9 @@ const docsLoading = ref(false)
 const docsContent = ref('')
 const docsCapabilityFilter = ref('all')
 const docsKeyword = ref('')
+
+const docsError = ref('')
+const docsContainerRef = ref<HTMLElement | null>(null)
 
 const apps = ref<OpenPlatformApp[]>([])
 const capabilities = ref<OpenPlatformCapability[]>([])
@@ -127,11 +130,52 @@ const disabledCount = computed(() => apps.value.filter(item => item.status === '
 const revokedCount = computed(() => apps.value.filter(item => item.status === 'revoked').length)
 const selectedCapabilityCount = computed(() => form.allowed_caps.length)
 const modalTitle = computed(() => editingAppId.value ? '编辑 OpenAPI 应用' : '新增 OpenAPI 应用')
-const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true })
+const markdown = new MarkdownIt({ html: false, linkify: true, breaks: false })
+
+const defaultHeadingOpen = markdown.renderer.rules.heading_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options))
+markdown.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const inline = tokens[idx + 1]
+  const text = inline?.content || ''
+  const used = (env.slugCounts ||= new Map<string, number>())
+  const base = slugify(text)
+  const count = used.get(base) || 0
+  used.set(base, count + 1)
+  token.attrSet('id', count === 0 ? base : `${base}-${count}`)
+  return defaultHeadingOpen(tokens, idx, options, env, self)
+}
+
+const defaultFence = markdown.renderer.rules.fence || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options))
+markdown.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const original = defaultFence(tokens, idx, options, env, self)
+  return `<div class="docs-code"><button class="docs-code-copy" data-copy type="button">复制</button>${original}</div>`
+}
+
+// eslint-disable-next-line regexp/no-obscure-range
+const CJK_CHAR_RE = /[一-龥]/
+function slugify(text: string) {
+  const out: string[] = []
+  let lastDash = false
+  for (const ch of text.toLowerCase().trim()) {
+    if (/[a-z0-9_]/.test(ch) || CJK_CHAR_RE.test(ch)) {
+      out.push(ch)
+      lastDash = false
+    }
+    else if (!lastDash) {
+      out.push('-')
+      lastDash = true
+    }
+  }
+  return out.join('').replace(/^-|-$/g, '') || 'section'
+}
+
 const docsCapabilityOptions = computed(() => [
   { label: '全部能力', value: 'all' },
   ...capabilities.value.map(item => ({ label: item.display_name || item.id, value: item.id })),
 ])
+
+const docsSections = computed(() => docsContent.value.trim().split(/\n(?=#{1,3}\s)/g))
+
 const filteredDocsContent = computed(() => {
   const content = docsContent.value.trim()
   const keyword = docsKeyword.value.trim().toLowerCase()
@@ -142,16 +186,42 @@ const filteredDocsContent = computed(() => {
   const capabilityTerms = selectedCapability
     ? [selectedCapability.id, selectedCapability.display_name, selectedCapability.description].filter(Boolean).map(item => String(item).toLowerCase())
     : []
-  const sections = content.split(/\n(?=#{1,3}\s+)/g)
-  const matched = sections.filter((section) => {
+  const matched = docsSections.value.filter((section) => {
     const haystack = section.toLowerCase()
     const matchesCapability = capabilityTerms.length === 0 || capabilityTerms.some(term => haystack.includes(term))
     const matchesKeyword = !keyword || haystack.includes(keyword)
     return matchesCapability && matchesKeyword
   })
-  return matched.length > 0 ? matched.join('\n\n') : '未找到匹配的文档章节。'
+  return matched.join('\n\n')
 })
-const renderedDocs = computed(() => markdown.render(filteredDocsContent.value || ''))
+
+const docsHasFilter = computed(() => docsKeyword.value.trim() !== '' || docsCapabilityFilter.value !== 'all')
+
+const docsRender = computed(() => {
+  const content = filteredDocsContent.value
+  if (!content) {
+    return { html: '', toc: [] as { id: string, level: number, text: string }[] }
+  }
+  const html = markdown.render(content, {})
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined')
+    return { html, toc: [] as { id: string, level: number, text: string }[] }
+  const doc = new DOMParser().parseFromString(`<root>${html}</root>`, 'text/html')
+  const toc: { id: string, level: number, text: string }[] = []
+  doc.querySelectorAll('h2[id], h3[id]').forEach((el) => {
+    toc.push({
+      id: (el as HTMLElement).id,
+      level: el.tagName === 'H2' ? 2 : 3,
+      text: (el.textContent || '').trim(),
+    })
+  })
+  return { html, toc }
+})
+
+const docsMatchCount = computed(() => {
+  if (!filteredDocsContent.value)
+    return 0
+  return filteredDocsContent.value.split(/\n(?=#{1,3}\s)/g).filter(Boolean).length
+})
 
 const filteredApps = computed(() => {
   const value = keyword.value.trim().toLowerCase()
@@ -274,16 +344,47 @@ async function loadCapabilities() {
 
 async function loadDocs() {
   docsLoading.value = true
+  docsError.value = ''
   try {
     const result = await getOpenPlatformDocs()
     docsContent.value = result.data.content || ''
+    if (!docsContent.value.trim())
+      docsError.value = '后端未返回文档内容'
   }
   catch (error) {
-    message.error(extractErrorMessage(error, 'OpenAPI 对接文档加载失败'))
+    const errorMessage = extractErrorMessage(error, 'OpenAPI 对接文档加载失败')
+    docsError.value = errorMessage
+    message.error(errorMessage)
   }
   finally {
     docsLoading.value = false
   }
+}
+
+function resetDocsFilters() {
+  docsKeyword.value = ''
+  docsCapabilityFilter.value = 'all'
+}
+
+function scrollToHeading(id: string) {
+  const container = docsContainerRef.value
+  if (!container)
+    return
+  const target = container.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null
+  if (target)
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function handleDocsClick(event: MouseEvent) {
+  const node = event.target as HTMLElement | null
+  const button = node?.closest('button[data-copy]') as HTMLButtonElement | null
+  if (!button)
+    return
+  const pre = button.parentElement?.querySelector('pre code, pre') as HTMLElement | null
+  const text = pre?.textContent || ''
+  if (!text.trim())
+    return
+  void copyText(text, '已复制代码示例')
 }
 
 async function copyText(text: string, successMessage: string) {
@@ -525,7 +626,7 @@ const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
     title: '能力授权',
     key: 'allowed_caps',
     minWidth: 280,
-    render: (row) => h(
+    render: row => h(
       'div',
       { class: 'flex flex-wrap gap-1.5' },
       row.allowed_caps.map(capability => h(NTag, { size: 'small', round: true, bordered: false }, { default: () => capabilityLabel(capability) })),
@@ -546,13 +647,13 @@ const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
     title: '限流',
     key: 'rate_limit_per_sec',
     width: 90,
-    render: (row) => `${row.rate_limit_per_sec}/s`,
+    render: row => `${row.rate_limit_per_sec}/s`,
   },
   {
     title: '密钥提示',
     key: 'secret_hint',
     minWidth: 180,
-    render: (row) => h('div', { class: 'grid gap-1' }, [
+    render: row => h('div', { class: 'grid gap-1' }, [
       h('div', { class: 'text-xs text-slate break-all' }, row.secret_hint || '仅创建或重置后显示完整密钥'),
       h('div', { class: 'text-xs text-slate/80' }, `版本 v${row.secret_version}`),
     ]),
@@ -561,7 +662,7 @@ const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
     title: '更新时间',
     key: 'updated_at',
     width: 168,
-    render: (row) => formatDateTime(row.updated_at),
+    render: row => formatDateTime(row.updated_at),
   },
   {
     title: '操作',
@@ -608,7 +709,7 @@ const callColumns: DataTableColumns<OpenPlatformCallLog> = [
     title: '状态',
     key: 'http_status',
     width: 90,
-    render: (row) => h(
+    render: row => h(
       NTag,
       {
         size: 'small',
@@ -651,6 +752,11 @@ watch(
 watch(activeTab, (tab) => {
   if (tab === 'docs' && !docsContent.value && !docsLoading.value)
     void loadDocs()
+  if (tab === 'docs') {
+    void nextTick(() => {
+      docsContainerRef.value?.scrollTo({ top: 0 })
+    })
+  }
 })
 </script>
 
@@ -689,30 +795,38 @@ watch(activeTab, (tab) => {
               </NAlert>
 
               <div class="grid gap-3 md:grid-cols-4 shrink-0">
-            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
-              <div class="text-xs text-slate/80">应用总数</div>
-              <div class="mt-2 text-2xl font-700 text-ink">
-                {{ apps.length }}
-              </div>
-            </div>
-            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
-              <div class="text-xs text-slate/80">启用中</div>
-              <div class="mt-2 text-2xl font-700 text-teal-700">
-                {{ activeCount }}
-              </div>
-            </div>
-            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
-              <div class="text-xs text-slate/80">已停用</div>
-              <div class="mt-2 text-2xl font-700 text-amber-600">
-                {{ disabledCount }}
-              </div>
-            </div>
-            <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
-              <div class="text-xs text-slate/80">已撤销</div>
-              <div class="mt-2 text-2xl font-700 text-red-600">
-                {{ revokedCount }}
-              </div>
-            </div>
+                <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+                  <div class="text-xs text-slate/80">
+                    应用总数
+                  </div>
+                  <div class="mt-2 text-2xl font-700 text-ink">
+                    {{ apps.length }}
+                  </div>
+                </div>
+                <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+                  <div class="text-xs text-slate/80">
+                    启用中
+                  </div>
+                  <div class="mt-2 text-2xl font-700 text-teal-700">
+                    {{ activeCount }}
+                  </div>
+                </div>
+                <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+                  <div class="text-xs text-slate/80">
+                    已停用
+                  </div>
+                  <div class="mt-2 text-2xl font-700 text-amber-600">
+                    {{ disabledCount }}
+                  </div>
+                </div>
+                <div class="rounded-3 border border-gray-200/70 bg-white/60 px-4 py-3 backdrop-blur-sm">
+                  <div class="text-xs text-slate/80">
+                    已撤销
+                  </div>
+                  <div class="mt-2 text-2xl font-700 text-red-600">
+                    {{ revokedCount }}
+                  </div>
+                </div>
               </div>
 
               <NDataTable
@@ -728,19 +842,80 @@ watch(activeTab, (tab) => {
             </div>
           </NTabPane>
           <NTabPane name="docs" tab="对接文档" display-directive="show:lazy">
-            <div class="flex flex-col gap-3 py-4">
-              <div class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-col gap-3 py-4 flex-1 min-h-0">
+              <div class="flex flex-wrap items-center gap-2 shrink-0">
                 <NSelect v-model:value="docsCapabilityFilter" class="w-full sm:!w-56" size="small" :options="docsCapabilityOptions" />
                 <NInput v-model:value="docsKeyword" clearable placeholder="搜索接口、字段或示例" size="small" class="w-full sm:!w-72" />
-                <NButton size="small" quaternary @click="copyDocsContent">
+                <NButton v-if="docsHasFilter" size="small" quaternary @click="resetDocsFilters">
+                  清除筛选
+                </NButton>
+                <NTag v-if="docsHasFilter" size="small" round :bordered="false" type="info">
+                  命中 {{ docsMatchCount }} 段
+                </NTag>
+                <span class="flex-1" />
+                <NButton size="small" quaternary :loading="docsLoading" @click="loadDocs">
+                  刷新文档
+                </NButton>
+                <NButton size="small" quaternary :disabled="!docsContent" @click="copyDocsContent">
                   复制当前文档
                 </NButton>
                 <NButton size="small" quaternary @click="copyAuthExample">
                   复制鉴权示例
                 </NButton>
               </div>
-              <NSpin :show="docsLoading">
-                <div class="prose max-w-none rounded-3 border border-gray-200/70 bg-white/70 p-5 text-sm leading-7" v-html="renderedDocs" />
+
+              <NSpin :show="docsLoading" class="flex-1 min-h-0">
+                <div v-if="docsError && !docsContent" class="docs-empty">
+                  <div class="docs-empty-title">
+                    无法加载对接文档
+                  </div>
+                  <div class="docs-empty-desc">
+                    {{ docsError }}
+                  </div>
+                  <NButton type="primary" color="#0f766e" size="small" @click="loadDocs">
+                    重试
+                  </NButton>
+                </div>
+                <div v-else-if="!docsContent && !docsLoading" class="docs-empty">
+                  <div class="docs-empty-title">
+                    暂无对接文档
+                  </div>
+                  <div class="docs-empty-desc">
+                    点击刷新尝试重新加载。
+                  </div>
+                  <NButton type="primary" color="#0f766e" size="small" @click="loadDocs">
+                    刷新文档
+                  </NButton>
+                </div>
+                <div v-else-if="docsHasFilter && docsMatchCount === 0" class="docs-empty">
+                  <div class="docs-empty-title">
+                    未命中任何章节
+                  </div>
+                  <div class="docs-empty-desc">
+                    尝试更换关键字或能力筛选。
+                  </div>
+                  <NButton size="small" quaternary @click="resetDocsFilters">
+                    清除筛选
+                  </NButton>
+                </div>
+                <div v-else class="docs-layout">
+                  <aside class="docs-toc">
+                    <div class="docs-toc-title">
+                      章节导航
+                    </div>
+                    <ul class="docs-toc-list">
+                      <li
+                        v-for="item in docsRender.toc"
+                        :key="item.id"
+                        class="docs-toc-item" :class="[`docs-toc-h${item.level}`]"
+                        @click="scrollToHeading(item.id)"
+                      >
+                        {{ item.text }}
+                      </li>
+                    </ul>
+                  </aside>
+                  <div ref="docsContainerRef" class="docs-content markdown-body" @click="handleDocsClick" v-html="docsRender.html" />
+                </div>
               </NSpin>
             </div>
           </NTabPane>
@@ -914,3 +1089,264 @@ watch(activeTab, (tab) => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.docs-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+}
+
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: 1fr;
+  }
+  .docs-toc {
+    position: static;
+    max-height: 200px;
+  }
+}
+
+.docs-toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  border: 1px solid rgba(203, 213, 225, 0.55);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 12px 8px;
+}
+
+.docs-toc-title {
+  font-size: 12px;
+  color: #64748b;
+  padding: 4px 8px 8px;
+  letter-spacing: 0.05em;
+}
+
+.docs-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.docs-toc-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #334155;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.docs-toc-item:hover {
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+}
+
+.docs-toc-h3 {
+  padding-left: 22px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.docs-content {
+  border: 1px solid rgba(203, 213, 225, 0.55);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 24px 28px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: #1f2937;
+  overflow-y: auto;
+  max-height: calc(100vh - 220px);
+  scroll-behavior: smooth;
+}
+
+.docs-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 56px 24px;
+  border: 1px dashed rgba(148, 163, 184, 0.6);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  text-align: center;
+}
+
+.docs-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.docs-empty-desc {
+  font-size: 12.5px;
+  color: #64748b;
+  max-width: 360px;
+}
+</style>
+
+<style>
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  scroll-margin-top: 12px;
+  color: #0f172a;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.markdown-body h1 {
+  font-size: 22px;
+  margin: 4px 0 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.markdown-body h2 {
+  font-size: 17px;
+  margin: 28px 0 12px;
+  padding-left: 10px;
+  border-left: 3px solid #0f766e;
+}
+
+.markdown-body h3 {
+  font-size: 14.5px;
+  margin: 20px 0 8px;
+  color: #1e293b;
+}
+
+.markdown-body p {
+  margin: 8px 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 22px;
+  margin: 8px 0;
+}
+
+.markdown-body li {
+  margin: 4px 0;
+}
+
+.markdown-body a {
+  color: #0f766e;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(15, 118, 110, 0.5);
+}
+
+.markdown-body a:hover {
+  color: #0d5d56;
+}
+
+.markdown-body blockquote {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 3px solid #d97706;
+  background: rgba(217, 119, 6, 0.06);
+  color: #6b4f1b;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12.5px;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.55);
+}
+
+.markdown-body thead {
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f172a;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(203, 213, 225, 0.4);
+  vertical-align: top;
+}
+
+.markdown-body tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown-body code {
+  font-family: "JetBrains Mono", "Fira Code", "Menlo", monospace;
+  background: rgba(15, 23, 42, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12.5px;
+  color: #be185d;
+}
+
+.markdown-body pre {
+  margin: 0;
+  padding: 14px 16px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+
+.markdown-body .docs-code {
+  position: relative;
+  margin: 12px 0;
+}
+
+.markdown-body .docs-code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  z-index: 1;
+}
+
+.markdown-body .docs-code-copy:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(203, 213, 225, 0.5);
+  margin: 18px 0;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+</style>

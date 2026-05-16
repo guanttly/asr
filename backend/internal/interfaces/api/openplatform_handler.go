@@ -1,10 +1,9 @@
 package api
 
 import (
+	_ "embed"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +14,9 @@ import (
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
 )
+
+//go:embed openapi_docs.md
+var openAPIDocsContent string
 
 type OpenPlatformHandler struct {
 	service *appopenplatform.Service
@@ -50,31 +52,11 @@ func (h *OpenPlatformHandler) ListCapabilities(c *gin.Context) {
 }
 
 func (h *OpenPlatformHandler) GetDocs(c *gin.Context) {
-	content, err := readOpenAPIDocs()
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
-		return
-	}
 	response.Success(c, gin.H{
 		"format":       "markdown",
-		"content":      content,
+		"content":      openAPIDocsContent,
 		"capabilities": h.service.ListCapabilities(),
 	})
-}
-
-func readOpenAPIDocs() (string, error) {
-	candidates := []string{
-		filepath.Join("..", "docs", "openapi", "README.md"),
-		filepath.Join("docs", "openapi", "README.md"),
-		filepath.Join("..", "..", "docs", "openapi", "README.md"),
-	}
-	for _, path := range candidates {
-		content, err := os.ReadFile(path)
-		if err == nil {
-			return string(content), nil
-		}
-	}
-	return "", os.ErrNotExist
 }
 
 func (h *OpenPlatformHandler) ListApps(c *gin.Context) {

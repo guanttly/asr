@@ -853,11 +853,14 @@ fn build_target(top_hwnd: HWND, focus_hwnd: HWND) -> Result<InputTarget, String>
     let accessibility_hint =
         detect_accessibility_focus_hint(top_hwnd, focus_hwnd, hwnd_rect_hint.as_ref());
 
-    // 对 Chromium 类宿主额外查一遍长生命周期 UIA Runtime（任务 A/B/C）：
-    //   - 它会触发 Chrome 完整 a11y 树，使 <textarea> 节点暴露出来
-    //   - 拿到 Name / AutomationId / RuntimeId，喂给 signature 与 runtime
-    //   - 同一页面里不同的 textarea 因此会算出不同的 target_id / displayName
-    let uia_snapshot = if is_web_accessibility_host_hwnd(focus_hwnd) {
+    // UIA 子树下钻在真正的 Chrome / Edge / Firefox 上经测试无效：现代浏览器
+    // 不把 DOM a11y 树暴露给外部 UIA 客户端（即使 --force-renderer-accessibility
+    // 也不行）。所以对这类纯浏览器走"绑窗口 + SendInput Ctrl+V"的兜底路径，
+    // 跳过 UIA snapshot 既省 ~80ms 又消除日志噪声。CEF 寄主（DingTalk/微信/
+    // Lark/CefBrowserWindow）保持原有 UIA 尝试，因为它们的 a11y 行为不同。
+    let uia_snapshot = if is_real_chromium_browser(&process_name) {
+        None
+    } else if is_web_accessibility_host_hwnd(focus_hwnd) {
         snapshot_chromium_focus(top_hwnd)
     } else {
         None
@@ -1995,11 +1998,8 @@ fn make_display_name(
     control_class: Option<&str>,
     uia_name: Option<&str>,
 ) -> String {
-    let app = if process_name.eq_ignore_ascii_case("chrome.exe")
-        || process_name.eq_ignore_ascii_case("msedge.exe")
-        || process_name.eq_ignore_ascii_case("firefox.exe")
-        || process_name.eq_ignore_ascii_case("iexplore.exe")
-    {
+    let is_browser = is_real_chromium_browser(process_name);
+    let app = if is_browser {
         "浏览器 RIS".to_string()
     } else if process_name.eq_ignore_ascii_case("winword.exe") {
         "Word".to_string()
@@ -2018,6 +2018,17 @@ fn make_display_name(
     } else {
         process_name.to_string()
     };
+    // 真正的 Chrome/Edge/Firefox 显示简洁形式 `<app> - <title>`：
+    //   - 我们绑的就是整个浏览器窗口（UIA 拿不到 DOM 节点级粒度）
+    //   - 去掉 "- Google Chrome" 后缀避免「浏览器 RIS - X - Google Chrome」重复
+    //   - 不附 control_class，避免出现 "Chrome_WidgetWin_1" 这种无意义后缀
+    if is_browser {
+        let title_clean = title
+            .map(strip_browser_title_suffix)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "输入窗口".to_string());
+        return format!("{app} - {title_clean}");
+    }
     let title = title
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("输入窗口");
@@ -2265,6 +2276,45 @@ fn is_chromium_render_class(class_name: &str) -> bool {
 fn is_wechat_process_name(process_name: &str) -> bool {
     let lower = process_name.to_ascii_lowercase();
     lower == "wechat.exe" || lower == "weixin.exe" || lower == "wxwork.exe" || lower == "wework.exe"
+}
+
+/// True for stand-alone Chromium-based **browsers** (Chrome, Edge, Firefox, IE).
+/// CEF-embedded apps (DingTalk, WeChat, Lark, …) deliberately don't match —
+/// they may still benefit from UIA snapshots in the future.
+///
+/// Used to skip the (proven ineffective) UIA DOM drill-down for real
+/// browsers: Chrome >= ~100 doesn't expose web-content accessibility to
+/// external UIA clients, so the snapshot just burns ~80 ms per lock attempt
+/// and produces noisy "drilldown_empty" log lines.
+fn is_real_chromium_browser(process_name: &str) -> bool {
+    let lower = process_name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "chrome.exe" | "msedge.exe" | "firefox.exe" | "iexplore.exe"
+    )
+}
+
+/// Strip the browser-name suffix that browsers append to every window title
+/// (` - Google Chrome`, ` - Microsoft​ Edge`, ` — Mozilla Firefox`, …) so the
+/// display name doesn't redundantly say "browser" twice.
+fn strip_browser_title_suffix(title: &str) -> String {
+    const SUFFIXES: &[&str] = &[
+        " - Google Chrome",
+        " – Google Chrome",
+        " — Google Chrome",
+        " - Microsoft\u{200b} Edge",
+        " - Microsoft Edge",
+        " - Mozilla Firefox",
+        " — Mozilla Firefox",
+        " - Internet Explorer",
+    ];
+    let trimmed = title.trim();
+    for suffix in SUFFIXES {
+        if let Some(stripped) = trimmed.strip_suffix(*suffix) {
+            return stripped.trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 fn is_wechat_window_class(class_name: &str) -> bool {

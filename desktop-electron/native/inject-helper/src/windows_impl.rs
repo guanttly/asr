@@ -18,13 +18,14 @@ use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, SAFEARRAY,
 };
 use windows::Win32::System::Ole::SafeArrayDestroy;
+use windows_core::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
     IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationLegacyIAccessiblePattern,
     IUIAutomationTreeWalker, TreeScope_Descendants, UIA_ComboBoxControlTypeId,
     UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-    UIA_LegacyIAccessiblePatternId, UIA_PaneControlTypeId, UIA_TextControlTypeId,
-    UIA_TextPatternId, UIA_ValuePatternId, UIA_CONTROLTYPE_ID,
+    UIA_HasKeyboardFocusPropertyId, UIA_LegacyIAccessiblePatternId, UIA_PaneControlTypeId,
+    UIA_TextControlTypeId, UIA_TextPatternId, UIA_ValuePatternId, UIA_CONTROLTYPE_ID,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, GlobalFree, BOOL, HWND, LPARAM, LRESULT, POINT as SysPoint, RECT, SIZE, WPARAM,
@@ -3624,6 +3625,16 @@ fn capture_uia_focus_into_cache(element: &IUIAutomationElement) -> Option<()> {
 }
 
 fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocusSnapshot> {
+    build_snapshot_with_depth(element, 0)
+}
+
+/// Internal entry point with a depth counter so we can drill once into a
+/// Chromium `Pane`/`Document` looking for the actually focused descendant
+/// without risking infinite recursion.
+fn build_snapshot_with_depth(
+    element: &IUIAutomationElement,
+    depth: u32,
+) -> Option<UiaFocusSnapshot> {
     let handle = UIA_HANDLE.get()?;
     unsafe {
         let native_hwnd = element.CurrentNativeWindowHandle().ok()?;
@@ -3653,11 +3664,51 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
 
         let control_type = element.CurrentControlType().ok()?;
         if !is_uia_cacheable_control_type(control_type) {
+            // Chrome 默认只把焦点事件发到顶层 Pane/Document，真正的 textarea
+            // 埋在 DOM 子树里。试图主动下钻一次，找有 HasKeyboardFocus=true
+            // 的后代——这同时也会触发 Chromium 把 DOM a11y 树激活。
+            if depth == 0 {
+                match drill_to_focused_descendant(&handle.0, element) {
+                    Some(descendant) => {
+                        let inner_ctrl = descendant
+                            .CurrentControlType()
+                            .map(uia_control_type_label)
+                            .unwrap_or_else(|_| "?".to_string());
+                        let inner_name = descendant
+                            .CurrentName()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        append_log(&format!(
+                            "uia_focus_drilldown_found top=0x{:x} outer={} inner_ctrl={} inner_name=\"{}\"",
+                            top_hwnd,
+                            uia_control_type_label(control_type),
+                            inner_ctrl,
+                            inner_name
+                        ));
+                        let result = build_snapshot_with_depth(&descendant, depth + 1);
+                        if result.is_none() {
+                            append_log(&format!(
+                                "uia_focus_drilldown_then_filtered top=0x{:x} inner_ctrl={}",
+                                top_hwnd, inner_ctrl
+                            ));
+                        }
+                        return result;
+                    }
+                    None => {
+                        append_log(&format!(
+                            "uia_focus_drilldown_empty top=0x{:x} outer={}",
+                            top_hwnd,
+                            uia_control_type_label(control_type)
+                        ));
+                    }
+                }
+            }
             append_log(&format!(
-                "uia_focus_rejected reason=control_type top=0x{:x} ctrl={} ctrl_id={}",
+                "uia_focus_rejected reason=control_type top=0x{:x} ctrl={} ctrl_id={} depth={}",
                 top_hwnd,
                 uia_control_type_label(control_type),
-                control_type.0
+                control_type.0,
+                depth
             ));
             return None;
         }
@@ -3734,6 +3785,28 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
             captured_at_ms: now_ms(),
         })
     }
+}
+
+/// In Chromium, FocusChangedEvent for an in-page DOM element is *not*
+/// delivered to external UIA clients — the event lands on the top-level
+/// `Pane` (the renderer surface). To reach the real textarea we have to
+/// proactively descend the subtree looking for `HasKeyboardFocus=true`.
+///
+/// Returns `None` if no focused descendant is found, the property condition
+/// can't be built, or `FindFirst` errors (which often means the DOM a11y
+/// tree hasn't been activated yet — the very call itself usually wakes it).
+unsafe fn drill_to_focused_descendant(
+    automation: &IUIAutomation,
+    element: &IUIAutomationElement,
+) -> Option<IUIAutomationElement> {
+    let value = VARIANT::from(true);
+    let cond = automation
+        .CreatePropertyCondition(UIA_HasKeyboardFocusPropertyId, &value)
+        .ok()?;
+    // `TreeScope_Descendants` excludes the element itself — we never want
+    // the wrapping Pane back, even if it somehow claims keyboard focus.
+    let result = element.FindFirst(TreeScope_Descendants, &cond).ok()?;
+    Some(result)
 }
 
 unsafe fn ancestor_native_hwnd(

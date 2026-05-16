@@ -3545,9 +3545,66 @@ impl IUIAutomationFocusChangedEventHandler_Impl for UiaFocusHandler_Impl {
         sender: ::core::option::Option<&IUIAutomationElement>,
     ) -> windows::core::Result<()> {
         if let Some(element) = sender {
+            log_uia_focus_arrival(element);
             let _ = capture_uia_focus_into_cache(element);
         }
         Ok(())
+    }
+}
+
+/// Diagnostic: log every focus event that lands in a Chromium top window,
+/// BEFORE any filtering. This lets us tell apart "Chrome never fires the
+/// event for inner textarea" from "event fires but my filter dropped it".
+fn log_uia_focus_arrival(element: &IUIAutomationElement) {
+    unsafe {
+        let native_hwnd_raw = match element.CurrentNativeWindowHandle() {
+            Ok(h) => win_hwnd_to_raw(h),
+            Err(_) => 0,
+        };
+        let top_hwnd = if native_hwnd_raw != 0 {
+            let root = GetAncestor(native_hwnd_raw, GA_ROOT);
+            if root != 0 {
+                root
+            } else {
+                native_hwnd_raw
+            }
+        } else if let Some(handle) = UIA_HANDLE.get() {
+            ancestor_native_hwnd(&handle.0, element).unwrap_or(0)
+        } else {
+            0
+        };
+        if !is_chromium_a11y_top_window(top_hwnd) {
+            return;
+        }
+        let ctrl_label = element
+            .CurrentControlType()
+            .map(uia_control_type_label)
+            .unwrap_or_else(|_| "?".to_string());
+        let name = element
+            .CurrentName()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let aid = element
+            .CurrentAutomationId()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let rid_len = if let Some(handle) = UIA_HANDLE.get() {
+            read_runtime_id(&handle.0, element)
+                .map(|r| r.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let has_value = element.GetCurrentPattern(UIA_ValuePatternId).is_ok();
+        let has_text = element.GetCurrentPattern(UIA_TextPatternId).is_ok();
+        let has_kbd = element
+            .CurrentHasKeyboardFocus()
+            .map(|v| v.0 != 0)
+            .unwrap_or(false);
+        append_log(&format!(
+            "uia_focus_raw top=0x{:x} native=0x{:x} ctrl={} name=\"{}\" aid=\"{}\" rid_len={} val={} txt={} kbd={}",
+            top_hwnd, native_hwnd_raw, ctrl_label, name, aid, rid_len, has_value, has_text, has_kbd
+        ));
     }
 }
 
@@ -3596,12 +3653,23 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
 
         let control_type = element.CurrentControlType().ok()?;
         if !is_uia_cacheable_control_type(control_type) {
+            append_log(&format!(
+                "uia_focus_rejected reason=control_type top=0x{:x} ctrl={} ctrl_id={}",
+                top_hwnd,
+                uia_control_type_label(control_type),
+                control_type.0
+            ));
             return None;
         }
         let rect_uia = element.CurrentBoundingRectangle().ok()?;
         let rect = rect_hint_from_uia_rect(rect_uia)?;
         let runtime_id = read_runtime_id(&handle.0, element)?;
         if runtime_id.is_empty() {
+            append_log(&format!(
+                "uia_focus_rejected reason=empty_runtime_id top=0x{:x} ctrl={}",
+                top_hwnd,
+                uia_control_type_label(control_type)
+            ));
             return None;
         }
         // 拒绝顶层 Chrome 容器：如果 rect 跟整个顶层窗口贴边，几乎可以肯定
@@ -3609,6 +3677,13 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
         // 真正的 textarea 一定会比顶层窗口小一截。
         if let Some(top_rect) = get_rect_hint(top_hwnd) {
             if !rect_substantially_smaller(&rect, &top_rect) {
+                append_log(&format!(
+                    "uia_focus_rejected reason=rect_too_large top=0x{:x} ctrl={} elem=({},{},{},{}) top=({},{},{},{})",
+                    top_hwnd,
+                    uia_control_type_label(control_type),
+                    rect.left, rect.top, rect.right, rect.bottom,
+                    top_rect.left, top_rect.top, top_rect.right, top_rect.bottom
+                ));
                 return None;
             }
         }
@@ -3634,6 +3709,14 @@ fn build_snapshot_for_element(element: &IUIAutomationElement) -> Option<UiaFocus
         let is_strong_input_type =
             control_type == UIA_EditControlTypeId || control_type == UIA_ComboBoxControlTypeId;
         if !is_strong_input_type && !has_value_pattern && !has_text_pattern {
+            append_log(&format!(
+                "uia_focus_rejected reason=no_text_pattern top=0x{:x} ctrl={} val={} txt={} name=\"{}\"",
+                top_hwnd,
+                uia_control_type_label(control_type),
+                has_value_pattern,
+                has_text_pattern,
+                name.as_deref().unwrap_or("")
+            ));
             return None;
         }
 

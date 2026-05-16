@@ -50,3 +50,5 @@ speaker-diarization-offline.tar.gz
 **/**/__pycache__
 dist-*
 .cache
+
+tmp

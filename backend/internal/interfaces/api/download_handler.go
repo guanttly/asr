@@ -116,15 +116,31 @@ func isPublicDownloadArtifact(name string) bool {
 }
 
 // classifyArtifactPlatform 根据安装包文件名推断目标 Windows 版本：
-// - 含 "_win7_" 或 "-win7-" 视为 Windows 7 兼容包（Electron 22 打出来的）
-// - 含 "_win10_" / "-win10-" / "win10+" 视为 Win10/11 推荐版（Tauri 打出来的）
-// - 其余归为 "other"，前端会展示在通用区。
+//   - 含 "_win7_" / "-win7-" / "electron" 视为 Windows 7 兼容包（Electron 22 打出来的，
+//     文件名由 desktop-electron/electron-builder.yml 强制带 _win7_ 标记）。
+//   - 含 "_win10_" / "-win10-" / "win10+" / "win11" / "tauri" 视为 Win10/11 推荐版。
+//   - 其他 .exe / .msi 默认归为 Win10/11 推荐版——本产品的 Windows 安装包只有两条产线：
+//     Win7 走 Electron（必带 _win7_）、Win10/11 走 Tauri NSIS（默认输出
+//     "<productName>_<version>_x64-setup.exe"，没有平台前缀）。
+//   - 其他（.zip/.run/.tar.gz 等）归为 "other"，前端展示在通用区。
 func classifyArtifactPlatform(name string) string {
 	lower := strings.ToLower(name)
 	switch {
-	case strings.Contains(lower, "_win7_"), strings.Contains(lower, "-win7-"), strings.Contains(lower, ".win7."):
+	case strings.Contains(lower, "_win7_"),
+		strings.Contains(lower, "-win7-"),
+		strings.Contains(lower, ".win7."),
+		strings.Contains(lower, "win-7"),
+		strings.Contains(lower, "electron"):
 		return "win7"
-	case strings.Contains(lower, "_win10_"), strings.Contains(lower, "-win10-"), strings.Contains(lower, "win10+"), strings.Contains(lower, "win11"):
+	case strings.Contains(lower, "_win10_"),
+		strings.Contains(lower, "-win10-"),
+		strings.Contains(lower, "win10+"),
+		strings.Contains(lower, "win11"),
+		strings.Contains(lower, "tauri"):
+		return "win10+"
+	}
+	switch strings.ToLower(filepath.Ext(lower)) {
+	case ".exe", ".msi":
 		return "win10+"
 	default:
 		return "other"

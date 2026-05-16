@@ -184,6 +184,25 @@ func (h *ASRHandler) TranscribeRealtimeSegment(c *gin.Context) {
 		}
 		dictID = &parsed
 	}
+
+	var workflowID *uint64
+	if rawWorkflowID := strings.TrimSpace(c.PostForm("workflow_id")); rawWorkflowID != "" {
+		parsed, parseErr := strconv.ParseUint(rawWorkflowID, 10, 64)
+		if parseErr != nil {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow_id")
+			return
+		}
+		workflowID = &parsed
+	}
+	if dictID == nil {
+		resolvedDictID, resolveErr := workflowTermDictID(c.Request.Context(), h.workflowSvc, workflowID)
+		if resolveErr != nil {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, resolveErr.Error())
+			return
+		}
+		dictID = resolvedDictID
+	}
+
 	language, useITN, hotwords, err := parseASROptions(c)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())

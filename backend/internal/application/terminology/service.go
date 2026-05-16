@@ -25,11 +25,24 @@ type Service struct {
 }
 
 const (
-	terminologySeedStateKey            = "terminology_seed_initialized_v1"
-	terminologyDefaultRuleSeedStateKey = "terminology_default_rules_seeded_v1"
-	terminologySeedDictionaryListLimit = 1000
-	maxBatchImportEntries              = 5000
+	terminologySeedStateKey                = "terminology_seed_initialized_v1"
+	terminologyDefaultRuleSeedStateKey     = "terminology_default_rules_seeded_v1"
+	terminologyLegacyNonMedicalCleanupKey  = "terminology_legacy_nonmedical_cleanup_v1"
+	terminologySeedDictionaryListLimit     = 1000
+	maxBatchImportEntries                  = 5000
 )
+
+// deprecatedNonMedicalSeeds lists historical seed dictionaries that were shipped
+// before this project was scoped to the medical domain. They are removed on
+// first boot regardless of user-added content because the product no longer
+// supports non-medical scenes.
+var deprecatedNonMedicalSeeds = []struct {
+	Name   string
+	Domain string
+}{
+	{Name: "庭审记录", Domain: "法律"},
+	{Name: "会议纪要", Domain: "办公"},
+}
 
 // NewService creates a new terminology application service.
 func NewService(
@@ -320,10 +333,74 @@ func (s *Service) DeleteRule(ctx context.Context, id uint64) error {
 
 // EnsureSeedData creates default terminology dictionaries and scene rules.
 func (s *Service) EnsureSeedData(ctx context.Context) error {
+	if err := s.removeLegacyNonMedicalSeeds(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureSeedDictionaries(ctx); err != nil {
 		return err
 	}
 	return s.ensureDefaultRules(ctx)
+}
+
+// removeLegacyNonMedicalSeeds drops the historical 庭审记录/会议纪要 seed dictionaries
+// (entries + rules + dict row) on first boot after the medical refocus. Matching
+// is by exact name+domain to avoid touching unrelated user dictionaries that
+// happen to reuse the same display name.
+func (s *Service) removeLegacyNonMedicalSeeds(ctx context.Context) error {
+	cleaned, err := s.seedRepo.IsSeeded(ctx, terminologyLegacyNonMedicalCleanupKey)
+	if err != nil {
+		return err
+	}
+	if cleaned {
+		return nil
+	}
+
+	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
+	if err != nil {
+		return err
+	}
+
+	for _, dict := range dicts {
+		if !isDeprecatedNonMedicalSeed(dict.Name, dict.Domain) {
+			continue
+		}
+		if err := s.deleteDictCascade(ctx, dict.ID); err != nil {
+			return err
+		}
+	}
+
+	return s.seedRepo.MarkSeeded(ctx, terminologyLegacyNonMedicalCleanupKey)
+}
+
+func (s *Service) deleteDictCascade(ctx context.Context, dictID uint64) error {
+	entries, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
+			return err
+		}
+	}
+	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for i := range rules {
+		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
+			return err
+		}
+	}
+	return s.dictRepo.Delete(ctx, dictID)
+}
+
+func isDeprecatedNonMedicalSeed(name, domain string) bool {
+	for _, seed := range deprecatedNonMedicalSeeds {
+		if seed.Name == name && seed.Domain == domain {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) ensureSeedDictionaries(ctx context.Context) error {
@@ -543,65 +620,79 @@ func defaultTerminologySeeds() []seedDictionary {
 			},
 			Rules: labReportRules(),
 		},
-		{
-			Name:   "庭审记录",
-			Domain: "法律",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "被告人", WrongVariants: []string{"被告银", "被告仍"}},
-				{CorrectTerm: "合议庭", WrongVariants: []string{"合一庭", "合议停"}},
-			},
-			Rules: legalRecordRules(),
-		},
-		{
-			Name:   "会议纪要",
-			Domain: "办公",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "会议纪要", WrongVariants: []string{"会议记要", "会议纪药"}},
-				{CorrectTerm: "待办事项", WrongVariants: []string{"代办事项", "待办项目"}},
-			},
-			Rules: meetingMemoRules(),
-		},
+	}
+}
+
+// commonMedicalRules are the shared medical post-processing rules every seed
+// dictionary inherits: 口语数字归一化 + 生命体征结构化 + 医学单位/缩写大小写 + 罗马/希腊字符。
+func commonMedicalRules() []domain.CorrectionRule {
+	return []domain.CorrectionRule{
+		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `血压\s*(\d{2,3})\s*[/／]\s*(\d{2,3})\s*(?:mmHg|毫米汞柱)?`, Replacement: `血压$1/$2mmHg`, Enabled: true, SortOrder: 20},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(心率|脉搏|脉率|呼吸|呼吸频率)\s*(\d{1,3})\s*次(?:每|/)?分(?:钟)?`, Replacement: `$1$2次/分`, Enabled: true, SortOrder: 21},
+		{MatchType: domain.RuleMatchRegex, Pattern: `体温\s*(\d{2}(?:\.\d)?)\s*(?:度|℃|摄氏度)`, Replacement: `体温$1℃`, Enabled: true, SortOrder: 22},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?:血氧饱和度|SpO2|spo2|SPO2)\s*(\d{2,3})\s*%?`, Replacement: `SpO₂$1%`, Enabled: true, SortOrder: 23},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]`, Replacement: `$1-$2-$3`, Enabled: true, SortOrder: 30},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]`, Replacement: `$1-$2`, Enabled: true, SortOrder: 31},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*一`, Replacement: `Ⅰ`, Enabled: true, SortOrder: 40},
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*二`, Replacement: `Ⅱ`, Enabled: true, SortOrder: 41},
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*三`, Replacement: `Ⅲ`, Enabled: true, SortOrder: 42},
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*四`, Replacement: `Ⅳ`, Enabled: true, SortOrder: 43},
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*五`, Replacement: `Ⅴ`, Enabled: true, SortOrder: 44},
+		{MatchType: domain.RuleMatchRegex, Pattern: `罗马\s*六`, Replacement: `Ⅵ`, Enabled: true, SortOrder: 45},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `阿尔法`, Replacement: `α`, Enabled: true, SortOrder: 50},
+		{MatchType: domain.RuleMatchRegex, Pattern: `贝塔`, Replacement: `β`, Enabled: true, SortOrder: 51},
+		{MatchType: domain.RuleMatchRegex, Pattern: `伽马|伽玛|伽馬`, Replacement: `γ`, Enabled: true, SortOrder: 52},
+		{MatchType: domain.RuleMatchRegex, Pattern: `德尔塔|德耳塔`, Replacement: `δ`, Enabled: true, SortOrder: 53},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `(\d+(?:\.\d+)?)\s*微克`, Replacement: `$1μg`, Enabled: true, SortOrder: 54},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*umol\s*/?\s*L`, Replacement: `$1μmol/L`, Enabled: true, SortOrder: 55},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*mmhg`, Replacement: `$1mmHg`, Enabled: true, SortOrder: 60},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*mmol\s*/?\s*L`, Replacement: `$1mmol/L`, Enabled: true, SortOrder: 61},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*meq\s*/?\s*L`, Replacement: `$1mEq/L`, Enabled: true, SortOrder: 62},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*mg\s*/?\s*dL`, Replacement: `$1mg/dL`, Enabled: true, SortOrder: 63},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*mg\s*/?\s*L`, Replacement: `$1mg/L`, Enabled: true, SortOrder: 64},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*iu\s*/?\s*L`, Replacement: `$1IU/L`, Enabled: true, SortOrder: 65},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*g\s*/?\s*L`, Replacement: `$1g/L`, Enabled: true, SortOrder: 66},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(\d+(?:\.\d+)?)\s*ml\b`, Replacement: `$1mL`, Enabled: true, SortOrder: 67},
+
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bct\b`, Replacement: `CT`, Enabled: true, SortOrder: 70},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\b(?:mr|mri|mra)\b`, Replacement: `MRI`, Enabled: true, SortOrder: 71},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\b(?:ecg|ekg)\b`, Replacement: `ECG`, Enabled: true, SortOrder: 72},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\b(?:copd|coad)\b`, Replacement: `COPD`, Enabled: true, SortOrder: 73},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bnstemi\b`, Replacement: `NSTEMI`, Enabled: true, SortOrder: 74},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bstemi\b`, Replacement: `STEMI`, Enabled: true, SortOrder: 75},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bpci\b`, Replacement: `PCI`, Enabled: true, SortOrder: 76},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bnyha\b`, Replacement: `NYHA`, Enabled: true, SortOrder: 77},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\btnm\b`, Replacement: `TNM`, Enabled: true, SortOrder: 78},
+		{MatchType: domain.RuleMatchRegex, Pattern: `(?i)\bhba1c\b`, Replacement: `HbA1c`, Enabled: true, SortOrder: 79},
 	}
 }
 
 func medicalReportRules() []domain.CorrectionRule {
-	return []domain.CorrectionRule{
-		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
-		{MatchType: domain.RuleMatchRegex, Pattern: `血压\s*(\d{2,3})\s*[/／]\s*(\d{2,3})`, Replacement: `血压$1/$2mmHg`, Enabled: true, SortOrder: 40},
-		{MatchType: domain.RuleMatchRegex, Pattern: `心率\s*(\d{2,3})\s*次(?:每|/)?分(?:钟)?`, Replacement: `心率$1次/分`, Enabled: true, SortOrder: 50},
-	}
+	return commonMedicalRules()
 }
 
 func imagingReportRules() []domain.CorrectionRule {
-	return []domain.CorrectionRule{
-		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
-		{MatchType: domain.RuleMatchRegex, Pattern: `(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)(mm|cm)`, Replacement: `$1×$2$3`, Enabled: true, SortOrder: 40},
-		{MatchType: domain.RuleMatchRegex, Pattern: `(CT|MR|MRI|DR)\s+(\d+)`, Replacement: `$1$2`, Enabled: true, SortOrder: 50},
-	}
+	rules := commonMedicalRules()
+	rules = append(rules,
+		domain.CorrectionRule{MatchType: domain.RuleMatchRegex, Pattern: `(\d+(?:\.\d+)?)\s*[xX*]\s*(\d+(?:\.\d+)?)\s*(mm|cm)`, Replacement: `$1×$2$3`, Enabled: true, SortOrder: 80},
+		domain.CorrectionRule{MatchType: domain.RuleMatchRegex, Pattern: `(?i)(CT|MRI|MRA|DR|DSA|PET)\s+(\d+)`, Replacement: `$1$2`, Enabled: true, SortOrder: 81},
+	)
+	return rules
 }
 
 func labReportRules() []domain.CorrectionRule {
-	return []domain.CorrectionRule{
-		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
-		{MatchType: domain.RuleMatchRegex, Pattern: `(血钾|血钠|血糖|肌酐|白细胞|红细胞|血红蛋白)\s+([0-9]+(?:\.[0-9]+)?)`, Replacement: `$1$2`, Enabled: true, SortOrder: 40},
-		{MatchType: domain.RuleMatchRegex, Pattern: `([0-9]+(?:\.[0-9]+)?)\s+(mmol/L|g/L|mg/L|mg/dL)`, Replacement: `$1$2`, Enabled: true, SortOrder: 50},
-	}
-}
-
-func legalRecordRules() []domain.CorrectionRule {
-	return []domain.CorrectionRule{
-		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
-		{MatchType: domain.RuleMatchRegex, Pattern: `第\s*([0-9]+)\s*条`, Replacement: `第$1条`, Enabled: true, SortOrder: 40},
-		{MatchType: domain.RuleMatchRegex, Pattern: `([（(][0-9]{4}[）)])\s*([^\s，,]{1,12})\s*([0-9]+)\s*号`, Replacement: `$1$2$3号`, Enabled: true, SortOrder: 50},
-	}
-}
-
-func meetingMemoRules() []domain.CorrectionRule {
-	return []domain.CorrectionRule{
-		{MatchType: domain.RuleMatchNumberNormalize, Enabled: true, SortOrder: 10},
-		{MatchType: domain.RuleMatchRegex, Pattern: `([0-2]?[0-9])点([0-5]?[0-9])分?`, Replacement: `$1:$2`, Enabled: true, SortOrder: 40},
-		{MatchType: domain.RuleMatchRegex, Pattern: `(第[0-9一二三四五六七八九十]+[项条])\s+`, Replacement: `$1`, Enabled: true, SortOrder: 50},
-	}
+	rules := commonMedicalRules()
+	rules = append(rules,
+		domain.CorrectionRule{MatchType: domain.RuleMatchRegex, Pattern: `(血钾|血钠|血氯|血钙|血镁|血糖|肌酐|尿素|尿酸|白细胞|红细胞|血小板|血红蛋白|总胆固醇|甘油三酯)\s+([0-9]+(?:\.[0-9]+)?)`, Replacement: `$1$2`, Enabled: true, SortOrder: 82},
+	)
+	return rules
 }
 
 // BatchImport imports multiple term entries at once.

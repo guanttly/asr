@@ -259,9 +259,15 @@ export function useTranscribe() {
 
           const formData = new FormData()
           formData.append('file', item.file)
+          // Realtime workflow drives both LLM correction and (via term-correction
+          // node config) the ASR hotword/dictionary. Sending workflow_id lets the
+          // backend resolve dict_id → push hotwords to the upstream qwen3-asr call.
+          const realtimeWorkflowId = await ensureRealtimeWorkflowBinding().catch(() => appStore.realtimeWorkflowId)
+          if (realtimeWorkflowId != null)
+            formData.append('workflow_id', String(realtimeWorkflowId))
 
           try {
-            await debugLog('transcribe.upload', 'uploading segment', { pending: uploadQueue.length, duration: item.duration })
+            await debugLog('transcribe.upload', 'uploading segment', { pending: uploadQueue.length, duration: item.duration, workflowId: realtimeWorkflowId })
             const resp = await authedFetch('/api/asr/realtime-segments', {
               method: 'POST',
               body: formData,

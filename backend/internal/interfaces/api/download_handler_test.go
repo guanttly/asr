@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,7 @@ func TestDownloadHandlerListReturnsSortedFiles(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	downloadDir := t.TempDir()
-	older := filepath.Join(downloadDir, "older.exe")
+	older := filepath.Join(downloadDir, "巨鲨语音助手_0.2.4_win7_x64-setup.exe")
 	newer := filepath.Join(downloadDir, "巨鲨语音助手_0.2.5_x64-setup.exe")
 	archive := filepath.Join(downloadDir, "asr-terminal-0.2.5.run")
 	readme := filepath.Join(downloadDir, "README.txt")
@@ -73,6 +74,7 @@ func TestDownloadHandlerListReturnsSortedFiles(t *testing.T) {
 				Name        string `json:"name"`
 				SizeBytes   int64  `json:"size_bytes"`
 				DownloadURL string `json:"download_url"`
+				Platform    string `json:"platform"`
 			} `json:"items"`
 		} `json:"data"`
 	}
@@ -89,14 +91,24 @@ func TestDownloadHandlerListReturnsSortedFiles(t *testing.T) {
 	if envelope.Data.Items[0].Name != filepath.Base(newer) {
 		t.Fatalf("expected newest file first, got %s", envelope.Data.Items[0].Name)
 	}
-	if envelope.Data.Items[0].DownloadURL != "/downloads/files/%E8%AF%AD%E9%9F%B3%E9%80%9F%E5%BD%95%E5%8A%A9%E6%89%8B_0.2.5_x64-setup.exe" {
-		t.Fatalf("unexpected encoded download url: %s", envelope.Data.Items[0].DownloadURL)
+	expectedNewerURL := "/downloads/files/" + url.PathEscape(filepath.Base(newer))
+	if envelope.Data.Items[0].DownloadURL != expectedNewerURL {
+		t.Fatalf("unexpected encoded download url: %s (expected %s)", envelope.Data.Items[0].DownloadURL, expectedNewerURL)
+	}
+	if envelope.Data.Items[0].Platform != "win10+" {
+		t.Fatalf("expected newest Tauri installer to be classified as win10+, got %s", envelope.Data.Items[0].Platform)
 	}
 	if envelope.Data.Items[1].Name != filepath.Base(archive) {
 		t.Fatalf("expected archive file second, got %s", envelope.Data.Items[1].Name)
 	}
+	if envelope.Data.Items[1].Platform != "other" {
+		t.Fatalf("expected .run archive to be classified as other, got %s", envelope.Data.Items[1].Platform)
+	}
 	if envelope.Data.Items[2].Name != filepath.Base(older) {
 		t.Fatalf("expected older file third, got %s", envelope.Data.Items[2].Name)
+	}
+	if envelope.Data.Items[2].Platform != "win7" {
+		t.Fatalf("expected _win7_ installer to be classified as win7, got %s", envelope.Data.Items[2].Platform)
 	}
 	for _, item := range envelope.Data.Items {
 		if item.Name == filepath.Base(readme) {

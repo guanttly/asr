@@ -144,9 +144,11 @@ func (c ProductConfig) Features() ProductFeatures {
 }
 
 func defaultProductLanguages() []ProductLanguage {
+	// 首项必须是 auto：医学场景常有中英混合（缩写/单位/药名），
+	// 锁中文会让英文术语被错听，锁英文会丢中文病历主体。
 	return []ProductLanguage{
+		{Code: "auto", Label: "自动识别（中英混合）"},
 		{Code: "zh-CN", Label: "普通话"},
-		{Code: "zh", Label: "中文"},
 		{Code: "en-US", Label: "英文（美）"},
 	}
 }

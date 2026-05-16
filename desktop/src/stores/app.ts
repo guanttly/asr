@@ -168,9 +168,11 @@ function loadPersisted(): PersistedState {
 }
 
 function defaultProductLanguages(): ProductLanguageOption[] {
+  // 首选项必须是 auto：医学场景常有中英混合（缩写/单位/药名），
+  // 锁中文会让英文术语被错听，锁英文会丢中文病历主体。
   return [
+    { code: 'auto', label: '自动识别（中英混合）' },
     { code: 'zh-CN', label: '普通话' },
-    { code: 'zh', label: '中文' },
     { code: 'en-US', label: '英文（美）' },
   ]
 }

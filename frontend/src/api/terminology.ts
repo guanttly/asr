@@ -40,6 +40,18 @@ export function importTermEntries(dictId: string | number, payload: FormData) {
   })
 }
 
+export function exportTermEntries(dictId: string | number) {
+  return request.get(`/api/admin/term-dicts/${dictId}/export`, {
+    responseType: 'blob',
+  })
+}
+
+export function downloadTermImportTemplate() {
+  return request.get('/api/admin/term-dicts/import-template', {
+    responseType: 'blob',
+  })
+}
+
 export function getTermRules(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/rules`)
 }

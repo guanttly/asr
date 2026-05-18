@@ -9,6 +9,8 @@ import {
   deleteTermDict,
   deleteTermEntry,
   deleteTermRule,
+  downloadTermImportTemplate,
+  exportTermEntries,
   getTermDicts,
   getTermEntries,
   getTermRules,
@@ -542,12 +544,42 @@ async function handleImportFileSelected(event: Event) {
   }
 }
 
-function downloadImportTemplate() {
-  const blob = new Blob(['correct_term,wrong_variants\n示例标准词,错误写法1|错误写法2\n'], { type: 'text/csv;charset=utf-8' })
+async function downloadImportTemplate() {
+  try {
+    const result = await downloadTermImportTemplate()
+    const blob = result.data instanceof Blob
+      ? result.data
+      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    triggerBlobDownload(blob, 'term-dict-import-template.xlsx')
+  }
+  catch {
+    message.error('模板下载失败')
+  }
+}
+
+async function handleExportEntries() {
+  if (!currentDictId.value || !currentDict.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  try {
+    const result = await exportTermEntries(currentDictId.value)
+    const blob = result.data instanceof Blob
+      ? result.data
+      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const safeName = currentDict.value.name.replace(/[\\/:*?"<>|]/g, '_')
+    triggerBlobDownload(blob, `${safeName}.xlsx`)
+  }
+  catch {
+    message.error('词条导出失败')
+  }
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = 'terminology-import-template.csv'
+  anchor.download = filename
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
@@ -861,6 +893,9 @@ onMounted(loadDicts)
               <NButton :disabled="!currentDictId" quaternary size="small" @click="openImportModal">
                 批量导入
               </NButton>
+              <NButton :disabled="!currentDictId" quaternary size="small" @click="handleExportEntries">
+                导出 Excel
+              </NButton>
               <NButton :disabled="!currentDictId" quaternary size="small" @click="openCreateEntryModal">
                 新增词条
               </NButton>
@@ -909,7 +944,7 @@ onMounted(loadDicts)
     <NModal v-model:show="showImportModal" preset="card" title="批量导入词条" class="modal-card max-w-140">
       <div class="grid gap-4 text-sm leading-7 text-slate">
         <NAlert type="info" :show-icon="false">
-          支持 CSV/TSV/TXT/XLSX 文件，单次最多 5000 行且文件不超过 5MB。表头可使用 correct_term 与 wrong_variants；已存在或本次重复的标准词会跳过。
+          支持 Excel（.xlsx）以及 CSV/TSV/TXT 文件，单次最多 5000 行且文件不超过 5MB。表头可使用 correct_term 与 wrong_variants；已存在或本次重复的标准词会跳过。可点击「下载模板」获取标准 Excel 模板。
         </NAlert>
         <input ref="importFileInput" type="file" accept=".csv,.tsv,.txt,.xlsx" class="hidden" @change="handleImportFileSelected">
         <div v-if="lastImportResult" class="rounded-2 bg-mist/70 px-3 py-2 text-xs text-slate">

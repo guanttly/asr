@@ -109,6 +109,12 @@ release-all-in-one:
 	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
 
 # --- Utilities ---
+# 同步影像术语库 markdown 快照到 backend embed 目录（原始 docs/terms 保持不变）。
+sync-term-catalog:
+	rm -f backend/internal/application/catalog/terms/*.md
+	cp docs/terms/*.md backend/internal/application/catalog/terms/
+	cd backend && go test ./internal/application/catalog/... -run TestEmbeddedSectionsParse
+
 # 清理常见构建产物与前端缓存。
 clean:
 	rm -rf bin/

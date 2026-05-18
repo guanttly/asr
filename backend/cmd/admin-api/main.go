@@ -9,6 +9,7 @@ import (
 
 	appappsettings "github.com/lgt/asr/internal/application/appsettings"
 	appasr "github.com/lgt/asr/internal/application/asr"
+	appcatalog "github.com/lgt/asr/internal/application/catalog"
 	appfiller "github.com/lgt/asr/internal/application/filler"
 	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
 	appsensitive "github.com/lgt/asr/internal/application/sensitive"
@@ -116,6 +117,12 @@ func main() {
 	}
 	logger.Info("terminology seed data ensured")
 
+	catalogService := appcatalog.NewService(cfg.Catalog.Dir)
+	if err := catalogService.AssertCatalogConsistent(); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("radiology term catalog loaded", zap.String("source", catalogService.ActivePath()))
+
 	sensitiveDictRepo := persistence.NewSensitiveDictRepo(db)
 	sensitiveEntryRepo := persistence.NewSensitiveEntryRepo(db)
 	sensitiveService := appsensitive.NewService(
@@ -215,6 +222,7 @@ func main() {
 	downloadHandler.Register(protected)
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
+	api.NewTermCatalogHandler(catalogService).Register(protected)
 	api.NewFillerHandler(fillerService).Register(protected)
 	api.NewSensitiveHandler(sensitiveService).Register(protected)
 	api.NewVoiceCommandHandler(voiceCommandService, productFeatures).Register(protected)

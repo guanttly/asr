@@ -17,6 +17,7 @@ import (
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	"github.com/lgt/asr/pkg/errcode"
 	"github.com/lgt/asr/pkg/response"
+	"github.com/lgt/asr/pkg/xlsxio"
 )
 
 const (
@@ -53,6 +54,7 @@ func NewTermHandler(service *appterm.Service) *TermHandler {
 func (h *TermHandler) Register(group *gin.RouterGroup) {
 	group.GET("/term-dicts", h.ListDicts)
 	group.POST("/term-dicts", h.CreateDict)
+	group.GET("/term-dicts/import-template", h.DownloadImportTemplate)
 	group.PUT("/term-dicts/:id", h.UpdateDict)
 	group.DELETE("/term-dicts/:id", h.DeleteDict)
 	group.GET("/term-dicts/:id/entries", h.ListEntries)
@@ -64,6 +66,7 @@ func (h *TermHandler) Register(group *gin.RouterGroup) {
 	group.PUT("/term-dicts/:id/rules/:ruleId", h.UpdateRule)
 	group.DELETE("/term-dicts/:id/rules/:ruleId", h.DeleteRule)
 	group.POST("/term-dicts/:id/import", h.BatchImport)
+	group.GET("/term-dicts/:id/export", h.ExportEntries)
 }
 
 func (h *TermHandler) ListDicts(c *gin.Context) {
@@ -319,6 +322,54 @@ func (h *TermHandler) BatchImport(c *gin.Context) {
 	}
 
 	response.Success(c, result)
+}
+
+// ExportEntries streams an .xlsx with every term in the dict, using the same
+// column schema accepted by BatchImport so the file can round-trip.
+func (h *TermHandler) ExportEntries(c *gin.Context) {
+	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
+		return
+	}
+
+	entries, err := h.service.GetDictEntries(c.Request.Context(), dictID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	wb := xlsxio.NewWorkbook("术语词条")
+	wb.AppendRow("correct_term", "wrong_variants")
+	for _, entry := range entries {
+		wb.AppendRow(entry.CorrectTerm, strings.Join(entry.WrongVariants, "|"))
+	}
+
+	var buf bytes.Buffer
+	if err := wb.Encode(&buf); err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	filename := fmt.Sprintf("term-dict-%d.xlsx", dictID)
+	c.Header("Content-Disposition", "attachment; filename="+filename)
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+}
+
+// DownloadImportTemplate serves a blank xlsx with the canonical column headers
+// and one example row, so operators can fill it in without guessing the schema.
+func (h *TermHandler) DownloadImportTemplate(c *gin.Context) {
+	wb := xlsxio.NewWorkbook("术语词条")
+	wb.AppendRow("correct_term", "wrong_variants")
+	wb.AppendRow("胼胝体", "骈祉体|便支体|片织体")
+	wb.AppendRow("冠状动脉", "关状动脉|冠状动漫")
+
+	var buf bytes.Buffer
+	if err := wb.Encode(&buf); err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	c.Header("Content-Disposition", "attachment; filename=term-dict-import-template.xlsx")
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }
 
 func (h *TermHandler) parseBatchImportRequest(c *gin.Context) (appterm.BatchImportRequest, error) {

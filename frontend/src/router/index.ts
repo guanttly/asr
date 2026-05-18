@@ -2,9 +2,9 @@ import type { RouteRecordRaw } from 'vue-router'
 
 import { createRouter, createWebHistory } from 'vue-router'
 
+import { isProductFeatureKey, PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import BlankLayout from '@/layouts/BlankLayout.vue'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
-import { PRODUCT_FEATURE_KEYS, isProductFeatureKey } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
@@ -146,6 +146,12 @@ const routes: RouteRecordRaw[] = [
         name: 'system-users',
         meta: { title: '用户管理', desc: '当前已接入 admin-api 用户查询接口，可用于联调登录、权限和系统管理。' },
         component: () => import('@/pages/system/users.vue'),
+      },
+      {
+        path: 'system/terms-catalog',
+        name: 'system-terms-catalog',
+        meta: { pageManagedScroll: true, title: '影像术语库浏览', desc: '按科室浏览影像报告易错术语，一键创建/移除「影像术语·科室」专属术语库，或对单条术语进行加入与移除。' },
+        component: () => import('@/pages/system/terms-catalog.vue'),
       },
       {
         path: 'system/openapi',

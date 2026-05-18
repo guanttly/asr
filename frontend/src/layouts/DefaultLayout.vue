@@ -225,6 +225,7 @@ const menuOptions = computed<MenuOption[]>(() => {
       icon: renderMenuIcon('systemSection', '系统管理'),
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
+        { label: '影像术语库', key: '/system/terms-catalog', icon: renderMenuIcon('terminologySection', '影像术语库') },
         { label: '对接管理', key: '/system/openapi', icon: renderMenuIcon('openapi', '对接管理') },
         { label: '终端下载', key: '/downloads', icon: renderMenuIcon('downloads', '终端下载') },
       ],
@@ -268,6 +269,8 @@ const currentPath = computed(() => {
     return '/system/openapi'
   if (path.startsWith('/system/users'))
     return '/system/users'
+  if (path.startsWith('/system/terms-catalog'))
+    return '/system/terms-catalog'
   if (path.startsWith('/terminology'))
     return '/terminology'
   if (path.startsWith('/transcription'))

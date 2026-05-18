@@ -16,6 +16,7 @@
 - 下载包目录: /var/lib/asr/downloads
 - 临时目录: /var/lib/asr/tmp
 - 音频存储目录: /var/lib/asr/uploads
+- 影像术语库目录: /var/lib/asr/term-catalog（首次启动自动从镜像内 `/opt/asr/term-catalog-default` 复制；之后运维可直接增删改 `runtime/term-catalog/` 下的 md 文件，无需重新构建镜像，「系统管理 → 影像术语库」会实时读取。整目录清空后重启容器会再次 seed）
 
 ## 快速启动
 

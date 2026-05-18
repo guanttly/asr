@@ -323,7 +323,7 @@ rollback_previous_release() {
 
 cd "$SCRIPT_DIR"
 
-mkdir -p runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads
+mkdir -p runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/term-catalog
 chmod 1777 runtime/tmp
 
 ENV_CREATED=0

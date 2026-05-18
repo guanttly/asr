@@ -881,7 +881,14 @@ ensure_output_owner_matches_current_user "$ARCHIVE_PATH"
 ensure_output_owner_matches_current_user "$RUN_PATH"
 
 reset_staging_dir "$STAGING_DIR"
-mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads"
+mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog"
+
+cat > "$STAGING_DIR/runtime/term-catalog/README.txt" <<'EOF'
+首次启动时容器会把镜像内置的影像术语 md 文件复制到本目录。
+此后运维可直接修改、增删本目录下的 md 文件，admin-api 会从这里读取并通过
+「系统管理 → 影像术语库」页面展示。不要删除整个目录本身。
+若想恢复出厂内容：清空本目录后重启容器即可重新 seed。
+EOF
 
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
 cp "$DEPLOY_DIR/README.md" "$STAGING_DIR/README.md"

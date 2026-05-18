@@ -31,6 +31,7 @@ services:
       - ./runtime/downloads:/var/lib/asr/downloads
       - ./runtime/tmp:/var/lib/asr/tmp
       - ./runtime/uploads:/var/lib/asr/uploads
+      - ./runtime/term-catalog:/var/lib/asr/term-catalog
     healthcheck:
       test: ["CMD-SHELL", "/app/scripts/healthcheck.sh"]
       interval: 15s

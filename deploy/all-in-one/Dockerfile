@@ -56,8 +56,14 @@ COPY deploy/all-in-one/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/all-in-one/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deploy/all-in-one/scripts /app/scripts
 
+# Ship the radiology term catalog markdown into the image as a *default*
+# snapshot. entrypoint.sh seeds /var/lib/asr/term-catalog from it on first
+# boot if the mounted volume is empty, so operators can edit md files via
+# the host filesystem without rebuilding the image.
+COPY docs/terms /opt/asr/term-catalog-default
+
 RUN chmod +x /app/scripts/*.sh /app/bin/* \
- && mkdir -p /var/log/supervisor /var/log/nginx /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs
+ && mkdir -p /var/log/supervisor /var/log/nginx /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog
 
 ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_MYSQL_DATABASE=asr \
@@ -72,6 +78,8 @@ ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_TLS_ALT_NAMES=DNS:localhost,IP:127.0.0.1 \
     ASR_TMP_DIR=/var/lib/asr/tmp \
     ASR_UPLOAD_DIR=/var/lib/asr/uploads \
+    ASR_CATALOG_DIR=/var/lib/asr/term-catalog \
+    ASR_CATALOG_SEED_DIR=/opt/asr/term-catalog-default \
     ASR_BOOTSTRAP_ADMIN_USERNAME=admin \
     ASR_BOOTSTRAP_ADMIN_PASSWORD=change-me-now \
     ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员 \
@@ -80,6 +88,6 @@ ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
 
 EXPOSE 80 443
 
-VOLUME ["/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs"]
+VOLUME ["/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs", "/var/lib/asr/term-catalog"]
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]

@@ -27,12 +27,25 @@ mkdir -p "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${
 chown -R mysql:mysql "${ASR_MYSQL_DATA_DIR}" /run/mysqld
 chmod 1777 "${ASR_TMP_DIR}"
 
+catalog_dir_needs_seed() {
+  if [ ! -d "${ASR_CATALOG_DIR}" ]; then
+    return 0
+  fi
+
+  if [ -n "$(find "${ASR_CATALOG_DIR}" -mindepth 1 -maxdepth 1 ! -name 'README.txt' ! -name '.gitkeep' -print -quit 2>/dev/null)" ]; then
+    return 1
+  fi
+
+  return 0
+}
+
 # Seed the term catalog mount on first boot. If the operator has already put
 # their own md files in the host volume, skip the copy so we never overwrite
 # customised content. The image still ships an embedded copy as a fallback,
 # so an empty seed dir is non-fatal.
-if [ -d "${ASR_CATALOG_SEED_DIR}" ] && [ -z "$(ls -A "${ASR_CATALOG_DIR}" 2>/dev/null)" ]; then
+if [ -d "${ASR_CATALOG_SEED_DIR}" ] && catalog_dir_needs_seed; then
   echo "[entrypoint] seeding term catalog from ${ASR_CATALOG_SEED_DIR} into ${ASR_CATALOG_DIR}"
+  find "${ASR_CATALOG_DIR}" -mindepth 1 -maxdepth 1 \( -name 'README.txt' -o -name '.gitkeep' \) -exec rm -rf {} \; 2>/dev/null || true
   cp -a "${ASR_CATALOG_SEED_DIR}/." "${ASR_CATALOG_DIR}/"
 fi
 

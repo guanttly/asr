@@ -1,10 +1,10 @@
 package api
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	appcatalog "github.com/lgt/asr/internal/application/catalog"
@@ -12,8 +12,8 @@ import (
 	"github.com/lgt/asr/pkg/response"
 )
 
-// TermCatalogHandler exposes read-only browsing of the radiology terminology
-// catalog: a directory tree of markdown files plus a single bulk Excel export.
+// TermCatalogHandler exposes read-only browsing of the terminology catalog:
+// a directory tree of markdown files plus per-department Excel downloads.
 type TermCatalogHandler struct {
 	service *appcatalog.Service
 }
@@ -60,17 +60,20 @@ func (h *TermCatalogHandler) GetFile(c *gin.Context) {
 	response.Success(c, detail)
 }
 
-// ExportXLSX returns a single workbook with every term in the catalog, in the
-// column shape accepted by the existing TermDict import endpoint. Operators
-// download this, edit it locally, and re-upload via the regular import flow.
+// ExportXLSX returns the built-in workbook for a department directory. The
+// path comes in via ?path= and points at a catalog directory such as radiology.
 func (h *TermCatalogHandler) ExportXLSX(c *gin.Context) {
-	var buf bytes.Buffer
-	count, err := h.service.ExportXLSX(&buf)
+	pathParam := c.Query("path")
+	filename, content, count, err := h.service.ExportXLSX(pathParam)
 	if err != nil {
+		if errors.Is(err, appcatalog.ErrFileNotFound) {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, "catalog xlsx not found")
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
-	c.Header("Content-Disposition", "attachment; filename=radiology-term-catalog.xlsx")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(filename)))
 	c.Header("X-Term-Count", fmt.Sprintf("%d", count))
-	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
 }

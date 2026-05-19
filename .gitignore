@@ -8,6 +8,12 @@ bin/
 # Go
 backend/vendor/
 backend/cmd/*/__debug_bin*
+backend/admin-api
+backend/asr-api
+backend/gateway
+backend/nlp-api
+backend/rules-catalog-xlsx
+backend/term-catalog-xlsx
 
 # Desktop YY-Thunks 大小写 shim（per-machine 软链，由 build.rs 生成）
 desktop/src-tauri/vendor/yy-thunks/case-shim/

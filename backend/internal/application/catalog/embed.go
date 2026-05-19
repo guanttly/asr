@@ -9,5 +9,5 @@ import "embed"
 // content. Run `make sync-term-catalog` from the repo root to refresh this
 // snapshot — never edit the files under this directory directly.
 //
-//go:embed terms/*.md
+//go:embed terms
 var termsFS embed.FS

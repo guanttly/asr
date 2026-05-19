@@ -601,7 +601,7 @@ preserve_target_entry() {
 
 preserve_runtime_entry() {
   case "$1" in
-    mysql|uploads|tmp|certs)
+    mysql|uploads|tmp|certs|term-catalog)
       return 0
       ;;
   esac
@@ -663,7 +663,7 @@ sync_runtime_dir() {
   find "$SRC_RUNTIME_DIR" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
     ENTRY_NAME=$(basename "$INCOMING_PATH")
     case "$ENTRY_NAME" in
-      mysql|uploads|tmp)
+      mysql|uploads|tmp|term-catalog)
         mkdir -p "$DEST_RUNTIME_DIR/$ENTRY_NAME"
         if [ "$ENTRY_NAME" = "tmp" ]; then
           chmod 1777 "$DEST_RUNTIME_DIR/$ENTRY_NAME" 2>/dev/null || true
@@ -679,7 +679,7 @@ sync_runtime_dir() {
     esac
   done
 
-  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs"
+  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs" "$DEST_RUNTIME_DIR/term-catalog"
   chmod 1777 "$DEST_RUNTIME_DIR/tmp" 2>/dev/null || true
 }
 
@@ -883,13 +883,6 @@ ensure_output_owner_matches_current_user "$RUN_PATH"
 reset_staging_dir "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog"
 
-cat > "$STAGING_DIR/runtime/term-catalog/README.txt" <<'EOF'
-首次启动时容器会把镜像内置的影像术语 md 文件复制到本目录。
-此后运维可直接修改、增删本目录下的 md 文件，admin-api 会从这里读取并通过
-「系统管理 → 影像术语库」页面展示。不要删除整个目录本身。
-若想恢复出厂内容：清空本目录后重启容器即可重新 seed。
-EOF
-
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
 cp "$DEPLOY_DIR/README.md" "$STAGING_DIR/README.md"
 cp "$SCRIPT_DIR/install.sh" "$STAGING_DIR/install.sh"
@@ -901,6 +894,9 @@ cat > "$STAGING_DIR/.env" <<EOF
 ASR_RELEASE_IMAGE=asr-all-in-one:latest
 ASR_RELEASE_VERSION=$VERSION
 ASR_CONTAINER_NAME=asr-all-in-one
+ASR_DOCKER_NETWORK_NAME=asr-all-in-one-net
+ASR_DOCKER_SUBNET=
+ASR_DOCKER_GATEWAY=
 ASR_ENABLE_HTTPS=1
 ASR_HTTP_REDIRECT_TO_HTTPS=0
 ASR_HTTP_PORT=$HTTP_PORT

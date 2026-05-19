@@ -175,6 +175,7 @@ make release-all-in-one \
 - `ASR_SERVICE_URL` 和 `SPEAKER_SERVICE_URL` 都是“从 all-in-one 容器内部看出去”的地址
 - `WEBVIEW2_FIXED_RUNTIME` 变量已废弃：Win7 发布包现在由 `desktop-electron` 下的 Electron 22 工程生成，不再依赖 WebView2 固定版运行时
 - 如果外部服务和 all-in-one 部署在同一台宿主机上，推荐填 `http://host.docker.internal:<端口>`；服务器 shell 里 `ping host.docker.internal` 不通是正常的
+- 一键安装时会自动检查宿主机 IPv4 路由和已有 Docker 网络，选择未占用的 Docker 内部网段，并把 `host.docker.internal` 指向该网段网关，避免客户内网与 Docker 默认 172 段冲突
 - 这里的 `<端口>` 必须写“宿主机实际暴露出来的端口”，不是外部容器自己的内部监听端口；例如外部 ASR 如果是 `-p 11001:8000`，那这里应填 `http://host.docker.internal:11001`
 - 如果外部服务部署在另一台机器上，就填那台机器的实际内网 IP 或域名
 - 如果 3D-Speaker 同时承担说话人分离和声纹能力，优先只传 `SPEAKER_SERVICE_URL`
@@ -300,6 +301,7 @@ ASR_SERVICES_SPEAKER_SERVICE_URL=http://host.docker.internal:10002
 ```
 
 注意：`host.docker.internal` 是给容器内部访问宿主机用的别名，不要求服务器本机 shell 能直接解析；如果你的 3D-Speaker 部署在另一台服务器，就改成那台机器的实际 IP 或域名。
+安装脚本会自动把这个别名绑定到当前 all-in-one Docker 内部网络的网关；如果客户机器已有 172、10 或 192.168 路由占用，脚本会改用其它候选网段。
 
 同理，如果你的 ASR 或 3D-Speaker 本身也是 Docker 容器，并且端口映射类似：
 

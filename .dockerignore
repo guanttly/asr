@@ -2,7 +2,9 @@
 .github
 .vscode
 
-docs
+docs/*
+!docs/terms
+!docs/terms/**
 desktop
 
 backend/uploads

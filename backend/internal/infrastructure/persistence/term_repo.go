@@ -96,6 +96,20 @@ func (r *DictRepo) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&DictModel{}, id).Error
 }
 
+func (r *DictRepo) FindByDomain(ctx context.Context, domainStr string) (*domain.TermDict, error) {
+	var model DictModel
+	if err := r.db.WithContext(ctx).Where("domain = ?", domainStr).First(&model).Error; err != nil {
+		return nil, err
+	}
+	return &domain.TermDict{
+		ID:        model.ID,
+		Name:      model.Name,
+		Domain:    model.Domain,
+		CreatedAt: model.CreatedAt,
+		UpdatedAt: model.UpdatedAt,
+	}, nil
+}
+
 func (r *DictRepo) List(ctx context.Context, offset, limit int) ([]*domain.TermDict, int64, error) {
 	var models []DictModel
 	var total int64

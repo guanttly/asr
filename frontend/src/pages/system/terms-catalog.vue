@@ -1,22 +1,23 @@
 <script setup lang="ts">
+import type { MenuOption } from 'naive-ui'
 import type { CatalogFileDetail, CatalogTreeNode } from '@/api/termCatalog'
 import MarkdownIt from 'markdown-it'
-import { NButton, NSpin, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
+import { NButton, NMenu, NSpin, NTag, useMessage } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
-import request from '@/api/request'
-import { getTermCatalogFile, getTermCatalogTree, termCatalogExportUrl } from '@/api/termCatalog'
-
-interface TabLevel {
-  // Path of the parent directory ('.' for root).
-  parentPath: string
-  // Currently selected child at this level.
-  activeKey: string
-  // Tab options to render at this level.
-  options: CatalogTreeNode[]
-}
+import { downloadTermCatalogXlsx, getTermCatalogFile, getTermCatalogTree } from '@/api/termCatalog'
+import {
+  catalogMenuLabel,
+  findCatalogNodeByPath,
+  findCatalogParentPaths,
+  findCatalogPathNodes,
+  findFirstCatalogFile,
+} from '@/utils/termCatalogMenu'
 
 const message = useMessage()
+const route = useRoute()
+const router = useRouter()
 
 const tree = ref<CatalogTreeNode[]>([])
 const source = ref('')
@@ -25,32 +26,25 @@ const detail = ref<CatalogFileDetail | null>(null)
 const detailLoading = ref(false)
 const downloading = ref(false)
 const selectedPath = ref<string | null>(null)
+const catalogExpandedKeys = ref<string[]>([])
 
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: false })
 
-const tabLevels = computed<TabLevel[]>(() => {
-  const levels: TabLevel[] = []
-  if (!tree.value.length || !selectedPath.value)
-    return levels
-
-  const segments = selectedPath.value.split('/')
-  let cursor: CatalogTreeNode[] = tree.value
-  let parentPath = '.'
-
-  for (let depth = 0; depth < segments.length; depth++) {
-    const segment = segments[depth]
-    const activeNode = cursor.find(node => node.name === segment)
-    const activeKey = activeNode ? activeNode.path : (cursor[0]?.path || '')
-    levels.push({ parentPath, activeKey, options: cursor })
-
-    if (!activeNode || !activeNode.is_dir || !activeNode.children?.length)
-      break
-    cursor = activeNode.children
-    parentPath = activeNode.path
-  }
-
-  return levels
+const catalogMenuOptions = computed<MenuOption[]>(() => buildCatalogMenuOptions(tree.value))
+const selectedNodeTrail = computed(() => selectedPath.value ? findCatalogPathNodes(tree.value, selectedPath.value) : [])
+const activeCatalogScope = computed(() => selectedNodeTrail.value.find(node => node.is_dir) || null)
+const activeCatalogScopeLabel = computed(() => {
+  if (activeCatalogScope.value)
+    return catalogMenuLabel(activeCatalogScope.value)
+  return '目录'
 })
+const catalogTitle = computed(() => activeCatalogScopeLabel.value === '目录'
+  ? '术语收集'
+  : `术语收集 · ${activeCatalogScopeLabel.value}`)
+const activeScopeNodes = computed(() => activeCatalogScope.value?.children || tree.value)
+const downloadButtonLabel = computed(() => activeCatalogScope.value
+  ? `下载${activeCatalogScopeLabel.value}术语 Excel`
+  : '下载术语 Excel')
 
 const renderedMarkdown = computed(() => {
   if (!detail.value)
@@ -58,10 +52,10 @@ const renderedMarkdown = computed(() => {
   return markdown.render(detail.value.markdown_body)
 })
 
-const totalTerms = computed(() => sumTerms(tree.value))
-const totalL1 = computed(() => sumLevel(tree.value, 'l1_count'))
-const totalL2 = computed(() => sumLevel(tree.value, 'l2_count'))
-const totalL3 = computed(() => sumLevel(tree.value, 'l3_count'))
+const totalTerms = computed(() => sumTerms(activeScopeNodes.value))
+const totalL1 = computed(() => sumLevel(activeScopeNodes.value, 'l1_count'))
+const totalL2 = computed(() => sumLevel(activeScopeNodes.value, 'l2_count'))
+const totalL3 = computed(() => sumLevel(activeScopeNodes.value, 'l3_count'))
 
 function sumTerms(nodes: CatalogTreeNode[]): number {
   let total = 0
@@ -85,30 +79,55 @@ function sumLevel(nodes: CatalogTreeNode[], key: 'l1_count' | 'l2_count' | 'l3_c
   return total
 }
 
-function findFirstFile(nodes: CatalogTreeNode[]): CatalogTreeNode | null {
-  for (const node of nodes) {
-    if (!node.is_dir)
-      return node
-    if (node.children?.length) {
-      const found = findFirstFile(node.children)
-      if (found)
-        return found
-    }
-  }
+function currentRouteCatalogPath(): string | null {
+  const value = route.query.path
+  if (typeof value === 'string')
+    return value
+  if (Array.isArray(value) && typeof value[0] === 'string')
+    return value[0]
   return null
 }
 
-function findNodeByPath(nodes: CatalogTreeNode[], path: string): CatalogTreeNode | null {
-  for (const node of nodes) {
-    if (node.path === path)
-      return node
-    if (node.is_dir && node.children?.length) {
-      const found = findNodeByPath(node.children, path)
-      if (found)
-        return found
-    }
-  }
-  return null
+function resolveSelectableFile(path: string | null): CatalogTreeNode | null {
+  if (!path)
+    return null
+  const node = findCatalogNodeByPath(tree.value, path)
+  if (!node)
+    return null
+  if (!node.is_dir)
+    return node
+  return findFirstCatalogFile(node.children || [])
+}
+
+function syncRoutePath(path: string, replace = false) {
+  if (currentRouteCatalogPath() === path)
+    return
+  const location = { path: route.path, query: { ...route.query, path } }
+  if (replace)
+    void router.replace(location)
+  else
+    void router.push(location)
+}
+
+function buildCatalogMenuOptions(nodes: CatalogTreeNode[]): MenuOption[] {
+  return nodes
+    .map((node): MenuOption | null => {
+      if (node.is_dir) {
+        const children = buildCatalogMenuOptions(node.children || [])
+        if (!children.length)
+          return null
+        return {
+          label: catalogMenuLabel(node),
+          key: node.path,
+          children,
+        }
+      }
+      return {
+        label: catalogMenuLabel(node),
+        key: node.path,
+      }
+    })
+    .filter((item): item is MenuOption => Boolean(item))
 }
 
 async function loadTree() {
@@ -124,15 +143,16 @@ async function loadTree() {
       return
     }
 
-    if (selectedPath.value && findNodeByPath(tree.value, selectedPath.value)) {
-      await loadDetail(selectedPath.value)
-    }
-    else {
-      const first = findFirstFile(tree.value)
-      if (first) {
-        selectedPath.value = first.path
-        await loadDetail(first.path)
-      }
+    const target = resolveSelectableFile(currentRouteCatalogPath())
+      || resolveSelectableFile(selectedPath.value)
+      || findFirstCatalogFile(tree.value)
+
+    if (target) {
+      const previousPath = selectedPath.value
+      selectedPath.value = target.path
+      syncRoutePath(target.path, true)
+      if (previousPath === target.path)
+        await loadDetail(target.path)
     }
   }
   catch {
@@ -147,10 +167,12 @@ async function loadDetail(path: string) {
   detailLoading.value = true
   try {
     const result = await getTermCatalogFile(path)
-    detail.value = result.data
+    if (selectedPath.value === path)
+      detail.value = result.data
   }
   catch {
-    detail.value = null
+    if (selectedPath.value === path)
+      detail.value = null
     message.error('术语文件加载失败')
   }
   finally {
@@ -158,42 +180,64 @@ async function loadDetail(path: string) {
   }
 }
 
-function handleTabChange(value: string) {
-  const node = findNodeByPath(tree.value, value)
-  if (!node)
+function handleCatalogSelect(value: string) {
+  const target = resolveSelectableFile(value)
+  if (!target)
     return
 
-  if (node.is_dir) {
-    // Drill into the directory: pick the first file inside.
-    const target = findFirstFile(node.children || [])
-    if (target)
-      selectedPath.value = target.path
-    return
-  }
-  selectedPath.value = node.path
+  selectedPath.value = target.path
+  syncRoutePath(target.path)
+}
+
+function handleCatalogExpand(keys: string[]) {
+  catalogExpandedKeys.value = keys
 }
 
 watch(selectedPath, (value) => {
-  if (value)
+  if (value) {
+    catalogExpandedKeys.value = findCatalogParentPaths(tree.value, value)
     loadDetail(value)
+  }
+  else {
+    detail.value = null
+    catalogExpandedKeys.value = []
+  }
+})
+
+watch(
+  () => route.query.path,
+  () => {
+    if (!tree.value.length)
+      return
+    const target = resolveSelectableFile(currentRouteCatalogPath())
+    if (target && target.path !== selectedPath.value)
+      selectedPath.value = target.path
+  },
+)
+
+watch(tree, () => {
+  if (selectedPath.value)
+    catalogExpandedKeys.value = findCatalogParentPaths(tree.value, selectedPath.value)
 })
 
 async function handleDownload() {
+  const scope = activeCatalogScope.value
+  if (!scope?.excel_path) {
+    message.warning('当前科室尚未配置术语 Excel')
+    return
+  }
   downloading.value = true
   try {
-    const response = await request.get(termCatalogExportUrl(), { responseType: 'blob' })
-    const blob = response.data instanceof Blob
-      ? response.data
-      : new Blob([response.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const blob = await downloadTermCatalogXlsx(scope.path)
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = 'radiology-term-catalog.xlsx'
+    anchor.download = `${activeCatalogScopeLabel.value}-术语库.xlsx`
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
     URL.revokeObjectURL(url)
-    message.success('Excel 已下载，可按需修改后到「术语库管理」上传')
+    message.success(`${activeCatalogScopeLabel.value}术语 Excel 已下载，可按需修改后到「术语库管理」上传`)
   }
   catch {
     message.error('Excel 下载失败')
@@ -201,11 +245,6 @@ async function handleDownload() {
   finally {
     downloading.value = false
   }
-}
-
-function tabLabel(node: CatalogTreeNode) {
-  const label = node.title?.trim() || node.name.replace(/\.md$/i, '')
-  return label
 }
 
 onMounted(loadTree)
@@ -217,10 +256,10 @@ onMounted(loadTree)
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
           <div class="text-base font-600 text-ink">
-            影像术语库浏览
+            {{ catalogTitle }}
           </div>
           <div class="mt-1 text-xs text-slate">
-            按目录浏览影像报告易错术语；下方按钮可下载全部术语 Excel，本地修改后到「术语库管理 → 批量导入」上传到目标词库。
+            按学科目录浏览医学易错术语；可下载当前科室内置 Excel，本地修改后到「术语库管理 → 批量导入」上传到目标词库。
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-slate">
             <NTag size="small" round bordered type="default">
@@ -244,53 +283,140 @@ onMounted(loadTree)
           <NButton size="small" quaternary @click="loadTree">
             刷新
           </NButton>
-          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" @click="handleDownload">
-            下载全部术语 Excel
+          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" :disabled="!activeCatalogScope?.excel_path" @click="handleDownload">
+            {{ downloadButtonLabel }}
           </NButton>
         </div>
       </div>
     </NCard>
 
-    <NCard class="card-main flex flex-col min-h-0" content-style="display:flex;flex-direction:column;min-height:0;padding:0 20px 20px;gap:12px;">
-      <NSpin :show="treeLoading || detailLoading" class="flex-1 min-h-0 flex flex-col">
-        <div v-if="tabLevels.length" class="catalog-tab-stack flex flex-col gap-1 pt-1">
-          <NTabs
-            v-for="(level, depth) in tabLevels"
-            :key="`${level.parentPath}@${depth}`"
-            type="card"
-            size="small"
-            :value="level.activeKey"
-            :tabs-padding="6"
-            @update:value="handleTabChange"
-          >
-            <NTabPane
-              v-for="node in level.options"
-              :key="node.path"
-              :name="node.path"
-              :tab="tabLabel(node)"
-              display-directive="show"
+    <NCard class="catalog-body-card card-main flex flex-col min-h-0" content-style="display:flex;min-height:0;height:100%;padding:0;">
+      <NSpin :show="treeLoading || detailLoading" class="catalog-spin">
+        <div class="catalog-browser">
+          <aside class="catalog-sidebar">
+            <div class="catalog-sidebar-title">
+              {{ activeCatalogScopeLabel }}
+            </div>
+            <NMenu
+              class="catalog-tree-menu"
+              :value="selectedPath || undefined"
+              :options="catalogMenuOptions"
+              :expanded-keys="catalogExpandedKeys"
+              :root-indent="12"
+              :indent="18"
+              @update:value="handleCatalogSelect"
+              @update:expanded-keys="handleCatalogExpand"
             />
-          </NTabs>
-        </div>
+          </aside>
 
-        <div v-if="detail" class="catalog-markdown-wrap mt-2 flex-1 min-h-0 overflow-auto rounded-3 border border-mist bg-white/95">
-          <div class="markdown-body p-6 text-[14px] leading-7" v-html="renderedMarkdown" />
-        </div>
+          <section class="catalog-document">
+            <div v-if="detail" class="catalog-markdown-wrap flex-1 min-h-0 overflow-auto rounded-2 border border-mist bg-white/95">
+              <div class="markdown-body p-6 text-[14px] leading-7" v-html="renderedMarkdown" />
+            </div>
 
-        <NEmpty v-else-if="!treeLoading" description="未加载到术语目录" class="flex-1 self-center" />
+            <NEmpty v-else-if="!treeLoading" description="未加载到术语目录" class="catalog-empty" />
+          </section>
+        </div>
       </NSpin>
     </NCard>
   </div>
 </template>
 
 <style scoped>
-.catalog-page :deep(.n-tabs .n-tabs-tab) {
-  font-size: 13px;
+.catalog-page {
+  overflow: hidden;
 }
 
-.catalog-tab-stack :deep(.n-tabs-pane-wrapper),
-.catalog-tab-stack :deep(.n-tab-pane) {
-  display: none;
+.catalog-body-card {
+  flex: 1 1 auto;
+}
+
+.catalog-spin {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.catalog-spin :deep(.n-spin-content) {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.catalog-browser {
+  display: grid;
+  grid-template-columns: minmax(220px, 264px) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.catalog-sidebar {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 12px;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.62);
+}
+
+.catalog-sidebar-title {
+  padding: 0 10px 10px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.catalog-tree-menu :deep(.n-menu-item-content),
+.catalog-tree-menu :deep(.n-submenu > .n-menu-item-content) {
+  border-radius: 8px !important;
+}
+
+.catalog-tree-menu :deep(.n-menu-item-content::before),
+.catalog-tree-menu :deep(.n-submenu > .n-menu-item-content::before) {
+  border-radius: 8px !important;
+}
+
+.catalog-tree-menu :deep(.n-menu-item-content-header) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-tree-menu :deep(.n-menu-item-content.n-menu-item-content--selected::before) {
+  background: rgba(15, 118, 110, 0.12) !important;
+}
+
+.catalog-document {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 18px 18px;
+}
+
+.catalog-empty {
+  align-self: center;
+  justify-self: center;
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .catalog-browser {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, auto) minmax(0, 1fr);
+  }
+
+  .catalog-sidebar {
+    max-height: 260px;
+    border-right: none;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .catalog-document {
+    padding: 14px;
+  }
 }
 
 .markdown-body :deep(h1) {

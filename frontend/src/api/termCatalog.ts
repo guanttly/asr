@@ -5,6 +5,7 @@ export interface CatalogTreeNode {
   path: string
   is_dir: boolean
   title?: string
+  excel_path?: string
   total_terms?: number
   l1_count?: number
   l2_count?: number
@@ -45,4 +46,11 @@ export function getTermCatalogFile(path: string) {
 
 export function termCatalogExportUrl() {
   return '/api/admin/term-catalog/export.xlsx'
+}
+
+export function downloadTermCatalogXlsx(path: string) {
+  return request.get<Blob>(termCatalogExportUrl(), {
+    params: { path },
+    responseType: 'blob',
+  }) as unknown as Promise<Blob>
 }

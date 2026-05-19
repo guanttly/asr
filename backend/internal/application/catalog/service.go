@@ -32,13 +32,23 @@ type Service struct {
 }
 
 type parsedFile struct {
-	title    string
-	body     []byte
-	terms    []SectionTerm
+	title string
+	body  []byte
+	terms []SectionTerm
 }
 
 // ErrFileNotFound is returned when a path cannot be resolved.
 var ErrFileNotFound = errors.New("catalog file not found")
+
+var catalogMenuMetadataFileNames = []string{
+	"MENU.txt",
+	"MENU.md",
+	"menu.txt",
+	"menu.md",
+	"README.txt",
+	"_menu.txt",
+	"_menu.md",
+}
 
 // NewService builds a service. Pass "" to use only the embedded snapshot;
 // pass an absolute or working-dir-relative path to load from disk instead.
@@ -79,6 +89,9 @@ func (s *Service) GetFile(p string) (*FileDetail, error) {
 	if err != nil {
 		return nil, err
 	}
+	if isCatalogMenuMetadataFile(clean) {
+		return nil, ErrFileNotFound
+	}
 	source, err := s.resolveSource()
 	if err != nil {
 		return nil, err
@@ -103,25 +116,49 @@ func (s *Service) GetFile(p string) (*FileDetail, error) {
 // AllTerms enumerates every parsed term across every file. Used by the bulk
 // Excel export.
 func (s *Service) AllTerms() ([]SectionTerm, error) {
+	return s.AllTermsInScope("")
+}
+
+// AllTermsInScope enumerates parsed terms under a directory or markdown file.
+// An empty scope keeps the historical whole-catalog behaviour.
+func (s *Service) AllTermsInScope(scope string) ([]SectionTerm, error) {
+	cleanScope, err := safeRelScope(scope)
+	if err != nil {
+		return nil, err
+	}
 	source, err := s.resolveSource()
 	if err != nil {
 		return nil, err
 	}
 	var collected []SectionTerm
+	matchedFile := false
 	err = source.walk(func(relPath string, content []byte) error {
+		if !pathWithinScope(relPath, cleanScope) {
+			return nil
+		}
+		matchedFile = true
 		_, terms := parseMarkdownBody(relPath, content)
 		collected = append(collected, terms...)
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	if cleanScope != "" && !matchedFile {
+		return nil, ErrFileNotFound
+	}
 	return collected, err
 }
 
-// ExportXLSX writes every term to an xlsx workbook with the same columns the
-// existing TermDict import endpoint accepts (correct_term, wrong_variants),
-// plus a few read-only context columns so reviewers know which file each row
-// came from.
-func (s *Service) ExportXLSX(out *bytes.Buffer) (int, error) {
-	terms, err := s.AllTerms()
+// GenerateXLSX writes parsed terms to an xlsx workbook with the same columns
+// the existing TermDict import endpoint accepts. This is used to build the
+// checked-in per-department Excel files; downloads serve those files directly.
+func (s *Service) GenerateXLSX(out *bytes.Buffer, scope ...string) (int, error) {
+	scopePath := ""
+	if len(scope) > 0 {
+		scopePath = scope[0]
+	}
+	terms, err := s.AllTermsInScope(scopePath)
 	if err != nil {
 		return 0, err
 	}
@@ -152,6 +189,43 @@ func (s *Service) ExportXLSX(out *bytes.Buffer) (int, error) {
 		return 0, err
 	}
 	return len(terms), nil
+}
+
+// ExportXLSX reads the built-in department Excel file from the catalog tree.
+// The scope is usually a department directory such as "radiology".
+func (s *Service) ExportXLSX(scope string) (string, []byte, int, error) {
+	cleanScope, err := safeRelScope(scope)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	source, err := s.resolveSource()
+	if err != nil {
+		return "", nil, 0, err
+	}
+	excelPath := cleanScope
+	if !isXLSXCatalogFile(excelPath) {
+		found := findDirectoryExcelPath(source, cleanScope)
+		if found == "" {
+			return "", nil, 0, ErrFileNotFound
+		}
+		excelPath = found
+	}
+	content, err := source.read(excelPath)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	termScope := cleanScope
+	if isXLSXCatalogFile(termScope) {
+		termScope = path.Dir(termScope)
+		if termScope == "." {
+			termScope = ""
+		}
+	}
+	terms, err := s.AllTermsInScope(termScope)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return path.Base(excelPath), content, len(terms), nil
 }
 
 func intToCell(value int) string {
@@ -233,7 +307,7 @@ func (d *diskSource) walk(visit func(relPath string, content []byte) error) erro
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(p), ".md") {
+		if entry.IsDir() || !isMarkdownCatalogFile(p) || isCatalogMenuMetadataFile(p) {
 			return nil
 		}
 		content, err := os.ReadFile(joinSafe(d.root, p))
@@ -267,7 +341,7 @@ func (e *embedSource) walk(visit func(relPath string, content []byte) error) err
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(p), ".md") {
+		if entry.IsDir() || !isMarkdownCatalogFile(p) || isCatalogMenuMetadataFile(p) {
 			return nil
 		}
 		content, err := fs.ReadFile(termsFS, p)
@@ -290,7 +364,7 @@ func (e *embedSource) list(dir string) ([]fs.DirEntry, error) {
 // ----- tree building --------------------------------------------------------
 
 // buildTree walks the source directory and produces TreeNodes. Files have
-// counts populated; directories aggregate children and have empty counts.
+// counts populated; directories use optional menu metadata files for labels.
 func buildTree(source catalogSource, dir string) ([]TreeNode, error) {
 	entries, err := source.list(dir)
 	if err != nil {
@@ -298,7 +372,6 @@ func buildTree(source catalogSource, dir string) ([]TreeNode, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir() != entries[j].IsDir() {
-			// directories first; within each group sort by name.
 			return entries[i].IsDir()
 		}
 		return entries[i].Name() < entries[j].Name()
@@ -320,11 +393,18 @@ func buildTree(source catalogSource, dir string) ([]TreeNode, error) {
 			if len(children) == 0 {
 				continue
 			}
-			nodes = append(nodes, TreeNode{Name: name, Path: relPath, IsDir: true, Children: children})
+			nodes = append(nodes, TreeNode{
+				Name:      name,
+				Path:      relPath,
+				IsDir:     true,
+				Title:     readDirectoryMenuTitle(source, relPath),
+				ExcelPath: findDirectoryExcelPath(source, relPath),
+				Children:  children,
+			})
 			continue
 		}
 
-		if !strings.HasSuffix(strings.ToLower(name), ".md") {
+		if isCatalogMenuMetadataFile(name) || isXLSXCatalogFile(name) || !isMarkdownCatalogFile(name) {
 			continue
 		}
 		content, err := source.read(relPath)
@@ -377,6 +457,121 @@ func safeRelPath(p string) (string, error) {
 		return "", ErrFileNotFound
 	}
 	return clean, nil
+}
+
+func safeRelScope(p string) (string, error) {
+	clean := strings.TrimSpace(p)
+	clean = strings.TrimPrefix(clean, "./")
+	clean = strings.Trim(clean, "/")
+	if clean == "" {
+		return "", nil
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", ErrFileNotFound
+		}
+	}
+	if isCatalogMenuMetadataFile(clean) {
+		return "", ErrFileNotFound
+	}
+	return clean, nil
+}
+
+func pathWithinScope(relPath string, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	return relPath == scope || strings.HasPrefix(relPath, scope+"/")
+}
+
+func isMarkdownCatalogFile(p string) bool {
+	return strings.HasSuffix(strings.ToLower(path.Base(p)), ".md")
+}
+
+func isXLSXCatalogFile(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	return strings.HasSuffix(base, ".xlsx") && !strings.HasPrefix(base, "~$")
+}
+
+func isCatalogMenuMetadataFile(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	for _, name := range catalogMenuMetadataFileNames {
+		if base == strings.ToLower(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func readDirectoryMenuTitle(source catalogSource, dir string) string {
+	for _, name := range catalogMenuMetadataFileNames {
+		rel := name
+		if dir != "." {
+			rel = dir + "/" + name
+		}
+		content, err := source.read(rel)
+		if err != nil {
+			continue
+		}
+		if title := parseMenuTitle(content); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func findDirectoryExcelPath(source catalogSource, dir string) string {
+	lookupDir := dir
+	if lookupDir == "" {
+		lookupDir = "."
+	}
+	entries, err := source.list(lookupDir)
+	if err != nil {
+		return ""
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+	for _, entry := range entries {
+		if entry.IsDir() || !isXLSXCatalogFile(entry.Name()) {
+			continue
+		}
+		if lookupDir == "." {
+			return entry.Name()
+		}
+		return lookupDir + "/" + entry.Name()
+	}
+	return ""
+}
+
+func parseMenuTitle(content []byte) string {
+	for _, line := range strings.Split(string(content), "\n") {
+		value := strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
+		if value == "" {
+			continue
+		}
+		value = strings.TrimSpace(strings.TrimLeft(value, "#"))
+		for _, prefix := range []string{
+			"menu_title:", "menu_title：",
+			"menu_name:", "menu_name：",
+			"menu:", "menu：",
+			"title:", "title：",
+			"name:", "name：",
+			"菜单名称:", "菜单名称：",
+			"菜单:", "菜单：",
+			"名称:", "名称：",
+		} {
+			if strings.HasPrefix(strings.ToLower(value), prefix) {
+				value = strings.TrimSpace(value[len(prefix):])
+				break
+			}
+		}
+		value = strings.Trim(value, " `\t\r\n\"'")
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func joinSafe(root, rel string) string {

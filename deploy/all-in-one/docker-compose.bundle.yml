@@ -6,7 +6,7 @@ services:
     container_name: ${ASR_CONTAINER_NAME:-asr-all-in-one}
     restart: unless-stopped
     extra_hosts:
-      - 'host.docker.internal:host-gateway'
+      - 'host.docker.internal:${ASR_DOCKER_GATEWAY:-10.248.0.1}'
     ports:
       - '${ASR_HTTP_PORT:-80}:80'
       - '${ASR_HTTPS_PORT:-443}:443'
@@ -32,9 +32,20 @@ services:
       - ./runtime/tmp:/var/lib/asr/tmp
       - ./runtime/uploads:/var/lib/asr/uploads
       - ./runtime/term-catalog:/var/lib/asr/term-catalog
+    networks:
+      - asr-internal
     healthcheck:
       test: ["CMD-SHELL", "/app/scripts/healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 12
       start_period: 240s
+
+networks:
+  asr-internal:
+    name: ${ASR_DOCKER_NETWORK_NAME:-asr-all-in-one-net}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${ASR_DOCKER_SUBNET:-10.248.0.0/24}
+          gateway: ${ASR_DOCKER_GATEWAY:-10.248.0.1}

@@ -19,7 +19,8 @@ type Config struct {
 	Services  ServiceConfig   `mapstructure:"services"`
 	Upload    UploadConfig    `mapstructure:"upload"`
 	Download  DownloadConfig  `mapstructure:"download"`
-	Catalog   CatalogConfig   `mapstructure:"catalog"`
+	Catalog      CatalogConfig      `mapstructure:"catalog"`
+	RulesCatalog RulesCatalogConfig `mapstructure:"rules_catalog"`
 	Gateway   GatewayConfig   `mapstructure:"gateway"`
 	Legacy    LegacyConfig    `mapstructure:"legacy"`
 }
@@ -222,6 +223,12 @@ type CatalogConfig struct {
 	Dir string `mapstructure:"dir"`
 }
 
+// RulesCatalogConfig points at the directory the radiology rules catalog markdown
+// files live in. Empty means "use the snapshot compiled into the binary".
+type RulesCatalogConfig struct {
+	Dir string `mapstructure:"dir"`
+}
+
 // GatewayConfig holds upstream addresses for the gateway app.
 type GatewayConfig struct {
 	ASRAPI   string `mapstructure:"asr_api"`
@@ -282,6 +289,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("download.dir", "downloads")
 	v.SetDefault("download.public_base_path", "/downloads/files")
 	v.SetDefault("catalog.dir", "")
+	v.SetDefault("rules_catalog.dir", "")
 	v.SetDefault("gateway.asr_api", "http://127.0.0.1:10011")
 	v.SetDefault("gateway.admin_api", "http://127.0.0.1:10012")
 	v.SetDefault("gateway.nlp_api", "http://127.0.0.1:10013")

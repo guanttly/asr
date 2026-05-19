@@ -154,6 +154,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/system/terms-catalog.vue'),
       },
       {
+        path: 'system/rules-catalog',
+        name: 'system-rules-catalog',
+        meta: { pageManagedScroll: true, title: '影像规则库浏览', desc: '按科室浏览影像报告书写规则与纠错映射，下载内置 Excel 或上传 xlsx 批量写入纠错规则词库。' },
+        component: () => import('@/pages/system/rules-catalog.vue'),
+      },
+      {
         path: 'system/openapi',
         name: 'system-openapi',
         meta: { pageManagedScroll: true, title: 'OpenAPI 管理', desc: '管理开放平台应用凭证、能力授权、默认工作流与调用日志。' },

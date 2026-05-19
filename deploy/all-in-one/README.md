@@ -50,8 +50,9 @@
 - 发布包解压后的根目录固定为 asr-all-in-one，便于新版本直接覆盖到同一路径后执行升级。
 - 目标服务器解压后执行 install.sh 或 install.sh upgrade，即可自动 load 镜像并启动或原地升级服务。
 - 如果直接执行 `.run` 文件，会自动解包到当前目录并执行 install.sh。
-- 如果在已有 `asr-all-in-one` 目录上再次执行新的 `.run`，安装包会先解包到临时目录，再同步到现有目录：保留现有 `.env`、runtime/mysql、runtime/uploads、runtime/tmp 和已有证书，同时刷新 docker-compose.yml、安装脚本、离线镜像包与 runtime/downloads，并清理旧版本残留的发布文件。
+- 如果在已有 `asr-all-in-one` 目录上再次执行新的 `.run`，安装包会先解包到临时目录，再同步到现有目录：保留现有 `.env`、runtime/mysql、runtime/uploads、runtime/tmp、runtime/term-catalog 和已有证书，同时刷新 docker-compose.yml、安装脚本、离线镜像包与 runtime/downloads，并清理旧版本残留的发布文件。
 - 这样既能避免 MySQL 数据目录因属主为容器用户而在覆盖解包时触发 tar 报错，也能确保升级后实际运行的是新版本 compose 和下载资源；install.sh 会额外备份当前 .env 与 compose 文件。
+- install.sh 会在启动前检查宿主机 IPv4 路由和已有 Docker 网络，自动选择未占用的 Docker 内部网段，并把 `host.docker.internal` 指向该网段网关，避免客户内网与 Docker 默认 172 段冲突。
 - install.sh 会等待容器健康检查通过；如果升级后服务未通过健康检查，脚本会尝试回滚到上一版镜像。
 - install.sh 完成后会输出当前证书的 SAN、推荐访问地址，以及 Windows Chrome/Edge 与 Firefox 的自签证书导入提示。
 - 首次安装时，admin-api 会按 `.env` 中的 `ASR_BOOTSTRAP_ADMIN_USERNAME`、`ASR_BOOTSTRAP_ADMIN_PASSWORD`、`ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME` 自动创建管理员账号；如果同名管理员已存在，则不会覆盖旧密码。
@@ -71,6 +72,7 @@
 
 - ASR 服务地址通过 ASR_SERVICES_ASR 配置。
 - 如果外部 ASR 或 3D-Speaker 就部署在同一台宿主机上，all-in-one 容器内可以直接填写 `http://host.docker.internal:<端口>`；这是容器内访问宿主机的别名，不要求服务器 shell 自己能 `ping host.docker.internal`。
+- `host.docker.internal` 会在安装时写到自动选择的 Docker 内部网关；如需手动指定，可在 `.env` 中设置 `ASR_DOCKER_NETWORK_NAME`、`ASR_DOCKER_SUBNET`，安装脚本会同步生成对应网关。
 - 这里的 `<端口>` 必须是宿主机对外暴露的端口；如果外部容器是 `11001 -> 8000`，all-in-one 里就应该写 `http://host.docker.internal:11001`，而不是 `:8000`。
 - 如果 3D-Speaker 同时承担说话人分离和声纹能力，发布脚本层现在只传一个统一的 `SPEAKER_SERVICE_URL`；生成的发布包会把后端内部的 diarization 和 speaker-analysis 地址都写成同一个值。
 - 如果外部服务部署在另一台机器上，应填写那台机器的实际内网 IP 或域名，例如 `http://192.168.40.223:10002`。

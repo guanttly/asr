@@ -12,6 +12,7 @@ import (
 	appcatalog "github.com/lgt/asr/internal/application/catalog"
 	appfiller "github.com/lgt/asr/internal/application/filler"
 	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
+	apprc "github.com/lgt/asr/internal/application/rulescatalog"
 	appsensitive "github.com/lgt/asr/internal/application/sensitive"
 	appterm "github.com/lgt/asr/internal/application/terminology"
 	appuser "github.com/lgt/asr/internal/application/user"
@@ -123,6 +124,12 @@ func main() {
 	}
 	logger.Info("radiology term catalog loaded", zap.String("source", catalogService.ActivePath()))
 
+	rulesCatalogService := apprc.NewService(cfg.RulesCatalog.Dir)
+	if err := rulesCatalogService.AssertCatalogConsistent(); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("radiology rules catalog loaded", zap.String("source", rulesCatalogService.ActivePath()))
+
 	sensitiveDictRepo := persistence.NewSensitiveDictRepo(db)
 	sensitiveEntryRepo := persistence.NewSensitiveEntryRepo(db)
 	sensitiveService := appsensitive.NewService(
@@ -223,6 +230,7 @@ func main() {
 	userHandler.RegisterProtected(protected)
 	api.NewTermHandler(termService).Register(protected)
 	api.NewTermCatalogHandler(catalogService).Register(protected)
+	api.NewRulesCatalogHandler(rulesCatalogService, persistence.NewDictRepo(db), persistence.NewRuleRepo(db)).Register(protected)
 	api.NewFillerHandler(fillerService).Register(protected)
 	api.NewSensitiveHandler(sensitiveService).Register(protected)
 	api.NewVoiceCommandHandler(voiceCommandService, productFeatures).Register(protected)

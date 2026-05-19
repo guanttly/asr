@@ -1,15 +1,33 @@
 <script setup lang="ts">
 import type { MenuOption } from 'naive-ui'
+import type { CatalogTreeNode } from '@/api/termCatalog'
 
 import { NIcon, NTooltip } from 'naive-ui'
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 
 import { useRoute, useRouter } from 'vue-router'
 
+import { getTermCatalogTree } from '@/api/termCatalog'
+import { getRulesCatalogTree } from '@/api/rulesCatalog'
+import type { RulesTreeNode } from '@/api/rulesCatalog'
 import { useBusinessSocket } from '@/composables/useBusinessSocket'
 import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
+import {
+  catalogMenuLabel,
+  findCatalogParentPaths,
+  TERM_CATALOG_ROUTE,
+  termCatalogDirMenuKey,
+  termCatalogRouteKey,
+} from '@/utils/termCatalogMenu'
+import {
+  findRulesParentPaths,
+  RULES_CATALOG_ROUTE,
+  rulesCatalogDirMenuKey,
+  rulesCatalogMenuLabel,
+  rulesCatalogRouteKey,
+} from '@/utils/rulesCatalogMenu'
 
 const router = useRouter()
 const route = useRoute()
@@ -173,6 +191,70 @@ function renderMenuIcon(icon: keyof typeof menuIconShapes, tooltipLabel: string)
   )
 }
 
+const SYSTEM_TERM_COLLECTION_KEY = 'system-term-collection'
+const SYSTEM_RULES_COLLECTION_KEY = 'system-rules-collection'
+
+const termCatalogTree = ref<CatalogTreeNode[]>([])
+const rulesCatalogTree = ref<RulesTreeNode[]>([])
+const expandedMenuKeys = ref<string[]>([])
+
+function buildTermCatalogMenuOptions(nodes: CatalogTreeNode[]): MenuOption[] {
+  return nodes
+    .map((node): MenuOption | null => {
+      const label = catalogMenuLabel(node)
+      if (node.is_dir) {
+        const children = buildTermCatalogMenuOptions(node.children || [])
+        if (!children.length)
+          return null
+        return {
+          label,
+          key: termCatalogDirMenuKey(node.path),
+          children,
+        }
+      }
+      return {
+        label,
+        key: termCatalogRouteKey(node.path),
+      }
+    })
+    .filter((item): item is MenuOption => Boolean(item))
+}
+
+async function loadTermCatalogMenu() {
+  try {
+    const result = await getTermCatalogTree()
+    if (result.data.items?.length)
+      termCatalogTree.value = result.data.items
+  }
+  catch {
+    termCatalogTree.value = []
+  }
+  try {
+    const result = await getRulesCatalogTree()
+    if (result.data.items?.length)
+      rulesCatalogTree.value = result.data.items
+  }
+  catch {
+    rulesCatalogTree.value = []
+  }
+  expandedMenuKeys.value = resolveExpandedMenuKeys()
+}
+
+function buildRulesCatalogMenuOptions(nodes: RulesTreeNode[]): MenuOption[] {
+  return nodes
+    .map((node): MenuOption | null => {
+      const label = rulesCatalogMenuLabel(node)
+      if (node.is_dir) {
+        const children = buildRulesCatalogMenuOptions(node.children || [])
+        if (!children.length)
+          return null
+        return { label, key: rulesCatalogDirMenuKey(node.path), children }
+      }
+      return { label, key: rulesCatalogRouteKey(node.path) }
+    })
+    .filter((item): item is MenuOption => Boolean(item))
+}
+
 const menuOptions = computed<MenuOption[]>(() => {
   const applicationChildren: MenuOption[] = [
     { label: '实时语音识别', key: '/realtime', icon: renderMenuIcon('realtime', '实时语音识别') },
@@ -190,6 +272,9 @@ const menuOptions = computed<MenuOption[]>(() => {
   ]
   if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
     terminologyChildren.splice(3, 0, { label: '控制指令库', key: '/terminology/voice-commands', icon: renderMenuIcon('terminology', '控制指令库') })
+
+  const termCollectionChildren = buildTermCatalogMenuOptions(termCatalogTree.value)
+  const rulesCollectionChildren = buildRulesCatalogMenuOptions(rulesCatalogTree.value)
 
   return [
     {
@@ -225,7 +310,22 @@ const menuOptions = computed<MenuOption[]>(() => {
       icon: renderMenuIcon('systemSection', '系统管理'),
       children: [
         { label: '用户管理', key: '/system/users', icon: renderMenuIcon('users', '用户管理') },
-        { label: '影像术语库', key: '/system/terms-catalog', icon: renderMenuIcon('terminologySection', '影像术语库') },
+        {
+          label: '术语收集',
+          key: SYSTEM_TERM_COLLECTION_KEY,
+          icon: renderMenuIcon('terminologySection', '术语收集'),
+          children: termCollectionChildren.length
+            ? termCollectionChildren
+            : [{ label: '暂无术语目录', key: 'system-term-empty', disabled: true }],
+        },
+        {
+          label: '规则收集',
+          key: SYSTEM_RULES_COLLECTION_KEY,
+          icon: renderMenuIcon('terminologySection', '规则收集'),
+          children: rulesCollectionChildren.length
+            ? rulesCollectionChildren
+            : [{ label: '暂无规则目录', key: 'system-rules-empty', disabled: true }],
+        },
         { label: '对接管理', key: '/system/openapi', icon: renderMenuIcon('openapi', '对接管理') },
         { label: '终端下载', key: '/downloads', icon: renderMenuIcon('downloads', '终端下载') },
       ],
@@ -245,6 +345,36 @@ function resolveMenuSection(path: string) {
   if (path.startsWith('/dashboard'))
     return null
   return 'applications'
+}
+
+function currentTermCatalogPath() {
+  const value = route.query.path
+  if (typeof value === 'string')
+    return value
+  if (Array.isArray(value) && typeof value[0] === 'string')
+    return value[0]
+  return null
+}
+
+function resolveExpandedMenuKeys() {
+  if (route.path.startsWith(TERM_CATALOG_ROUTE)) {
+    const keys = ['system', SYSTEM_TERM_COLLECTION_KEY]
+    const catalogPath = currentTermCatalogPath()
+    if (catalogPath) {
+      keys.push(...findCatalogParentPaths(termCatalogTree.value, catalogPath).map(termCatalogDirMenuKey))
+    }
+    return keys
+  }
+  if (route.path.startsWith(RULES_CATALOG_ROUTE)) {
+    const keys = ['system', SYSTEM_RULES_COLLECTION_KEY]
+    const catalogPath = currentTermCatalogPath()
+    if (catalogPath) {
+      keys.push(...findRulesParentPaths(rulesCatalogTree.value, catalogPath).map(rulesCatalogDirMenuKey))
+    }
+    return keys
+  }
+  const sectionKey = resolveMenuSection(route.path)
+  return sectionKey ? [sectionKey] : []
 }
 
 const currentPath = computed(() => {
@@ -269,8 +399,10 @@ const currentPath = computed(() => {
     return '/system/openapi'
   if (path.startsWith('/system/users'))
     return '/system/users'
-  if (path.startsWith('/system/terms-catalog'))
-    return '/system/terms-catalog'
+  if (path.startsWith('/system/terms-catalog')) {
+    const catalogPath = currentTermCatalogPath()
+    return catalogPath ? termCatalogRouteKey(catalogPath) : '/system/terms-catalog'
+  }
   if (path.startsWith('/terminology'))
     return '/terminology'
   if (path.startsWith('/transcription'))
@@ -279,22 +411,17 @@ const currentPath = computed(() => {
     return '/realtime'
   return path
 })
-const initialExpandedSection = resolveMenuSection(route.path)
-const expandedMenuKeys = ref<string[]>(initialExpandedSection ? [initialExpandedSection] : [])
-
 watch(
-  () => route.path,
-  (path) => {
-    const sectionKey = resolveMenuSection(path)
-    if (!sectionKey) {
-      expandedMenuKeys.value = []
-      return
-    }
-    if (!expandedMenuKeys.value.includes(sectionKey))
-      expandedMenuKeys.value = [sectionKey]
+  () => route.fullPath,
+  () => {
+    expandedMenuKeys.value = resolveExpandedMenuKeys()
   },
   { immediate: true },
 )
+
+watch(termCatalogTree, () => {
+  expandedMenuKeys.value = resolveExpandedMenuKeys()
+})
 
 const contentWrapperClass = computed(() => route.meta.pageManagedScroll ? 'content-frame' : 'content-scroll')
 const businessSocketLabel = computed(() => {
@@ -345,11 +472,13 @@ const businessSocketTooltip = computed(() => lastPongAt.value
 const siderToggleTitle = computed(() => appStore.siderCollapsed ? '展开导航' : '收起导航')
 
 function handleMenuSelect(key: string) {
+  if (key.startsWith('system-term-dir:') || key === 'system-term-empty')
+    return
   router.push(key)
 }
 
 function handleMenuExpand(keys: string[]) {
-  expandedMenuKeys.value = keys.slice(-1)
+  expandedMenuKeys.value = keys
 }
 
 function handleLogout() {
@@ -362,6 +491,8 @@ const buildVersion = __APP_VERSION__
 const buildCode = __APP_BUILD_CODE__
 const buildDate = __APP_BUILD_DATE__
 const buildTitle = `构建日期 ${buildDate}`
+
+onMounted(loadTermCatalogMenu)
 </script>
 
 <template>
@@ -411,6 +542,8 @@ const buildTitle = `构建日期 ${buildDate}`
         :collapsed="appStore.siderCollapsed"
         :collapsed-width="88"
         :collapsed-icon-size="24"
+        :root-indent="18"
+        :indent="18"
         accordion
         @update:value="handleMenuSelect"
         @update:expanded-keys="handleMenuExpand"

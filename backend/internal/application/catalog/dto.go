@@ -3,10 +3,11 @@ package catalog
 // TreeNode is one entry in the catalog directory tree. A node is either a
 // directory (with Children) or a file (with Path pointing at the markdown).
 type TreeNode struct {
-	Name       string     `json:"name"`               // display name (file or dir)
-	Path       string     `json:"path"`               // forward-slash path relative to the catalog root
+	Name       string     `json:"name"` // display name (file or dir)
+	Path       string     `json:"path"` // forward-slash path relative to the catalog root
 	IsDir      bool       `json:"is_dir"`
-	Title      string     `json:"title,omitempty"`    // for files: parsed H1 title; falls back to Name
+	Title      string     `json:"title,omitempty"` // files: parsed H1; dirs: menu metadata title
+	ExcelPath  string     `json:"excel_path,omitempty"`
 	TotalTerms int        `json:"total_terms,omitempty"`
 	L1Count    int        `json:"l1_count,omitempty"`
 	L2Count    int        `json:"l2_count,omitempty"`

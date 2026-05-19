@@ -1,4 +1,4 @@
-.PHONY: all build-backend build-frontend dev-backend dev-frontend lint clean release-all-in-one
+.PHONY: all build-backend build-frontend dev-backend dev-frontend lint clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
 # 语音转写系统 Monorepo Makefile
@@ -109,11 +109,27 @@ release-all-in-one:
 	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
 
 # --- Utilities ---
-# 同步影像术语库 markdown 快照到 backend embed 目录（原始 docs/terms 保持不变）。
-sync-term-catalog:
-	rm -f backend/internal/application/catalog/terms/*.md
-	cp docs/terms/*.md backend/internal/application/catalog/terms/
-	cd backend && go test ./internal/application/catalog/... -run TestEmbeddedSectionsParse
+# 根据影像科 markdown 生成随目录发布的术语 Excel。
+generate-radiology-term-excel:
+	cd backend && go run ./cmd/term-catalog-xlsx -source ../docs/terms -scope radiology -out ../docs/terms/radiology/影像科术语.xlsx
+
+# 同步术语库快照到 backend embed 目录（原始 docs/terms 保持不变）。
+sync-term-catalog: generate-radiology-term-excel
+	rm -rf backend/internal/application/catalog/terms
+	mkdir -p backend/internal/application/catalog/terms
+	cp -a docs/terms/. backend/internal/application/catalog/terms/
+	cd backend && go test ./internal/application/catalog/... -run TestEmbeddedCatalogParsesCleanly
+
+# 根据影像科规则 markdown 生成随目录发布的规则 Excel。
+generate-radiology-rules-excel:
+	cd backend && go run ./cmd/rules-catalog-xlsx -source ../docs/rules -scope radiology -out ../docs/rules/radiology/影像规则.xlsx
+
+# 同步规则库快照到 backend embed 目录（原始 docs/rules 保持不变）。
+sync-rules-catalog: generate-radiology-rules-excel
+	rm -rf backend/internal/application/rulescatalog/rules
+	mkdir -p backend/internal/application/rulescatalog/rules
+	cp -a docs/rules/. backend/internal/application/rulescatalog/rules/
+	cd backend && go test ./internal/application/rulescatalog/... -run TestEmbeddedRulesCatalogParsesCleanly
 
 # 清理常见构建产物与前端缓存。
 clean:

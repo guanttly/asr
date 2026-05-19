@@ -58,13 +58,17 @@ func (h *TermHandler) Register(group *gin.RouterGroup) {
 	group.PUT("/term-dicts/:id", h.UpdateDict)
 	group.DELETE("/term-dicts/:id", h.DeleteDict)
 	group.GET("/term-dicts/:id/entries", h.ListEntries)
+	group.DELETE("/term-dicts/:id/entries", h.ClearEntries)
 	group.POST("/term-dicts/:id/entries", h.CreateEntry)
 	group.PUT("/term-dicts/:id/entries/:entryId", h.UpdateEntry)
 	group.DELETE("/term-dicts/:id/entries/:entryId", h.DeleteEntry)
 	group.GET("/term-dicts/:id/rules", h.ListRules)
+	group.DELETE("/term-dicts/:id/rules", h.ClearRules)
 	group.POST("/term-dicts/:id/rules", h.CreateRule)
 	group.PUT("/term-dicts/:id/rules/:ruleId", h.UpdateRule)
 	group.DELETE("/term-dicts/:id/rules/:ruleId", h.DeleteRule)
+	group.POST("/term-dicts/:id/rules/import", h.ImportRules)
+	group.GET("/term-dicts/:id/rules/export", h.ExportRules)
 	group.POST("/term-dicts/:id/import", h.BatchImport)
 	group.GET("/term-dicts/:id/export", h.ExportEntries)
 }
@@ -218,6 +222,22 @@ func (h *TermHandler) DeleteEntry(c *gin.Context) {
 	response.Success(c, gin.H{"deleted": true})
 }
 
+func (h *TermHandler) ClearEntries(c *gin.Context) {
+	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
+		return
+	}
+
+	deleted, err := h.service.ClearEntries(c.Request.Context(), dictID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{"deleted": deleted})
+}
+
 func (h *TermHandler) ListRules(c *gin.Context) {
 	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -299,6 +319,120 @@ func (h *TermHandler) DeleteRule(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"deleted": true})
+}
+
+func (h *TermHandler) ClearRules(c *gin.Context) {
+	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
+		return
+	}
+
+	deleted, err := h.service.ClearRules(c.Request.Context(), dictID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{"deleted": deleted})
+}
+
+// ImportRules imports correction rules from an .xlsx workbook into one dict.
+// The accepted columns are the same as the rules-catalog export.
+func (h *TermHandler) ImportRules(c *gin.Context) {
+	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "field 'file' required")
+		return
+	}
+	if fileHeader.Size > maxRulesImportFileSize {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "导入文件不能超过 5MB")
+		return
+	}
+	if strings.ToLower(filepath.Ext(fileHeader.Filename)) != ".xlsx" {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "仅支持 XLSX 文件导入")
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(file, maxRulesImportFileSize+1))
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	if len(raw) > maxRulesImportFileSize {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "导入文件不能超过 5MB")
+		return
+	}
+
+	rows, err := parseXLSXRows(raw)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "parse xlsx: "+err.Error())
+		return
+	}
+	rules, err := ruleImportRowsToRules(rows)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+	if err := validateRuleImportRules(rules); err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	imported, err := h.service.BatchCreateRules(c.Request.Context(), dictID, rules)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{"imported": imported})
+}
+
+// ExportRules streams an .xlsx that can round-trip through ImportRules.
+func (h *TermHandler) ExportRules(c *gin.Context) {
+	dictID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid dict id")
+		return
+	}
+
+	rules, err := h.service.GetDictRules(c.Request.Context(), dictID)
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	wb := xlsxio.NewWorkbook("纠错规则")
+	wb.AppendRow("pattern", "replacement", "match_type", "priority", "conflict_group", "enabled")
+	for _, rule := range rules {
+		enabled := "否"
+		if rule.Enabled {
+			enabled = "是"
+		}
+		wb.AppendRow(rule.Pattern, rule.Replacement, rule.MatchType, strconv.Itoa(rule.Priority), rule.ConflictGroup, enabled)
+	}
+
+	var buf bytes.Buffer
+	if err := wb.Encode(&buf); err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	filename := fmt.Sprintf("term-dict-%d-rules.xlsx", dictID)
+	c.Header("Content-Disposition", "attachment; filename="+filename)
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }
 
 func (h *TermHandler) BatchImport(c *gin.Context) {

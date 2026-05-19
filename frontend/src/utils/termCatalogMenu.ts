@@ -2,6 +2,10 @@ import type { CatalogTreeNode } from '@/api/termCatalog'
 
 export const TERM_CATALOG_ROUTE = '/system/terms-catalog'
 
+const catalogDirectoryLabels: Record<string, string> = {
+  radiology: '影像科',
+}
+
 export function termCatalogRouteKey(path: string) {
   return `${TERM_CATALOG_ROUTE}?path=${encodeURIComponent(path)}`
 }
@@ -25,7 +29,8 @@ export function catalogMenuLabel(node: CatalogTreeNode) {
       return '总览'
   }
 
-  const label = node.title?.trim() || fileBase || node.name
+  const dirKey = node.path.split('/').pop()?.toLowerCase() || node.name.toLowerCase()
+  const label = node.title?.trim() || catalogDirectoryLabels[dirKey] || fileBase || node.name
   return label.replace(/\.md$/i, '').replace(/\s*·\s*/g, ' · ')
 }
 

@@ -16,12 +16,16 @@ import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import {
   catalogMenuLabel,
+  findCatalogNodeByPath,
   findCatalogParentPaths,
+  findFirstCatalogFile,
   TERM_CATALOG_ROUTE,
   termCatalogDirMenuKey,
   termCatalogRouteKey,
 } from '@/utils/termCatalogMenu'
 import {
+  findFirstRulesFile,
+  findRulesNodeByPath,
   findRulesParentPaths,
   RULES_CATALOG_ROUTE,
   rulesCatalogDirMenuKey,
@@ -199,25 +203,36 @@ const rulesCatalogTree = ref<RulesTreeNode[]>([])
 const expandedMenuKeys = ref<string[]>([])
 
 function buildTermCatalogMenuOptions(nodes: CatalogTreeNode[]): MenuOption[] {
-  return nodes
-    .map((node): MenuOption | null => {
-      const label = catalogMenuLabel(node)
-      if (node.is_dir) {
-        const children = buildTermCatalogMenuOptions(node.children || [])
-        if (!children.length)
+  const directories = nodes.filter(node => node.is_dir)
+  if (directories.length) {
+    return directories
+      .map((node): MenuOption | null => {
+        const target = findFirstCatalogFile(node.children || [])
+        if (!target)
           return null
         return {
-          label,
+          label: catalogMenuLabel(node),
           key: termCatalogDirMenuKey(node.path),
-          children,
         }
-      }
-      return {
-        label,
-        key: termCatalogRouteKey(node.path),
-      }
-    })
-    .filter((item): item is MenuOption => Boolean(item))
+      })
+      .filter((item): item is MenuOption => Boolean(item))
+  }
+
+  const target = findFirstCatalogFile(nodes)
+  return target
+    ? [{ label: '影像科', key: termCatalogDirMenuKey('') }]
+    : []
+}
+
+function resolveTermCatalogScopeTarget(scopePath: string) {
+  if (!scopePath)
+    return findFirstCatalogFile(termCatalogTree.value)
+  const node = findCatalogNodeByPath(termCatalogTree.value, scopePath)
+  if (!node)
+    return null
+  if (!node.is_dir)
+    return node
+  return findFirstCatalogFile(node.children || [])
 }
 
 async function loadTermCatalogMenu() {
@@ -241,18 +256,33 @@ async function loadTermCatalogMenu() {
 }
 
 function buildRulesCatalogMenuOptions(nodes: RulesTreeNode[]): MenuOption[] {
-  return nodes
-    .map((node): MenuOption | null => {
-      const label = rulesCatalogMenuLabel(node)
-      if (node.is_dir) {
-        const children = buildRulesCatalogMenuOptions(node.children || [])
-        if (!children.length)
+  const directories = nodes.filter(node => node.is_dir)
+  if (directories.length) {
+    return directories
+      .map((node): MenuOption | null => {
+        const target = findFirstRulesFile(node.children || [])
+        if (!target)
           return null
-        return { label, key: rulesCatalogDirMenuKey(node.path), children }
-      }
-      return { label, key: rulesCatalogRouteKey(node.path) }
-    })
-    .filter((item): item is MenuOption => Boolean(item))
+        return { label: rulesCatalogMenuLabel(node), key: rulesCatalogDirMenuKey(node.path) }
+      })
+      .filter((item): item is MenuOption => Boolean(item))
+  }
+
+  const target = findFirstRulesFile(nodes)
+  return target
+    ? [{ label: '影像科', key: rulesCatalogDirMenuKey('') }]
+    : []
+}
+
+function resolveRulesCatalogScopeTarget(scopePath: string) {
+  if (!scopePath)
+    return findFirstRulesFile(rulesCatalogTree.value)
+  const node = findRulesNodeByPath(rulesCatalogTree.value, scopePath)
+  if (!node)
+    return null
+  if (!node.is_dir)
+    return node
+  return findFirstRulesFile(node.children || [])
 }
 
 const menuOptions = computed<MenuOption[]>(() => {
@@ -358,20 +388,10 @@ function currentTermCatalogPath() {
 
 function resolveExpandedMenuKeys() {
   if (route.path.startsWith(TERM_CATALOG_ROUTE)) {
-    const keys = ['system', SYSTEM_TERM_COLLECTION_KEY]
-    const catalogPath = currentTermCatalogPath()
-    if (catalogPath) {
-      keys.push(...findCatalogParentPaths(termCatalogTree.value, catalogPath).map(termCatalogDirMenuKey))
-    }
-    return keys
+    return ['system', SYSTEM_TERM_COLLECTION_KEY]
   }
   if (route.path.startsWith(RULES_CATALOG_ROUTE)) {
-    const keys = ['system', SYSTEM_RULES_COLLECTION_KEY]
-    const catalogPath = currentTermCatalogPath()
-    if (catalogPath) {
-      keys.push(...findRulesParentPaths(rulesCatalogTree.value, catalogPath).map(rulesCatalogDirMenuKey))
-    }
-    return keys
+    return ['system', SYSTEM_RULES_COLLECTION_KEY]
   }
   const sectionKey = resolveMenuSection(route.path)
   return sectionKey ? [sectionKey] : []
@@ -401,7 +421,25 @@ const currentPath = computed(() => {
     return '/system/users'
   if (path.startsWith('/system/terms-catalog')) {
     const catalogPath = currentTermCatalogPath()
-    return catalogPath ? termCatalogRouteKey(catalogPath) : '/system/terms-catalog'
+    if (!catalogPath)
+      return '/system/terms-catalog'
+    const parentPath = findCatalogParentPaths(termCatalogTree.value, catalogPath)[0]
+    if (parentPath)
+      return termCatalogDirMenuKey(parentPath)
+    if (findCatalogNodeByPath(termCatalogTree.value, catalogPath))
+      return termCatalogDirMenuKey('')
+    return termCatalogRouteKey(catalogPath)
+  }
+  if (path.startsWith('/system/rules-catalog')) {
+    const catalogPath = currentTermCatalogPath()
+    if (!catalogPath)
+      return '/system/rules-catalog'
+    const parentPath = findRulesParentPaths(rulesCatalogTree.value, catalogPath)[0]
+    if (parentPath)
+      return rulesCatalogDirMenuKey(parentPath)
+    if (findRulesNodeByPath(rulesCatalogTree.value, catalogPath))
+      return rulesCatalogDirMenuKey('')
+    return rulesCatalogRouteKey(catalogPath)
   }
   if (path.startsWith('/terminology'))
     return '/terminology'
@@ -472,8 +510,22 @@ const businessSocketTooltip = computed(() => lastPongAt.value
 const siderToggleTitle = computed(() => appStore.siderCollapsed ? '展开导航' : '收起导航')
 
 function handleMenuSelect(key: string) {
-  if (key.startsWith('system-term-dir:') || key === 'system-term-empty')
+  if (key === 'system-term-empty' || key === 'system-rules-empty')
     return
+  if (key.startsWith('system-term-dir:')) {
+    const scopePath = key.replace('system-term-dir:', '')
+    const target = resolveTermCatalogScopeTarget(scopePath)
+    if (target)
+      router.push(termCatalogRouteKey(target.path))
+    return
+  }
+  if (key.startsWith('system-rules-dir:')) {
+    const scopePath = key.replace('system-rules-dir:', '')
+    const target = resolveRulesCatalogScopeTarget(scopePath)
+    if (target)
+      router.push(rulesCatalogRouteKey(target.path))
+    return
+  }
   router.push(key)
 }
 

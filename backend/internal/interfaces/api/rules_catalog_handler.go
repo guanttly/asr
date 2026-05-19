@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -163,6 +164,10 @@ func (h *RulesCatalogHandler) BatchImport(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}
+	if err := validateRuleImportRules(rules); err != nil {
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
 
 	imported := 0
 	for _, r := range rules {
@@ -219,12 +224,12 @@ func ruleImportRowsToRules(rows [][]string) ([]domain.CorrectionRule, error) {
 
 	results := make([]domain.CorrectionRule, 0, len(rows)-start)
 	for _, row := range rows[start:] {
-		pattern := cellAt(row, idxPattern)
-		if pattern == "" {
+		matchType := normaliseRuleMatchTypeStr(cellAt(row, idxMatchType))
+		pattern := normalizeRuleImportPattern(cellAt(row, idxPattern), matchType)
+		replacement := cellAt(row, idxReplacement)
+		if pattern == "" && matchType != string(domain.RuleMatchNumberNormalize) {
 			continue
 		}
-		replacement := cellAt(row, idxReplacement)
-		matchType := normaliseRuleMatchTypeStr(cellAt(row, idxMatchType))
 		priority := parseIntCell(cellAt(row, idxPriority), 100)
 		conflictGroup := cellAt(row, idxConflictGroup)
 		enabled := parseEnabledStr(cellAt(row, idxEnabled))
@@ -261,12 +266,40 @@ func cellAt(row []string, idx int) string {
 
 func normaliseRuleMatchTypeStr(v string) string {
 	switch strings.ToLower(v) {
-	case "regex", "正则":
+	case "regex", "regexp", "正则", "正则表达式", "高级匹配":
 		return "regex"
-	case "number_normalize", "数值归一", "数字归一":
+	case "number_normalize", "number-normalize", "数值归一", "数字归一", "数字格式自动规范":
 		return "number_normalize"
 	}
 	return "literal"
+}
+
+func normalizeRuleImportPattern(pattern string, matchType string) string {
+	if matchType != string(domain.RuleMatchRegex) {
+		return pattern
+	}
+	pattern = strings.ReplaceAll(pattern, `\|`, "|")
+	pattern = strings.ReplaceAll(pattern, `\-`, "-")
+	return pattern
+}
+
+func validateRuleImportRules(rules []domain.CorrectionRule) error {
+	for i, rule := range rules {
+		switch rule.MatchType {
+		case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize:
+		default:
+			return fmt.Errorf("第 %d 条规则的匹配方式无效: %s", i+1, rule.MatchType)
+		}
+		if rule.MatchType != domain.RuleMatchNumberNormalize && strings.TrimSpace(rule.Pattern) == "" {
+			return fmt.Errorf("第 %d 条规则缺少错误模式", i+1)
+		}
+		if rule.MatchType == domain.RuleMatchRegex {
+			if _, err := regexp.Compile(rule.Pattern); err != nil {
+				return fmt.Errorf("第 %d 条规则的正则表达式无效: %s: %v", i+1, rule.Pattern, err)
+			}
+		}
+	}
+	return nil
 }
 
 func parseIntCell(v string, defaultVal int) int {

@@ -3,6 +3,8 @@ import { NButton, NTag, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref } from 'vue'
 
 import {
+  clearTermEntries,
+  clearTermRules,
   createTermDict,
   createTermEntry,
   createTermRule,
@@ -11,14 +13,17 @@ import {
   deleteTermRule,
   downloadTermImportTemplate,
   exportTermEntries,
+  exportTermRules,
   getTermDicts,
   getTermEntries,
   getTermRules,
   importTermEntries,
+  importTermRules,
   updateTermDict,
   updateTermEntry,
   updateTermRule,
 } from '@/api/terminology'
+import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 
 interface DictItem {
@@ -72,6 +77,7 @@ interface RulePreviewState {
 }
 
 const message = useMessage()
+const confirmAction = useConfirmActionDialog()
 const confirmDelete = useDeleteConfirmDialog()
 const loading = ref(false)
 const entryLoading = ref(false)
@@ -80,6 +86,9 @@ const dictSaving = ref(false)
 const entrySaving = ref(false)
 const ruleSaving = ref(false)
 const importingEntries = ref(false)
+const importingRules = ref(false)
+const clearingEntries = ref(false)
+const clearingRules = ref(false)
 const deletingDictId = ref<number | null>(null)
 const deletingEntryId = ref<number | null>(null)
 const deletingRuleId = ref<number | null>(null)
@@ -92,6 +101,7 @@ const editingEntryId = ref<number | null>(null)
 const editingRuleId = ref<number | null>(null)
 const currentDictId = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
+const ruleImportFileInput = ref<HTMLInputElement | null>(null)
 const lastImportResult = ref<{ imported: number, skipped: number } | null>(null)
 const detailTab = ref<'entries' | 'rules'>('entries')
 const dicts = ref<DictItem[]>([])
@@ -126,16 +136,24 @@ const ruleConflictWarnings = computed(() => {
   for (const rule of rules.value) {
     if (!rule.enabled || rule.match_type === 'number_normalize')
       continue
-    const key = rule.conflict_group?.trim() || `${rule.match_type}:${rule.pattern.trim()}`
-    if (!key.endsWith(':')) {
-      const items = groups.get(key) || []
-      items.push(rule)
-      groups.set(key, items)
-    }
+    const pattern = rule.pattern.trim()
+    if (!pattern)
+      continue
+    const key = `${rule.match_type}:${pattern}`
+    const items = groups.get(key) || []
+    items.push(rule)
+    groups.set(key, items)
   }
   return Array.from(groups.entries())
     .filter(([, items]) => items.length > 1)
-    .map(([key, items]) => `${key} 存在 ${items.length} 条启用规则，请调整优先级或关闭重复规则。`)
+    .map(([, items]) => {
+      const sample = items[0]
+      const pattern = sample.pattern.trim()
+      const replacements = new Set(items.map(rule => rule.replacement.trim()))
+      if (replacements.size > 1)
+        return `匹配条件「${pattern}」存在 ${items.length} 条启用规则，且替换结果不一致，请只保留一条。`
+      return `匹配条件「${pattern}」重复启用 ${items.length} 次，可删除重复规则。`
+    })
 })
 
 const ruleMatchMeta: Record<RuleMatchType, RuleMatchMeta> = {
@@ -575,6 +593,127 @@ async function handleExportEntries() {
   }
 }
 
+async function handleClearEntries() {
+  if (!currentDictId.value || !currentDict.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  if (!entries.value.length) {
+    message.info('当前词库没有可清空的词条')
+    return
+  }
+
+  const confirmed = await confirmAction({
+    title: '确认清空术语词条',
+    message: `将要清空词库「${currentDict.value.name}」下的全部术语词条。`,
+    description: '此操作只删除词条，不删除词库与纠错规则；删除后不可恢复。',
+    positiveText: '确认清空',
+    positiveType: 'error',
+  })
+  if (!confirmed)
+    return
+
+  clearingEntries.value = true
+  try {
+    const result = await clearTermEntries(currentDictId.value)
+    message.success(`已清空 ${result.data.deleted} 条词条`)
+    await loadEntries(currentDictId.value)
+  }
+  catch {
+    message.error('词条清空失败')
+  }
+  finally {
+    clearingEntries.value = false
+  }
+}
+
+function chooseRuleImportFile() {
+  if (!currentDictId.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  ruleImportFileInput.value?.click()
+}
+
+async function handleRuleImportFileSelected(event: Event) {
+  const file = (event.target as HTMLInputElement | null)?.files?.[0]
+  if (!file || !currentDictId.value)
+    return
+  if (file.size > 5 * 1024 * 1024) {
+    message.warning('导入文件不能超过 5MB')
+    return
+  }
+  const formData = new FormData()
+  formData.append('file', file)
+  importingRules.value = true
+  try {
+    const result = await importTermRules(currentDictId.value, formData)
+    message.success(`已导入 ${result.data.imported} 条纠错规则`)
+    await loadRules(currentDictId.value)
+  }
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || '纠错规则导入失败，请确认文件格式为 XLSX')
+  }
+  finally {
+    importingRules.value = false
+    if (ruleImportFileInput.value)
+      ruleImportFileInput.value.value = ''
+  }
+}
+
+async function handleExportRules() {
+  if (!currentDictId.value || !currentDict.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  try {
+    const result = await exportTermRules(currentDictId.value)
+    const blob = result.data instanceof Blob
+      ? result.data
+      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const safeName = currentDict.value.name.replace(/[\\/:*?"<>|]/g, '_')
+    triggerBlobDownload(blob, `${safeName}-纠错规则.xlsx`)
+  }
+  catch {
+    message.error('纠错规则导出失败')
+  }
+}
+
+async function handleClearRules() {
+  if (!currentDictId.value || !currentDict.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  if (!rules.value.length) {
+    message.info('当前词库没有可清空的规则')
+    return
+  }
+
+  const confirmed = await confirmAction({
+    title: '确认清空纠错规则',
+    message: `将要清空词库「${currentDict.value.name}」下的全部纠错规则。`,
+    description: '此操作只删除纠错规则，不删除词库与术语词条；删除后不可恢复。',
+    positiveText: '确认清空',
+    positiveType: 'error',
+  })
+  if (!confirmed)
+    return
+
+  clearingRules.value = true
+  try {
+    const result = await clearTermRules(currentDictId.value)
+    message.success(`已清空 ${result.data.deleted} 条纠错规则`)
+    await loadRules(currentDictId.value)
+  }
+  catch {
+    message.error('纠错规则清空失败')
+  }
+  finally {
+    clearingRules.value = false
+  }
+}
+
 function triggerBlobDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -896,6 +1035,9 @@ onMounted(loadDicts)
               <NButton :disabled="!currentDictId" quaternary size="small" @click="handleExportEntries">
                 导出 Excel
               </NButton>
+              <NButton :disabled="!currentDictId || !entries.length" quaternary type="error" size="small" :loading="clearingEntries" @click="handleClearEntries">
+                清空词条
+              </NButton>
               <NButton :disabled="!currentDictId" quaternary size="small" @click="openCreateEntryModal">
                 新增词条
               </NButton>
@@ -909,8 +1051,18 @@ onMounted(loadDicts)
               </NAlert>
             </div>
             <div class="mb-3 flex justify-end gap-2 shrink-0">
+              <input ref="ruleImportFileInput" type="file" accept=".xlsx" class="hidden" @change="handleRuleImportFileSelected">
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && loadRules(currentDictId)">
                 刷新
+              </NButton>
+              <NButton :disabled="!currentDictId" quaternary size="small" :loading="importingRules" @click="chooseRuleImportFile">
+                批量导入
+              </NButton>
+              <NButton :disabled="!currentDictId" quaternary size="small" @click="handleExportRules">
+                导出 Excel
+              </NButton>
+              <NButton :disabled="!currentDictId || !rules.length" quaternary type="error" size="small" :loading="clearingRules" @click="handleClearRules">
+                清空规则
               </NButton>
               <NButton :disabled="!currentDictId" quaternary size="small" @click="openCreateRuleModal">
                 新增规则

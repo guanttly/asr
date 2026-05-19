@@ -2,6 +2,10 @@ import type { RulesTreeNode } from '@/api/rulesCatalog'
 
 export const RULES_CATALOG_ROUTE = '/system/rules-catalog'
 
+const rulesDirectoryLabels: Record<string, string> = {
+  radiology: '影像科',
+}
+
 export function rulesCatalogRouteKey(path: string) {
   return `${RULES_CATALOG_ROUTE}?path=${encodeURIComponent(path)}`
 }
@@ -24,7 +28,8 @@ export function rulesCatalogMenuLabel(node: RulesTreeNode) {
     if (fileBase.toLowerCase() === 'readme')
       return '总览'
   }
-  const label = node.title?.trim() || fileBase || node.name
+  const dirKey = node.path.split('/').pop()?.toLowerCase() || node.name.toLowerCase()
+  const label = node.title?.trim() || rulesDirectoryLabels[dirKey] || fileBase || node.name
   return label.replace(/\.md$/i, '').replace(/\s*·\s*/g, ' · ')
 }
 

@@ -23,6 +23,7 @@ type EntryRepository interface {
 // RuleRepository manages correction rules.
 type RuleRepository interface {
 	Create(ctx context.Context, rule *CorrectionRule) error
+	BatchCreate(ctx context.Context, rules []CorrectionRule) error
 	GetByID(ctx context.Context, id uint64) (*CorrectionRule, error)
 	ListByDict(ctx context.Context, dictID uint64) ([]CorrectionRule, error)
 	Update(ctx context.Context, rule *CorrectionRule) error

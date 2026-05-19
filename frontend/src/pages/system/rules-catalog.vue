@@ -6,7 +6,7 @@ import { NButton, NCard, NEmpty, NMenu, NSpin, NTag, useMessage } from 'naive-ui
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { downloadRulesCatalogXlsx, getRulesCatalogFile, getRulesCatalogTree, importRulesCatalogXlsx } from '@/api/rulesCatalog'
+import { downloadRulesCatalogXlsx, getRulesCatalogFile, getRulesCatalogTree } from '@/api/rulesCatalog'
 import {
   findFirstRulesFile,
   findRulesNodeByPath,
@@ -25,7 +25,6 @@ const treeLoading = ref(false)
 const detail = ref<RulesFileDetail | null>(null)
 const detailLoading = ref(false)
 const downloading = ref(false)
-const importing = ref(false)
 const selectedPath = ref<string | null>(null)
 const catalogExpandedKeys = ref<string[]>([])
 
@@ -34,9 +33,12 @@ const markdown = new MarkdownIt({ html: false, linkify: false, breaks: false })
 const catalogMenuOptions = computed<MenuOption[]>(() => buildMenuOptions(tree.value))
 const selectedNodeTrail = computed(() => selectedPath.value ? findRulesPathNodes(tree.value, selectedPath.value) : [])
 const activeScopeNode = computed(() => selectedNodeTrail.value.find(node => node.is_dir) || null)
+const hasRootRuleFiles = computed(() => tree.value.some(node => !node.is_dir))
 const activeScopeLabel = computed(() => {
   if (activeScopeNode.value)
     return rulesCatalogMenuLabel(activeScopeNode.value)
+  if (hasRootRuleFiles.value)
+    return '影像科'
   return '目录'
 })
 const catalogTitle = computed(() => activeScopeLabel.value === '目录'
@@ -45,7 +47,17 @@ const catalogTitle = computed(() => activeScopeLabel.value === '目录'
 const activeScopeNodes = computed(() => activeScopeNode.value?.children || tree.value)
 const downloadLabel = computed(() => activeScopeNode.value
   ? `下载${activeScopeLabel.value}规则 Excel`
-  : '下载规则 Excel')
+  : hasRootRuleFiles.value
+    ? `下载${activeScopeLabel.value}规则 Excel`
+    : '下载规则 Excel')
+const downloadScopePath = computed(() => activeScopeNode.value?.path || '')
+const canDownloadRules = computed(() => {
+  if (!tree.value.length)
+    return false
+  if (activeScopeNode.value)
+    return Boolean(activeScopeNode.value.excel_path)
+  return hasRootRuleFiles.value
+})
 
 const renderedMarkdown = computed(() => {
   if (!detail.value)
@@ -213,14 +225,13 @@ watch(tree, () => {
 })
 
 async function handleDownload() {
-  const scope = activeScopeNode.value
-  if (!scope?.excel_path) {
+  if (!canDownloadRules.value) {
     message.warning('当前目录尚未配置规则 Excel')
     return
   }
   downloading.value = true
   try {
-    const blob = await downloadRulesCatalogXlsx(scope.path)
+    const blob = await downloadRulesCatalogXlsx(downloadScopePath.value)
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
@@ -229,7 +240,7 @@ async function handleDownload() {
     anchor.click()
     anchor.remove()
     URL.revokeObjectURL(url)
-    message.success(`${activeScopeLabel.value}规则 Excel 已下载，可修改后点击「上传导入」写入数据库`)
+    message.success(`${activeScopeLabel.value}规则 Excel 已下载，可到「术语库管理」批量导入`)
   }
   catch {
     message.error('Excel 下载失败')
@@ -237,29 +248,6 @@ async function handleDownload() {
   finally {
     downloading.value = false
   }
-}
-
-function triggerImportFile() {
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = '.xlsx'
-  input.onchange = async () => {
-    const file = input.files?.[0]
-    if (!file)
-      return
-    importing.value = true
-    try {
-      const result = await importRulesCatalogXlsx(file)
-      message.success(`成功导入 ${result.data.imported} 条规则到词库 #${result.data.dict_id}`)
-    }
-    catch {
-      message.error('规则导入失败，请检查 Excel 格式是否正确')
-    }
-    finally {
-      importing.value = false
-    }
-  }
-  input.click()
 }
 
 onMounted(loadTree)
@@ -274,7 +262,7 @@ onMounted(loadTree)
             {{ catalogTitle }}
           </div>
           <div class="mt-1 text-xs text-slate">
-            按科室目录浏览影像报告书写规则；可下载内置 Excel，本地修改后点击「上传 xlsx 导入」写入「纠错规则」词库。
+            按科室目录浏览影像报告书写规则；可下载内置 Excel，本地修改后到「术语库管理 → 纠错规则 → 批量导入」写入目标词库。
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-slate">
             <NTag size="small" round bordered type="default">
@@ -295,11 +283,8 @@ onMounted(loadTree)
           <NButton size="small" quaternary @click="loadTree">
             刷新
           </NButton>
-          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" :disabled="!activeScopeNode?.excel_path" @click="handleDownload">
+          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" :disabled="!canDownloadRules" @click="handleDownload">
             {{ downloadLabel }}
-          </NButton>
-          <NButton size="small" type="primary" :loading="importing" @click="triggerImportFile">
-            上传 xlsx 导入
           </NButton>
         </div>
       </div>

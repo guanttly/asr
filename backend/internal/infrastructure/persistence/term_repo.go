@@ -238,6 +238,26 @@ func (r *RuleRepo) Create(ctx context.Context, rule *domain.CorrectionRule) erro
 	return nil
 }
 
+func (r *RuleRepo) BatchCreate(ctx context.Context, rules []domain.CorrectionRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	models := make([]RuleModel, len(rules))
+	for i, rule := range rules {
+		models[i] = RuleModel{
+			DictID:        rule.DictID,
+			MatchType:     string(normalizeRuleMatchType(rule.MatchType)),
+			Pattern:       rule.Pattern,
+			Replacement:   rule.Replacement,
+			Enabled:       rule.Enabled,
+			SortOrder:     normalizeRuleSortOrder(rule.SortOrder),
+			Priority:      normalizeRulePriority(rule.Priority, rule.SortOrder),
+			ConflictGroup: rule.ConflictGroup,
+		}
+	}
+	return r.db.WithContext(ctx).Create(&models).Error
+}
+
 func (r *RuleRepo) GetByID(ctx context.Context, id uint64) (*domain.CorrectionRule, error) {
 	var model RuleModel
 	if err := r.db.WithContext(ctx).First(&model, id).Error; err != nil {

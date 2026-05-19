@@ -156,7 +156,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'system/rules-catalog',
         name: 'system-rules-catalog',
-        meta: { pageManagedScroll: true, title: '影像规则库浏览', desc: '按科室浏览影像报告书写规则与纠错映射，下载内置 Excel 或上传 xlsx 批量写入纠错规则词库。' },
+        meta: { pageManagedScroll: true, title: '影像规则库浏览', desc: '按科室浏览影像报告书写规则与纠错映射，下载内置 Excel 后可到术语库管理批量导入。' },
         component: () => import('@/pages/system/rules-catalog.vue'),
       },
       {

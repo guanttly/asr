@@ -32,8 +32,13 @@ export function deleteTermEntry(dictId: string | number, entryId: string | numbe
   return request.delete(`/api/admin/term-dicts/${dictId}/entries/${entryId}`)
 }
 
+export function clearTermEntries(dictId: string | number) {
+  return request.delete<{ deleted: number }>(`/api/admin/term-dicts/${dictId}/entries`)
+}
+
 export function importTermEntries(dictId: string | number, payload: FormData) {
   return request.post<{ imported: number, skipped: number }>(`/api/admin/term-dicts/${dictId}/import`, payload, {
+    timeout: 120000,
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -56,6 +61,21 @@ export function getTermRules(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/rules`)
 }
 
+export function importTermRules(dictId: string | number, payload: FormData) {
+  return request.post<{ imported: number }>(`/api/admin/term-dicts/${dictId}/rules/import`, payload, {
+    timeout: 120000,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  })
+}
+
+export function exportTermRules(dictId: string | number) {
+  return request.get(`/api/admin/term-dicts/${dictId}/rules/export`, {
+    responseType: 'blob',
+  })
+}
+
 export function createTermRule(dictId: string | number, payload: { match_type: string, pattern: string, replacement: string, enabled: boolean, sort_order: number, priority?: number, conflict_group?: string }) {
   return request.post(`/api/admin/term-dicts/${dictId}/rules`, payload)
 }
@@ -66,4 +86,8 @@ export function updateTermRule(dictId: string | number, ruleId: string | number,
 
 export function deleteTermRule(dictId: string | number, ruleId: string | number) {
   return request.delete(`/api/admin/term-dicts/${dictId}/rules/${ruleId}`)
+}
+
+export function clearTermRules(dictId: string | number) {
+  return request.delete<{ deleted: number }>(`/api/admin/term-dicts/${dictId}/rules`)
 }

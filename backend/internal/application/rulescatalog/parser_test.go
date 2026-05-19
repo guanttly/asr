@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -36,6 +37,12 @@ func TestEmbeddedRulesCatalogParsesCleanly(t *testing.T) {
 		if rule.MatchType != "literal" && rule.MatchType != "regex" && rule.MatchType != "number_normalize" {
 			t.Errorf("rule %q has invalid match_type %q", rule.Pattern, rule.MatchType)
 			break
+		}
+		if rule.MatchType == "regex" {
+			if _, err := regexp.Compile(rule.Pattern); err != nil {
+				t.Errorf("rule %q in %s has invalid regex: %v", rule.Pattern, rule.SourcePath, err)
+				break
+			}
 		}
 	}
 }
@@ -100,13 +107,14 @@ func TestParseMarkdownBodyRulesTable(t *testing.T) {
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 单位归一 | 毫米 | mm | literal | 70 | unit-normalize | 是 | 5毫米→5mm | 测试 |
 | 乘号 | (\d)[xX乘]\s*(\d) | $1×$2 | regex | 80 | dimension | 否 | 12x13→12×13 |  |
+| 分级 | (?i)stage\s*([Ⅰ-Ⅳ]\|[1-4])(a\|b\|c)? | Stage $1$2 | regex | 50 | grading | 是 | stage iiia → Stage IIIA | 表格转义 |
 `
 	title, rules := parseMarkdownBody("test.md", []byte(body))
 	if title != "规则测试" {
 		t.Errorf("title = %q, want 规则测试", title)
 	}
-	if len(rules) != 2 {
-		t.Fatalf("len(rules) = %d, want 2", len(rules))
+	if len(rules) != 3 {
+		t.Fatalf("len(rules) = %d, want 3", len(rules))
 	}
 	if rules[0].Pattern != "毫米" || rules[0].Replacement != "mm" {
 		t.Errorf("rule[0] = %+v", rules[0])
@@ -116,6 +124,9 @@ func TestParseMarkdownBodyRulesTable(t *testing.T) {
 	}
 	if rules[1].Enabled != false || rules[1].MatchType != "regex" {
 		t.Errorf("rule[1] enabled/matchtype = %v/%q", rules[1].Enabled, rules[1].MatchType)
+	}
+	if rules[2].Pattern != `(?i)stage\s*([Ⅰ-Ⅳ]|[1-4])(a|b|c)?` || rules[2].MatchType != "regex" {
+		t.Errorf("rule[2] = %+v", rules[2])
 	}
 }
 

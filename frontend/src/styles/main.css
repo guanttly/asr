@@ -67,21 +67,31 @@ a {
   overflow: auto;
 }
 
+.page-shell {
+  height: 100%;
+  min-height: 0;
+}
+
 .sider-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .sider-shell > .sidebar-menu {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .sidebar-build {
+  flex: 0 0 auto;
   margin-top: 14px;
   padding: 10px 12px;
   border-radius: 12px;
@@ -181,6 +191,7 @@ a {
 .sidebar-brand-area {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 8px;
   margin-bottom: 24px;
   padding: 0 4px;
@@ -345,7 +356,7 @@ a {
 }
 
 .sidebar-menu .n-submenu-children .n-menu-item-content::before {
-  left: 52px !important;
+  left: 10px !important;
   right: 12px !important;
 }
 

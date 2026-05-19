@@ -20,6 +20,9 @@ type stubRuleRepo struct {
 }
 
 func (repo stubRuleRepo) Create(context.Context, *domain.CorrectionRule) error { return nil }
+func (repo stubRuleRepo) BatchCreate(context.Context, []domain.CorrectionRule) error {
+	return nil
+}
 func (repo stubRuleRepo) GetByID(context.Context, uint64) (*domain.CorrectionRule, error) {
 	return nil, nil
 }

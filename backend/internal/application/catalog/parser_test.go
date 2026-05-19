@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"archive/zip"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -92,6 +93,36 @@ func TestExportXLSXServesEmbeddedDepartmentWorkbook(t *testing.T) {
 	}
 	if len(content) < 1000 {
 		t.Errorf("xlsx bytes = %d, looks suspiciously small", len(content))
+	}
+}
+
+func TestExportXLSXGeneratesFromDirectoryWhenWorkbookMissing(t *testing.T) {
+	root := t.TempDir()
+	deptDir := filepath.Join(root, "radiology")
+	if err := os.Mkdir(deptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "# 01 · 通用\n\n" +
+		"| 标准术语 | 英文/缩写 | 拼音 | M | R | G | 等级 | 常见 ASR 误识别 | 备注 |\n" +
+		"| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |\n" +
+		"| CT | CT | ct | 1 | 0 | 0 | L1 | see tea | 测试 |\n"
+	if err := os.WriteFile(filepath.Join(deptDir, "01-通用.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewService(root)
+	filename, workbook, count, err := svc.ExportXLSX("radiology")
+	if err != nil {
+		t.Fatalf("ExportXLSX: %v", err)
+	}
+	if filename != "radiology.xlsx" {
+		t.Fatalf("filename = %q, want radiology.xlsx", filename)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if _, err := zip.NewReader(bytes.NewReader(workbook), int64(len(workbook))); err != nil {
+		t.Fatalf("generated workbook is not a zip/xlsx: %v", err)
 	}
 }
 

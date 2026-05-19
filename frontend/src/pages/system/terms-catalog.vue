@@ -33,9 +33,12 @@ const markdown = new MarkdownIt({ html: false, linkify: false, breaks: false })
 const catalogMenuOptions = computed<MenuOption[]>(() => buildCatalogMenuOptions(tree.value))
 const selectedNodeTrail = computed(() => selectedPath.value ? findCatalogPathNodes(tree.value, selectedPath.value) : [])
 const activeCatalogScope = computed(() => selectedNodeTrail.value.find(node => node.is_dir) || null)
+const hasRootCatalogFiles = computed(() => tree.value.some(node => !node.is_dir))
 const activeCatalogScopeLabel = computed(() => {
   if (activeCatalogScope.value)
     return catalogMenuLabel(activeCatalogScope.value)
+  if (hasRootCatalogFiles.value)
+    return '影像科'
   return '目录'
 })
 const catalogTitle = computed(() => activeCatalogScopeLabel.value === '目录'
@@ -44,7 +47,17 @@ const catalogTitle = computed(() => activeCatalogScopeLabel.value === '目录'
 const activeScopeNodes = computed(() => activeCatalogScope.value?.children || tree.value)
 const downloadButtonLabel = computed(() => activeCatalogScope.value
   ? `下载${activeCatalogScopeLabel.value}术语 Excel`
-  : '下载术语 Excel')
+  : hasRootCatalogFiles.value
+    ? `下载${activeCatalogScopeLabel.value}术语 Excel`
+    : '下载术语 Excel')
+const downloadScopePath = computed(() => activeCatalogScope.value?.path || '')
+const canDownloadCatalog = computed(() => {
+  if (!tree.value.length)
+    return false
+  if (activeCatalogScope.value)
+    return Boolean(activeCatalogScope.value.excel_path)
+  return hasRootCatalogFiles.value
+})
 
 const renderedMarkdown = computed(() => {
   if (!detail.value)
@@ -221,14 +234,13 @@ watch(tree, () => {
 })
 
 async function handleDownload() {
-  const scope = activeCatalogScope.value
-  if (!scope?.excel_path) {
+  if (!canDownloadCatalog.value) {
     message.warning('当前科室尚未配置术语 Excel')
     return
   }
   downloading.value = true
   try {
-    const blob = await downloadTermCatalogXlsx(scope.path)
+    const blob = await downloadTermCatalogXlsx(downloadScopePath.value)
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
@@ -283,7 +295,7 @@ onMounted(loadTree)
           <NButton size="small" quaternary @click="loadTree">
             刷新
           </NButton>
-          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" :disabled="!activeCatalogScope?.excel_path" @click="handleDownload">
+          <NButton size="small" type="primary" color="#0f766e" :loading="downloading" :disabled="!canDownloadCatalog" @click="handleDownload">
             {{ downloadButtonLabel }}
           </NButton>
         </div>

@@ -80,12 +80,43 @@ func parseMarkdownBody(sourcePath string, content []byte) (title string, rules [
 
 func splitMarkdownRow(line string) []string {
 	trimmed := strings.Trim(line, "|")
-	parts := strings.Split(trimmed, "|")
+	parts := splitMarkdownTableCells(trimmed)
 	cells := make([]string, len(parts))
 	for i, part := range parts {
 		cells[i] = strings.TrimSpace(part)
 	}
 	return cells
+}
+
+func splitMarkdownTableCells(row string) []string {
+	parts := []string{}
+	var current strings.Builder
+	escaped := false
+	for _, value := range row {
+		if escaped {
+			if value != '|' {
+				current.WriteRune('\\')
+			}
+			current.WriteRune(value)
+			escaped = false
+			continue
+		}
+		if value == '\\' {
+			escaped = true
+			continue
+		}
+		if value == '|' {
+			parts = append(parts, current.String())
+			current.Reset()
+			continue
+		}
+		current.WriteRune(value)
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	parts = append(parts, current.String())
+	return parts
 }
 
 func isRuleHeader(cells []string) bool {
@@ -121,12 +152,13 @@ func isSeparatorRow(cells []string) bool {
 }
 
 func rowToRule(sourcePath string, idx int, cells []string, subsection string) (SectionRule, bool) {
+	matchType := normaliseMatchType(cleanCell(cells[3]))
 	rule := SectionRule{
 		Key:             fmt.Sprintf("%s#%04d", sourcePath, idx),
 		Category:        cleanCell(cells[0]),
-		Pattern:         cleanCell(cells[1]),
+		Pattern:         normalizeRuleCatalogPattern(cleanCell(cells[1]), matchType),
 		Replacement:     cleanCell(cells[2]),
-		MatchType:       normaliseMatchType(cleanCell(cells[3])),
+		MatchType:       matchType,
 		Priority:        parsePriorityCell(cells[4]),
 		ConflictGroup:   cleanCell(cells[5]),
 		Enabled:         parseEnabledCell(cells[6]),
@@ -147,6 +179,13 @@ func rowToRule(sourcePath string, idx int, cells []string, subsection string) (S
 		rule.Priority = 100
 	}
 	return rule, true
+}
+
+func normalizeRuleCatalogPattern(pattern string, matchType string) string {
+	if matchType != "regex" {
+		return pattern
+	}
+	return strings.ReplaceAll(pattern, `\-`, "-")
 }
 
 func cleanCell(value string) string {

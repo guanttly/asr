@@ -25,11 +25,12 @@ type Service struct {
 }
 
 const (
-	terminologySeedStateKey                = "terminology_seed_initialized_v1"
-	terminologyDefaultRuleSeedStateKey     = "terminology_default_rules_seeded_v1"
-	terminologyLegacyNonMedicalCleanupKey  = "terminology_legacy_nonmedical_cleanup_v1"
-	terminologySeedDictionaryListLimit     = 1000
-	maxBatchImportEntries                  = 5000
+	terminologySeedStateKey               = "terminology_seed_initialized_v1"
+	terminologyDefaultRuleSeedStateKey    = "terminology_default_rules_seeded_v1"
+	terminologyLegacyNonMedicalCleanupKey = "terminology_legacy_nonmedical_cleanup_v1"
+	terminologyDefaultSceneCleanupKey     = "terminology_default_scene_cleanup_v1"
+	terminologySeedDictionaryListLimit    = 1000
+	maxBatchImportEntries                 = 5000
 )
 
 // deprecatedNonMedicalSeeds lists historical seed dictionaries that were shipped
@@ -42,6 +43,15 @@ var deprecatedNonMedicalSeeds = []struct {
 }{
 	{Name: "庭审记录", Domain: "法律"},
 	{Name: "会议纪要", Domain: "办公"},
+}
+
+var deprecatedDefaultSceneSeeds = []struct {
+	Name   string
+	Domain string
+}{
+	{Name: "写报告", Domain: "医疗"},
+	{Name: "医疗查房", Domain: "医疗"},
+	{Name: "检验报告", Domain: "医疗检验"},
 }
 
 // NewService creates a new terminology application service.
@@ -196,6 +206,20 @@ func (s *Service) DeleteEntry(ctx context.Context, id uint64) error {
 	return s.entryRepo.Delete(ctx, id)
 }
 
+// ClearEntries removes every term entry from one dictionary.
+func (s *Service) ClearEntries(ctx context.Context, dictID uint64) (int, error) {
+	entries, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return 0, err
+	}
+	for i := range entries {
+		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
+			return i, err
+		}
+	}
+	return len(entries), nil
+}
+
 // GetDictRules returns all correction rules of a dictionary.
 func (s *Service) GetDictRules(ctx context.Context, dictID uint64) ([]RuleResponse, error) {
 	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
@@ -240,6 +264,25 @@ func (s *Service) CreateRule(ctx context.Context, req *CreateRuleRequest) (*Rule
 		Priority:      normalizeRulePriorityValue(rule.Priority, rule.SortOrder),
 		ConflictGroup: rule.ConflictGroup,
 	}, nil
+}
+
+// BatchCreateRules creates multiple correction rules in one batch.
+func (s *Service) BatchCreateRules(ctx context.Context, dictID uint64, rules []domain.CorrectionRule) (int, error) {
+	if len(rules) == 0 {
+		return 0, nil
+	}
+	pending := make([]domain.CorrectionRule, 0, len(rules))
+	for _, rule := range rules {
+		normalized, err := normalizeRuleRequest(dictID, string(rule.MatchType), rule.Pattern, rule.Replacement, rule.Enabled, rule.SortOrder, rule.Priority, rule.ConflictGroup)
+		if err != nil {
+			return 0, err
+		}
+		pending = append(pending, *normalized)
+	}
+	if err := s.ruleRepo.BatchCreate(ctx, pending); err != nil {
+		return 0, err
+	}
+	return len(pending), nil
 }
 
 func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string, enabled bool, sortOrder, priority int, conflictGroup string) (*domain.CorrectionRule, error) {
@@ -331,9 +374,26 @@ func (s *Service) DeleteRule(ctx context.Context, id uint64) error {
 	return s.ruleRepo.Delete(ctx, id)
 }
 
+// ClearRules removes every correction rule from one dictionary.
+func (s *Service) ClearRules(ctx context.Context, dictID uint64) (int, error) {
+	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return 0, err
+	}
+	for i := range rules {
+		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
+			return i, err
+		}
+	}
+	return len(rules), nil
+}
+
 // EnsureSeedData creates default terminology dictionaries and scene rules.
 func (s *Service) EnsureSeedData(ctx context.Context) error {
 	if err := s.removeLegacyNonMedicalSeeds(ctx); err != nil {
+		return err
+	}
+	if err := s.removeDeprecatedDefaultSceneSeeds(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureSeedDictionaries(ctx); err != nil {
@@ -372,6 +432,32 @@ func (s *Service) removeLegacyNonMedicalSeeds(ctx context.Context) error {
 	return s.seedRepo.MarkSeeded(ctx, terminologyLegacyNonMedicalCleanupKey)
 }
 
+func (s *Service) removeDeprecatedDefaultSceneSeeds(ctx context.Context) error {
+	cleaned, err := s.seedRepo.IsSeeded(ctx, terminologyDefaultSceneCleanupKey)
+	if err != nil {
+		return err
+	}
+	if cleaned {
+		return nil
+	}
+
+	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
+	if err != nil {
+		return err
+	}
+
+	for _, dict := range dicts {
+		if !isDeprecatedDefaultSceneSeed(dict.Name, dict.Domain) {
+			continue
+		}
+		if err := s.deleteDictCascade(ctx, dict.ID); err != nil {
+			return err
+		}
+	}
+
+	return s.seedRepo.MarkSeeded(ctx, terminologyDefaultSceneCleanupKey)
+}
+
 func (s *Service) deleteDictCascade(ctx context.Context, dictID uint64) error {
 	entries, err := s.entryRepo.ListByDict(ctx, dictID)
 	if err != nil {
@@ -396,6 +482,15 @@ func (s *Service) deleteDictCascade(ctx context.Context, dictID uint64) error {
 
 func isDeprecatedNonMedicalSeed(name, domain string) bool {
 	for _, seed := range deprecatedNonMedicalSeeds {
+		if seed.Name == name && seed.Domain == domain {
+			return true
+		}
+	}
+	return false
+}
+
+func isDeprecatedDefaultSceneSeed(name, domain string) bool {
+	for _, seed := range deprecatedDefaultSceneSeeds {
 		if seed.Name == name && seed.Domain == domain {
 			return true
 		}
@@ -583,26 +678,6 @@ func seedRuleExists(rules []domain.CorrectionRule, seedRule domain.CorrectionRul
 func defaultTerminologySeeds() []seedDictionary {
 	return []seedDictionary{
 		{
-			Name:   "写报告",
-			Domain: "医疗",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "舒张压", WrongVariants: []string{"舒张亚", "舒张鸭"}},
-				{CorrectTerm: "冠脉造影", WrongVariants: []string{"冠脉早影", "冠脉照影"}},
-				{CorrectTerm: "阿司匹林", WrongVariants: []string{"阿斯匹林", "阿司匹灵"}},
-			},
-			Rules: medicalReportRules(),
-		},
-		{
-			Name:   "医疗查房",
-			Domain: "医疗",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "舒张压", WrongVariants: []string{"舒张亚", "舒张鸭"}},
-				{CorrectTerm: "冠状动脉", WrongVariants: []string{"关状动脉", "冠状动漫"}},
-				{CorrectTerm: "心电图", WrongVariants: []string{"心电途", "心电土"}},
-			},
-			Rules: medicalReportRules(),
-		},
-		{
 			Name:   "影像报告",
 			Domain: "医疗影像",
 			Entries: []domain.TermEntry{
@@ -610,15 +685,6 @@ func defaultTerminologySeeds() []seedDictionary {
 				{CorrectTerm: "左心室", WrongVariants: []string{"左新室", "左心事"}},
 			},
 			Rules: imagingReportRules(),
-		},
-		{
-			Name:   "检验报告",
-			Domain: "医疗检验",
-			Entries: []domain.TermEntry{
-				{CorrectTerm: "血钾", WrongVariants: []string{"血甲", "血家"}},
-				{CorrectTerm: "白细胞", WrongVariants: []string{"白西胞", "白细包"}},
-			},
-			Rules: labReportRules(),
 		},
 	}
 }

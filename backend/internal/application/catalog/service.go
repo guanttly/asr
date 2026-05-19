@@ -206,7 +206,16 @@ func (s *Service) ExportXLSX(scope string) (string, []byte, int, error) {
 	if !isXLSXCatalogFile(excelPath) {
 		found := findDirectoryExcelPath(source, cleanScope)
 		if found == "" {
-			return "", nil, 0, ErrFileNotFound
+			var buf bytes.Buffer
+			count, err := s.GenerateXLSX(&buf, cleanScope)
+			if err != nil {
+				return "", nil, 0, err
+			}
+			filename := "term-catalog.xlsx"
+			if cleanScope != "" {
+				filename = path.Base(cleanScope) + ".xlsx"
+			}
+			return filename, buf.Bytes(), count, nil
 		}
 		excelPath = found
 	}

@@ -2,14 +2,18 @@ package terminology
 
 // CreateDictRequest is the DTO for creating a terminology dictionary.
 type CreateDictRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Domain string `json:"domain" binding:"required"`
+	Name                   string `json:"name" binding:"required"`
+	Domain                 string `json:"domain" binding:"required"`
+	RuleProcessingEnabled  *bool  `json:"rule_processing_enabled"`
+	TextReplacementEnabled *bool  `json:"text_replacement_enabled"`
 }
 
 // UpdateDictRequest is the DTO for updating a dictionary.
 type UpdateDictRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Domain string `json:"domain" binding:"required"`
+	Name                   string `json:"name" binding:"required"`
+	Domain                 string `json:"domain" binding:"required"`
+	RuleProcessingEnabled  *bool  `json:"rule_processing_enabled"`
+	TextReplacementEnabled *bool  `json:"text_replacement_enabled"`
 }
 
 // CreateEntryRequest is the DTO for adding a term entry.
@@ -40,9 +44,11 @@ type BatchImportResult struct {
 
 // DictResponse is the DTO for a dictionary.
 type DictResponse struct {
-	ID     uint64 `json:"id"`
-	Name   string `json:"name"`
-	Domain string `json:"domain"`
+	ID                     uint64 `json:"id"`
+	Name                   string `json:"name"`
+	Domain                 string `json:"domain"`
+	RuleProcessingEnabled  bool   `json:"rule_processing_enabled"`
+	TextReplacementEnabled bool   `json:"text_replacement_enabled"`
 }
 
 // EntryResponse is the DTO for a term entry.

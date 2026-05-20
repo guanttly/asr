@@ -31,10 +31,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	dictRepo := persistence.NewDictRepo(db)
 	entryRepo := persistence.NewEntryRepo(db)
 	ruleRepo := persistence.NewRuleRepo(db)
 	nlpService := appnlp.NewService(
-		nlpengine.NewCorrector(entryRepo, ruleRepo),
+		nlpengine.NewCorrector(dictRepo, entryRepo, ruleRepo),
 		nlpengine.NewSummarizer(cfg.Services.SummaryModel),
 	)
 	openPlatformService := appopenplatform.NewService(

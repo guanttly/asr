@@ -116,7 +116,7 @@ func (h *RulesCatalogHandler) BatchImport(c *gin.Context) {
 		dict, err := h.dictRepo.FindByDomain(ctx, rulesCatalogDictDomain)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				newDict := &domain.TermDict{Name: rulesCatalogDictName, Domain: rulesCatalogDictDomain}
+				newDict := &domain.TermDict{Name: rulesCatalogDictName, Domain: rulesCatalogDictDomain, RuleProcessingEnabled: true, TextReplacementEnabled: true}
 				if err := h.dictRepo.Create(ctx, newDict); err != nil {
 					response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "create default dict: "+err.Error())
 					return

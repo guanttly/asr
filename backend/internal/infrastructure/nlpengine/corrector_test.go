@@ -2,10 +2,22 @@ package nlpengine
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
 )
+
+type stubDictRepo struct {
+	dicts map[uint64]*domain.TermDict
+}
+
+func (repo stubDictRepo) GetByID(_ context.Context, id uint64) (*domain.TermDict, error) {
+	if dict, ok := repo.dicts[id]; ok {
+		return dict, nil
+	}
+	return nil, fmt.Errorf("dict %d not found", id)
+}
 
 type stubEntryRepo struct {
 	entries []domain.TermEntry
@@ -35,6 +47,7 @@ func (repo stubRuleRepo) Delete(context.Context, uint64) error                 {
 func TestCorrectorAppliesRulesBeforeTermEntries(t *testing.T) {
 	dictID := uint64(1)
 	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
 		stubEntryRepo{entries: []domain.TermEntry{{CorrectTerm: "舒张压", WrongVariants: []string{"舒张牙"}}}},
 		stubRuleRepo{rules: []domain.CorrectionRule{
 			{MatchType: domain.RuleMatchLiteral, Pattern: "舒张亚", Replacement: "舒张牙", Enabled: true},
@@ -56,6 +69,7 @@ func TestCorrectorAppliesRulesBeforeTermEntries(t *testing.T) {
 func TestCorrectorRegexRule(t *testing.T) {
 	dictID := uint64(1)
 	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
 		stubEntryRepo{},
 		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchRegex, Pattern: `血压(\d+)/(\d+)`, Replacement: `血压$1-$2`, Enabled: true}}},
 	)
@@ -72,6 +86,7 @@ func TestCorrectorRegexRule(t *testing.T) {
 func TestCorrectorNumberNormalizeRule(t *testing.T) {
 	dictID := uint64(1)
 	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
 		stubEntryRepo{},
 		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchNumberNormalize, Enabled: true}}},
 	)
@@ -83,5 +98,45 @@ func TestCorrectorNumberNormalizeRule(t *testing.T) {
 	expected := "大小12x23mm，血钾2.3，第二点保持原样"
 	if result != expected {
 		t.Fatalf("unexpected corrected text: %s", result)
+	}
+}
+
+func TestCorrectorSkipsDisabledRuleProcessing(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: false, TextReplacementEnabled: true}}},
+		stubEntryRepo{entries: []domain.TermEntry{{CorrectTerm: "舒张压", WrongVariants: []string{"舒张牙"}}}},
+		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchLiteral, Pattern: "舒张亚", Replacement: "舒张牙", Enabled: true}}},
+	)
+
+	result, corrections, err := corrector.Correct(context.Background(), &dictID, "患者舒张亚偏高")
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	if result != "患者舒张亚偏高" {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+	if len(corrections["rules"]) != 0 || len(corrections["terms"]) != 0 {
+		t.Fatalf("expected no corrections, got %+v", corrections)
+	}
+}
+
+func TestCorrectorSkipsDisabledTextReplacement(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: false}}},
+		stubEntryRepo{entries: []domain.TermEntry{{CorrectTerm: "舒张压", WrongVariants: []string{"舒张牙"}}}},
+		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchLiteral, Pattern: "舒张亚", Replacement: "舒张牙", Enabled: true}}},
+	)
+
+	result, corrections, err := corrector.Correct(context.Background(), &dictID, "患者舒张亚偏高")
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	if result != "患者舒张牙偏高" {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+	if len(corrections["rules"]) != 1 || len(corrections["terms"]) != 0 {
+		t.Fatalf("expected only rule corrections, got %+v", corrections)
 	}
 }

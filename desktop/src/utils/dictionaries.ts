@@ -4,6 +4,8 @@ export interface TermDict {
   id: number
   name: string
   domain: string
+  rule_processing_enabled?: boolean
+  text_replacement_enabled?: boolean
 }
 
 export interface SensitiveDict {

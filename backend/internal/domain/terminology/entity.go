@@ -4,12 +4,14 @@ import "time"
 
 // TermDict represents a terminology dictionary scoped to a domain (e.g. medical, legal).
 type TermDict struct {
-	ID        uint64      `json:"id"`
-	Name      string      `json:"name"`
-	Domain    string      `json:"domain"` // e.g. "医疗", "法律"
-	Entries   []TermEntry `json:"entries,omitempty"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ID                     uint64      `json:"id"`
+	Name                   string      `json:"name"`
+	Domain                 string      `json:"domain"` // e.g. "医疗", "法律"
+	RuleProcessingEnabled  bool        `json:"rule_processing_enabled"`
+	TextReplacementEnabled bool        `json:"text_replacement_enabled"`
+	Entries                []TermEntry `json:"entries,omitempty"`
+	CreatedAt              time.Time   `json:"created_at"`
+	UpdatedAt              time.Time   `json:"updated_at"`
 }
 
 // TermEntry is a single correct term with its known wrong variants.

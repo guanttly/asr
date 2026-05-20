@@ -72,13 +72,15 @@ func NewService(
 // CreateDict creates a new terminology dictionary.
 func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*DictResponse, error) {
 	dict := &domain.TermDict{
-		Name:   req.Name,
-		Domain: req.Domain,
+		Name:                   req.Name,
+		Domain:                 req.Domain,
+		RuleProcessingEnabled:  boolValue(req.RuleProcessingEnabled, true),
+		TextReplacementEnabled: boolValue(req.TextReplacementEnabled, true),
 	}
 	if err := s.dictRepo.Create(ctx, dict); err != nil {
 		return nil, err
 	}
-	return &DictResponse{ID: dict.ID, Name: dict.Name, Domain: dict.Domain}, nil
+	return newDictResponse(dict), nil
 }
 
 // UpdateDict updates a terminology dictionary.
@@ -89,10 +91,16 @@ func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequ
 	}
 	dict.Name = req.Name
 	dict.Domain = req.Domain
+	if req.RuleProcessingEnabled != nil {
+		dict.RuleProcessingEnabled = *req.RuleProcessingEnabled
+	}
+	if req.TextReplacementEnabled != nil {
+		dict.TextReplacementEnabled = *req.TextReplacementEnabled
+	}
 	if err := s.dictRepo.Update(ctx, dict); err != nil {
 		return nil, err
 	}
-	return &DictResponse{ID: dict.ID, Name: dict.Name, Domain: dict.Domain}, nil
+	return newDictResponse(dict), nil
 }
 
 // DeleteDict deletes a terminology dictionary and its related entries and rules.
@@ -128,9 +136,26 @@ func (s *Service) ListDicts(ctx context.Context, offset, limit int) ([]*DictResp
 	}
 	items := make([]*DictResponse, len(dicts))
 	for i, d := range dicts {
-		items[i] = &DictResponse{ID: d.ID, Name: d.Name, Domain: d.Domain}
+		items[i] = newDictResponse(d)
 	}
 	return items, total, nil
+}
+
+func newDictResponse(dict *domain.TermDict) *DictResponse {
+	return &DictResponse{
+		ID:                     dict.ID,
+		Name:                   dict.Name,
+		Domain:                 dict.Domain,
+		RuleProcessingEnabled:  dict.RuleProcessingEnabled,
+		TextReplacementEnabled: dict.TextReplacementEnabled,
+	}
+}
+
+func boolValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 // GetDictEntries returns all entries of a dictionary.
@@ -516,7 +541,7 @@ func (s *Service) ensureSeedDictionaries(ctx context.Context) error {
 	}
 
 	for _, seed := range defaultTerminologySeeds() {
-		dict := &domain.TermDict{Name: seed.Name, Domain: seed.Domain}
+		dict := &domain.TermDict{Name: seed.Name, Domain: seed.Domain, RuleProcessingEnabled: true, TextReplacementEnabled: true}
 		if err := s.dictRepo.Create(ctx, dict); err != nil {
 			return err
 		}
@@ -559,7 +584,7 @@ func (s *Service) ensureDefaultRules(ctx context.Context) error {
 	for _, seed := range defaultTerminologySeeds() {
 		dict := dictByName[seed.Name]
 		if dict == nil {
-			dict = &domain.TermDict{Name: seed.Name, Domain: seed.Domain}
+			dict = &domain.TermDict{Name: seed.Name, Domain: seed.Domain, RuleProcessingEnabled: true, TextReplacementEnabled: true}
 			if err := s.dictRepo.Create(ctx, dict); err != nil {
 				return err
 			}

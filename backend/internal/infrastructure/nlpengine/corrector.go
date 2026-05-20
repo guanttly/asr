@@ -2,12 +2,19 @@ package nlpengine
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
+	"gorm.io/gorm"
 )
+
+// RuleAwareDictRepository is the subset required by the corrector.
+type RuleAwareDictRepository interface {
+	GetByID(ctx context.Context, id uint64) (*domain.TermDict, error)
+}
 
 // RuleAwareEntryRepository is the subset required by the corrector.
 type RuleAwareEntryRepository interface {
@@ -16,13 +23,14 @@ type RuleAwareEntryRepository interface {
 
 // Corrector applies terminology rules and near-term replacements.
 type Corrector struct {
+	dicts   RuleAwareDictRepository
 	entries RuleAwareEntryRepository
 	rules   domain.RuleRepository
 }
 
 // NewCorrector creates a new correction engine.
-func NewCorrector(entries RuleAwareEntryRepository, rules domain.RuleRepository) *Corrector {
-	return &Corrector{entries: entries, rules: rules}
+func NewCorrector(dicts RuleAwareDictRepository, entries RuleAwareEntryRepository, rules domain.RuleRepository) *Corrector {
+	return &Corrector{dicts: dicts, entries: entries, rules: rules}
 }
 
 // Correct applies dictionary-owned rules first, then configured wrong variants.
@@ -38,43 +46,61 @@ func (corrector *Corrector) Correct(ctx context.Context, dictID *uint64, text st
 		return text, corrections, nil
 	}
 
-	rules, err := corrector.rules.ListByDict(ctx, *dictID)
-	if err != nil {
-		return "", nil, err
+	ruleProcessingEnabled := true
+	textReplacementEnabled := true
+	if corrector.dicts != nil {
+		dict, err := corrector.dicts.GetByID(ctx, *dictID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return text, corrections, nil
+			}
+			return "", nil, err
+		}
+		ruleProcessingEnabled = dict.RuleProcessingEnabled
+		textReplacementEnabled = dict.TextReplacementEnabled
 	}
 
 	corrected := text
-	for _, rule := range rules {
-		if !rule.Enabled {
-			continue
-		}
-		next, applied, err := applyCorrectionRule(corrected, rule)
+	if ruleProcessingEnabled {
+		rules, err := corrector.rules.ListByDict(ctx, *dictID)
 		if err != nil {
 			return "", nil, err
 		}
-		if len(applied) == 0 {
-			continue
-		}
-		corrected = next
-		corrections["rules"] = append(corrections["rules"], applied...)
-		corrections["layer2"] = append(corrections["layer2"], applied...)
-	}
 
-	entries, err := corrector.entries.ListByDict(ctx, *dictID)
-	if err != nil {
-		return "", nil, err
-	}
-
-	for _, entry := range entries {
-		for _, wrong := range entry.WrongVariants {
-			if wrong == "" || !strings.Contains(corrected, wrong) {
+		for _, rule := range rules {
+			if !rule.Enabled {
 				continue
 			}
-			count := strings.Count(corrected, wrong)
-			corrected = strings.ReplaceAll(corrected, wrong, entry.CorrectTerm)
-			entryCorrection := wrong + "->" + entry.CorrectTerm + "(" + strconv.Itoa(count) + ")"
-			corrections["terms"] = append(corrections["terms"], entryCorrection)
-			corrections["layer1"] = append(corrections["layer1"], entryCorrection)
+			next, applied, err := applyCorrectionRule(corrected, rule)
+			if err != nil {
+				return "", nil, err
+			}
+			if len(applied) == 0 {
+				continue
+			}
+			corrected = next
+			corrections["rules"] = append(corrections["rules"], applied...)
+			corrections["layer2"] = append(corrections["layer2"], applied...)
+		}
+	}
+
+	if textReplacementEnabled {
+		entries, err := corrector.entries.ListByDict(ctx, *dictID)
+		if err != nil {
+			return "", nil, err
+		}
+
+		for _, entry := range entries {
+			for _, wrong := range entry.WrongVariants {
+				if wrong == "" || !strings.Contains(corrected, wrong) {
+					continue
+				}
+				count := strings.Count(corrected, wrong)
+				corrected = strings.ReplaceAll(corrected, wrong, entry.CorrectTerm)
+				entryCorrection := wrong + "->" + entry.CorrectTerm + "(" + strconv.Itoa(count) + ")"
+				corrections["terms"] = append(corrections["terms"], entryCorrection)
+				corrections["layer1"] = append(corrections["layer1"], entryCorrection)
+			}
 		}
 	}
 

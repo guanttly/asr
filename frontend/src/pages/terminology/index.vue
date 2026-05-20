@@ -30,6 +30,8 @@ interface DictItem {
   id: number
   name: string
   domain: string
+  rule_processing_enabled: boolean
+  text_replacement_enabled: boolean
 }
 
 interface EntryItem {
@@ -110,6 +112,8 @@ const rules = ref<RuleItem[]>([])
 const dictForm = reactive({
   name: '',
   domain: '',
+  ruleProcessingEnabled: true,
+  textReplacementEnabled: true,
 })
 const entryForm = reactive({
   correctTerm: '',
@@ -340,6 +344,8 @@ function renderRulePreview(row: RuleItem) {
 const dictColumns = [
   { title: '词库名称', key: 'name' },
   { title: '领域', key: 'domain' },
+  { title: '规则处理', key: 'rule_processing_enabled', width: 100, render: (row: DictItem) => renderProcessingStatus(row.rule_processing_enabled) },
+  { title: '文本替换', key: 'text_replacement_enabled', width: 100, render: (row: DictItem) => renderProcessingStatus(row.text_replacement_enabled) },
   {
     title: '操作',
     key: 'actions',
@@ -373,6 +379,15 @@ const dictColumns = [
     ]),
   },
 ]
+
+function renderProcessingStatus(enabled: boolean) {
+  return h(NTag, {
+    size: 'small',
+    round: true,
+    bordered: false,
+    type: enabled ? 'success' : 'default',
+  }, { default: () => enabled ? '启用' : '停用' })
+}
 
 const entryColumns = [
   { title: '标准术语', key: 'correct_term' },
@@ -446,6 +461,8 @@ function resetDictForm() {
   editingDictId.value = null
   dictForm.name = ''
   dictForm.domain = ''
+  dictForm.ruleProcessingEnabled = true
+  dictForm.textReplacementEnabled = true
 }
 
 function resetEntryForm() {
@@ -753,6 +770,8 @@ function openEditDictModal(row: DictItem) {
   editingDictId.value = row.id
   dictForm.name = row.name
   dictForm.domain = row.domain
+  dictForm.ruleProcessingEnabled = row.rule_processing_enabled !== false
+  dictForm.textReplacementEnabled = row.text_replacement_enabled !== false
   showDictModal.value = true
 }
 
@@ -793,6 +812,8 @@ async function handleSubmitDict() {
     const payload = {
       name: dictForm.name.trim(),
       domain: dictForm.domain.trim(),
+      rule_processing_enabled: dictForm.ruleProcessingEnabled,
+      text_replacement_enabled: dictForm.textReplacementEnabled,
     }
 
     if (editingDictId.value) {
@@ -1019,6 +1040,12 @@ onMounted(loadDicts)
               <NTag v-if="currentDict" round type="info" size="small">
                 {{ currentDict.domain }}
               </NTag>
+              <NTag v-if="currentDict" round :type="currentDict.rule_processing_enabled ? 'success' : 'default'" size="small" :bordered="false">
+                {{ currentDict.rule_processing_enabled ? '规则处理启用' : '规则处理停用' }}
+              </NTag>
+              <NTag v-if="currentDict" round :type="currentDict.text_replacement_enabled ? 'success' : 'default'" size="small" :bordered="false">
+                {{ currentDict.text_replacement_enabled ? '文本替换启用' : '文本替换停用' }}
+              </NTag>
             </div>
           </div>
         </template>
@@ -1082,6 +1109,28 @@ onMounted(loadDicts)
         <NFormItem label="领域">
           <NInput v-model:value="dictForm.domain" placeholder="如：医疗" />
         </NFormItem>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <NFormItem label="规则处理">
+            <NSwitch v-model:value="dictForm.ruleProcessingEnabled">
+              <template #checked>
+                启用
+              </template>
+              <template #unchecked>
+                停用
+              </template>
+            </NSwitch>
+          </NFormItem>
+          <NFormItem label="文本替换">
+            <NSwitch v-model:value="dictForm.textReplacementEnabled">
+              <template #checked>
+                启用
+              </template>
+              <template #unchecked>
+                停用
+              </template>
+            </NSwitch>
+          </NFormItem>
+        </div>
         <div class="modal-footer-row">
           <NButton @click="showDictModal = false">
             取消

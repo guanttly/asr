@@ -1,14 +1,21 @@
 import request from './request'
 
+export interface TermDictPayload {
+  name: string
+  domain: string
+  rule_processing_enabled?: boolean
+  text_replacement_enabled?: boolean
+}
+
 export function getTermDicts(params?: { offset?: number, limit?: number }) {
   return request.get('/api/admin/term-dicts', { params })
 }
 
-export function createTermDict(payload: { name: string, domain: string }) {
+export function createTermDict(payload: TermDictPayload) {
   return request.post('/api/admin/term-dicts', payload)
 }
 
-export function updateTermDict(dictId: string | number, payload: { name: string, domain: string }) {
+export function updateTermDict(dictId: string | number, payload: TermDictPayload) {
   return request.put(`/api/admin/term-dicts/${dictId}`, payload)
 }
 

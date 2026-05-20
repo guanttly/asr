@@ -13,11 +13,13 @@ import (
 
 // DictModel is the persistence model for terminology dictionaries.
 type DictModel struct {
-	ID        uint64 `gorm:"primaryKey;autoIncrement"`
-	Name      string `gorm:"type:varchar(128);not null"`
-	Domain    string `gorm:"type:varchar(128);index;not null"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                     uint64 `gorm:"primaryKey;autoIncrement"`
+	Name                   string `gorm:"type:varchar(128);not null"`
+	Domain                 string `gorm:"type:varchar(128);index;not null"`
+	RuleProcessingEnabled  bool   `gorm:"column:rule_processing_enabled;not null;default:true"`
+	TextReplacementEnabled bool   `gorm:"column:text_replacement_enabled;not null;default:true"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 func (DictModel) TableName() string { return "term_dicts" }
@@ -60,13 +62,21 @@ func NewDictRepo(db *gorm.DB) *DictRepo {
 }
 
 func (r *DictRepo) Create(ctx context.Context, dict *domain.TermDict) error {
-	model := &DictModel{Name: dict.Name, Domain: dict.Domain}
-	if err := r.db.WithContext(ctx).Create(model).Error; err != nil {
+	now := time.Now()
+	model := &DictModel{
+		Name:                   dict.Name,
+		Domain:                 dict.Domain,
+		RuleProcessingEnabled:  dict.RuleProcessingEnabled,
+		TextReplacementEnabled: dict.TextReplacementEnabled,
+		CreatedAt:              now,
+		UpdatedAt:              now,
+	}
+	if err := r.db.WithContext(ctx).
+		Select("Name", "Domain", "RuleProcessingEnabled", "TextReplacementEnabled", "CreatedAt", "UpdatedAt").
+		Create(model).Error; err != nil {
 		return err
 	}
-	dict.ID = model.ID
-	dict.CreatedAt = model.CreatedAt
-	dict.UpdatedAt = model.UpdatedAt
+	applyDictModel(dict, model)
 	return nil
 }
 
@@ -76,19 +86,23 @@ func (r *DictRepo) GetByID(ctx context.Context, id uint64) (*domain.TermDict, er
 		return nil, err
 	}
 	return &domain.TermDict{
-		ID:        model.ID,
-		Name:      model.Name,
-		Domain:    model.Domain,
-		CreatedAt: model.CreatedAt,
-		UpdatedAt: model.UpdatedAt,
+		ID:                     model.ID,
+		Name:                   model.Name,
+		Domain:                 model.Domain,
+		RuleProcessingEnabled:  model.RuleProcessingEnabled,
+		TextReplacementEnabled: model.TextReplacementEnabled,
+		CreatedAt:              model.CreatedAt,
+		UpdatedAt:              model.UpdatedAt,
 	}, nil
 }
 
 func (r *DictRepo) Update(ctx context.Context, dict *domain.TermDict) error {
 	return r.db.WithContext(ctx).Model(&DictModel{}).Where("id = ?", dict.ID).Updates(map[string]any{
-		"name":       dict.Name,
-		"domain":     dict.Domain,
-		"updated_at": time.Now(),
+		"name":                     dict.Name,
+		"domain":                   dict.Domain,
+		"rule_processing_enabled":  dict.RuleProcessingEnabled,
+		"text_replacement_enabled": dict.TextReplacementEnabled,
+		"updated_at":               time.Now(),
 	}).Error
 }
 
@@ -102,11 +116,13 @@ func (r *DictRepo) FindByDomain(ctx context.Context, domainStr string) (*domain.
 		return nil, err
 	}
 	return &domain.TermDict{
-		ID:        model.ID,
-		Name:      model.Name,
-		Domain:    model.Domain,
-		CreatedAt: model.CreatedAt,
-		UpdatedAt: model.UpdatedAt,
+		ID:                     model.ID,
+		Name:                   model.Name,
+		Domain:                 model.Domain,
+		RuleProcessingEnabled:  model.RuleProcessingEnabled,
+		TextReplacementEnabled: model.TextReplacementEnabled,
+		CreatedAt:              model.CreatedAt,
+		UpdatedAt:              model.UpdatedAt,
 	}, nil
 }
 
@@ -123,14 +139,26 @@ func (r *DictRepo) List(ctx context.Context, offset, limit int) ([]*domain.TermD
 	items := make([]*domain.TermDict, len(models))
 	for i, model := range models {
 		items[i] = &domain.TermDict{
-			ID:        model.ID,
-			Name:      model.Name,
-			Domain:    model.Domain,
-			CreatedAt: model.CreatedAt,
-			UpdatedAt: model.UpdatedAt,
+			ID:                     model.ID,
+			Name:                   model.Name,
+			Domain:                 model.Domain,
+			RuleProcessingEnabled:  model.RuleProcessingEnabled,
+			TextReplacementEnabled: model.TextReplacementEnabled,
+			CreatedAt:              model.CreatedAt,
+			UpdatedAt:              model.UpdatedAt,
 		}
 	}
 	return items, total, nil
+}
+
+func applyDictModel(dict *domain.TermDict, model *DictModel) {
+	dict.ID = model.ID
+	dict.Name = model.Name
+	dict.Domain = model.Domain
+	dict.RuleProcessingEnabled = model.RuleProcessingEnabled
+	dict.TextReplacementEnabled = model.TextReplacementEnabled
+	dict.CreatedAt = model.CreatedAt
+	dict.UpdatedAt = model.UpdatedAt
 }
 
 type EntryRepo struct {

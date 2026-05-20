@@ -36,6 +36,28 @@ type streamingBatchEngineServiceStub struct {
 	finishSession  string
 }
 
+func TestNormalizeLanguageMapsProductCodes(t *testing.T) {
+	tests := map[string]string{
+		"":        DefaultLanguage,
+		"auto":    DefaultLanguage,
+		"zh-CN":   "zh",
+		"zh_Hans": "zh",
+		"en-US":   "en",
+		"en_GB":   "en",
+		"ja":      "ja",
+	}
+
+	for input, expected := range tests {
+		actual, err := NormalizeLanguage(input)
+		if err != nil {
+			t.Fatalf("NormalizeLanguage(%q) returned error: %v", input, err)
+		}
+		if actual != expected {
+			t.Fatalf("NormalizeLanguage(%q) = %q, want %q", input, actual, expected)
+		}
+	}
+}
+
 func (s *completedTaskProcessorStub) ProcessCompletedTask(_ context.Context, task *domain.TranscriptionTask) error {
 	s.processedTask = cloneTask(task)
 	return nil

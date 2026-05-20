@@ -179,6 +179,12 @@ func NormalizeLanguage(value string) (string, error) {
 	if language == "" || strings.EqualFold(language, DefaultLanguage) {
 		return DefaultLanguage, nil
 	}
+	switch strings.ToLower(strings.ReplaceAll(language, "_", "-")) {
+	case "zh-cn", "zh-hans", "zh":
+		return "zh", nil
+	case "en-us", "en-gb", "en":
+		return "en", nil
+	}
 	return language, nil
 }
 

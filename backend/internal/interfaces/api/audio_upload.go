@@ -22,6 +22,7 @@ type storedAudioFile struct {
 	OriginalFilename string
 	AbsolutePath     string
 	RelativePath     string
+	Size             int64
 	Duration         float64
 }
 
@@ -48,6 +49,7 @@ func saveTemporaryUploadedAudio(c *gin.Context, fieldName, prefix string, maxAud
 	audioFile := &storedAudioFile{
 		OriginalFilename: fileHeader.Filename,
 		AbsolutePath:     absPath,
+		Size:             fileHeader.Size,
 	}
 	prepareStoredAudio(c.Request.Context(), audioFile)
 	return audioFile, nil
@@ -74,6 +76,7 @@ func savePermanentUploadedAudio(c *gin.Context, fieldName, uploadRootDir, relati
 		OriginalFilename: fileHeader.Filename,
 		AbsolutePath:     absPath,
 		RelativePath:     path.Join(relativeDir, filename),
+		Size:             fileHeader.Size,
 	}
 	prepareStoredAudio(c.Request.Context(), audioFile)
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -67,6 +68,67 @@ func NewLegacyASRHandler(asrService *appasr.Service, nlpService *appnlp.Service,
 	}
 }
 
+type legacySummaryOptions struct {
+	Filename         string
+	FileSize         int64
+	TemplateName     string
+	EnableCorrection bool
+	EnableSpeaker    bool
+	StartedAt        time.Time
+}
+
+func legacyBoolForm(c *gin.Context, name string, defaultValue bool) bool {
+	switch strings.ToLower(strings.TrimSpace(c.PostForm(name))) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	case "false", "0", "no", "n", "off":
+		return false
+	default:
+		return defaultValue
+	}
+}
+
+func legacyLanguageForm(c *gin.Context) string {
+	language := strings.TrimSpace(c.PostForm("language"))
+	if language == "" {
+		return appasr.DefaultLanguage
+	}
+	return language
+}
+
+func legacyHotwordsForm(c *gin.Context) []string {
+	raw := strings.TrimSpace(c.PostForm("hotwords"))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r'
+	})
+	hotwords := make([]string, 0, len(parts))
+	for _, part := range parts {
+		word := strings.TrimSpace(part)
+		if word != "" {
+			hotwords = append(hotwords, word)
+		}
+	}
+	return hotwords
+}
+
+func legacyCallbackURLForm(c *gin.Context) string {
+	if callbackURL := strings.TrimSpace(c.PostForm("callback")); callbackURL != "" {
+		return callbackURL
+	}
+	return strings.TrimSpace(c.PostForm("callback_url"))
+}
+
+func isValidLegacyCallbackURL(callbackURL string) bool {
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(callbackURL))
+	if err != nil || parsed == nil {
+		return false
+	}
+	return (parsed.Scheme == "http" || parsed.Scheme == "https") && strings.TrimSpace(parsed.Host) != ""
+}
+
 func (h *LegacyASRHandler) Register(group *gin.RouterGroup) {
 	group.POST("/upload", h.Upload)
 	group.POST("/recognize", h.Recognize)
@@ -76,7 +138,7 @@ func (h *LegacyASRHandler) Register(group *gin.RouterGroup) {
 }
 
 func (h *LegacyASRHandler) Upload(c *gin.Context) {
-	useVAD := strings.EqualFold(strings.TrimSpace(c.PostForm("use_vad_segmentation")), "true") || c.PostForm("use_vad_segmentation") == "1"
+	useVAD := legacyBoolForm(c, "use_vad_segmentation", false)
 	h.recognize(c, useVAD)
 }
 
@@ -89,6 +151,10 @@ func (h *LegacyASRHandler) RecognizeVAD(c *gin.Context) {
 }
 
 func (h *LegacyASRHandler) recognize(c *gin.Context, useVAD bool) {
+	language := legacyLanguageForm(c)
+	useITN := legacyBoolForm(c, "use_itn", true)
+	hotwords := legacyHotwordsForm(c)
+
 	audioFile, err := saveTemporaryUploadedAudio(c, "file", "legacy-asr", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
@@ -97,7 +163,12 @@ func (h *LegacyASRHandler) recognize(c *gin.Context, useVAD bool) {
 	}
 	defer func() { _ = os.Remove(audioFile.AbsolutePath) }()
 
-	result, err := h.asrService.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{LocalFilePath: audioFile.AbsolutePath})
+	result, err := h.asrService.TranscribeSnippet(c.Request.Context(), &appasr.TranscribeSnippetRequest{
+		LocalFilePath: audioFile.AbsolutePath,
+		Language:      language,
+		UseITN:        &useITN,
+		Hotwords:      hotwords,
+	})
 	if err != nil {
 		legacyError(c, http.StatusInternalServerError, err.Error())
 		return
@@ -113,10 +184,33 @@ func (h *LegacyASRHandler) recognize(c *gin.Context, useVAD bool) {
 			"text":     result.Text,
 		}}
 	}
-	legacySuccess(c, payload)
+	c.JSON(http.StatusOK, gin.H{
+		"success":              true,
+		"filename":             audioFile.OriginalFilename,
+		"language":             language,
+		"use_vad_segmentation": useVAD,
+		"result":               payload,
+		"data":                 payload,
+		"timestamp":            time.Now().Format(time.RFC3339Nano),
+	})
 }
 
 func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
+	startedAt := time.Now()
+	templateName := strings.TrimSpace(c.PostForm("template_name"))
+	if templateName == "" {
+		templateName = "default"
+	}
+	enableCorrection := legacyBoolForm(c, "enable_correction", true)
+	enableSpeaker := legacyBoolForm(c, "enable_speaker", false)
+	language := legacyLanguageForm(c)
+	useITN := legacyBoolForm(c, "use_itn", true)
+	callbackURL := legacyCallbackURLForm(c)
+	if callbackURL != "" && !isValidLegacyCallbackURL(callbackURL) {
+		legacyError(c, http.StatusBadRequest, "callback URL格式不正确，请提供有效的HTTP/HTTPS URL")
+		return
+	}
+
 	audioFile, err := savePermanentUploadedAudio(c, "audio_file", h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
@@ -135,14 +229,23 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 			LocalFilePath:    audioFile.AbsolutePath,
 			Duration:         audioFile.Duration,
 		},
+		Language: language,
+		UseITN:   &useITN,
 	})
 	if err != nil {
 		legacyError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	callbackURL := strings.TrimSpace(c.PostForm("callback"))
+	options := legacySummaryOptions{
+		Filename:         audioFile.OriginalFilename,
+		FileSize:         audioFile.Size,
+		TemplateName:     templateName,
+		EnableCorrection: enableCorrection,
+		EnableSpeaker:    enableSpeaker,
+		StartedAt:        startedAt,
+	}
 	if callbackURL != "" {
-		go h.dispatchSummaryCallback(task.ID, callbackURL, audioFile.OriginalFilename)
+		go h.dispatchSummaryCallback(task.ID, callbackURL, options)
 		legacyMessage(c, "任务已创建，将通过回调返回结果", gin.H{
 			"task_id":      openTaskID(task.ID),
 			"callback_url": callbackURL,
@@ -155,7 +258,7 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 		legacyError(c, http.StatusGatewayTimeout, err.Error())
 		return
 	}
-	legacySuccess(c, h.buildLegacySummaryPayload(c.Request.Context(), audioFile.OriginalFilename, result))
+	legacySuccess(c, h.buildLegacySummaryPayload(c.Request.Context(), options, result))
 }
 
 func (h *LegacyASRHandler) GetTask(c *gin.Context) {
@@ -199,7 +302,7 @@ func (h *LegacyASRHandler) waitLegacyTask(ctx context.Context, taskID uint64, ti
 	}
 }
 
-func (h *LegacyASRHandler) buildLegacySummaryPayload(ctx context.Context, filename string, result *appasr.TaskResponse) gin.H {
+func (h *LegacyASRHandler) buildLegacySummaryPayload(ctx context.Context, options legacySummaryOptions, result *appasr.TaskResponse) gin.H {
 	content := result.ResultText
 	modelVersion := "summary"
 	if h.nlpService != nil && strings.TrimSpace(result.ResultText) != "" {
@@ -221,20 +324,39 @@ func (h *LegacyASRHandler) buildLegacySummaryPayload(ctx context.Context, filena
 			},
 		},
 		"processing_info": gin.H{
-			"filename": filename,
+			"filename":                       options.Filename,
+			"file_size":                      options.FileSize,
+			"template_used":                  options.TemplateName,
+			"correction_enabled":             options.EnableCorrection,
+			"speaker_identification_enabled": options.EnableSpeaker,
+			"processing_time": gin.H{
+				"total_duration": legacyElapsedSeconds(options.StartedAt),
+			},
 		},
 	}
 }
 
-func (h *LegacyASRHandler) dispatchSummaryCallback(taskID uint64, callbackURL, filename string) {
+func legacyElapsedSeconds(startedAt time.Time) float64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	return float64(int(time.Since(startedAt).Seconds()*10)) / 10
+}
+
+func (h *LegacyASRHandler) dispatchSummaryCallback(taskID uint64, callbackURL string, options legacySummaryOptions) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	result, err := h.waitLegacyTask(ctx, taskID, 10*time.Minute)
 	if err != nil {
+		h.postSummaryCallback(callbackURL, legacyEnvelope{Success: false, Message: fmt.Sprintf("处理失败: %s", err.Error())})
 		return
 	}
-	payload := h.buildLegacySummaryPayload(context.Background(), filename, result)
-	body, err := json.Marshal(legacyEnvelope{Success: true, Data: payload})
+	payload := h.buildLegacySummaryPayload(context.Background(), options, result)
+	h.postSummaryCallback(callbackURL, legacyEnvelope{Success: true, Data: payload})
+}
+
+func (h *LegacyASRHandler) postSummaryCallback(callbackURL string, envelope legacyEnvelope) {
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return
 	}

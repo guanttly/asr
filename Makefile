@@ -1,4 +1,4 @@
-.PHONY: all build-backend build-frontend dev-backend dev-frontend lint clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
+.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-frontend-unit test-frontend-e2e clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
 # 语音转写系统 Monorepo Makefile
@@ -32,8 +32,8 @@
 #   DESKTOP_ELECTRON_INSTALLER Win7 兼容版（Electron 22）安装包路径
 #   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
 #   DRY_RUN=1                  仅演练命令，不真正产出发布包
-#   示例：make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.6.2
-
+#   示例：make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.8.6
+#         make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
 # --- Backend ---
 .PHONY: build-gateway build-asr-api build-admin-api build-nlp-api
 
@@ -90,6 +90,21 @@ build-frontend:
 lint:
 	cd frontend && pnpm lint
 	cd backend && golangci-lint run ./...
+
+# 运行后端 Go 单元测试。
+test-backend:
+	cd backend && go test ./...
+
+# 运行前端 Vitest 单元测试。
+test-frontend-unit:
+	cd frontend && pnpm test:unit
+
+# 运行前端 Playwright 业务流程测试。
+test-frontend-e2e:
+	cd frontend && pnpm test:e2e
+
+# 运行项目测试：后端单测、前端单测与前端业务流程测试。
+test: test-backend test-frontend-unit test-frontend-e2e
 
 # --- Docker ---
 # 启动 deploy 目录下的容器环境。

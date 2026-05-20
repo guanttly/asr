@@ -13,7 +13,6 @@ async function bootstrap() {
   const pinia = createPinia()
 
   app.use(pinia)
-  app.use(router)
 
   const userStore = useUserStore(pinia)
   const appStore = useAppStore(pinia)
@@ -21,6 +20,7 @@ async function bootstrap() {
   await appStore.bootstrapProductFeatures()
   await appStore.bootstrapWorkflowBindings()
 
+  app.use(router)
   app.mount('#app')
 }
 

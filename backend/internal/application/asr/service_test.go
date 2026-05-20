@@ -15,6 +15,7 @@ import (
 type taskRepoServiceStub struct {
 	tasks     map[uint64]*domain.TranscriptionTask
 	deletedID uint64
+	getErr    error
 }
 
 type completedTaskProcessorStub struct {
@@ -89,6 +90,9 @@ func (r *taskRepoServiceStub) Create(_ context.Context, task *domain.Transcripti
 }
 
 func (r *taskRepoServiceStub) GetByID(_ context.Context, id uint64) (*domain.TranscriptionTask, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	task, ok := r.tasks[id]
 	if !ok {
 		return nil, errors.New("not found")
@@ -240,6 +244,16 @@ func TestDeleteTaskRejectsForeignTask(t *testing.T) {
 	}
 	if repo.deletedID != 0 {
 		t.Fatalf("expected task not deleted, got %d", repo.deletedID)
+	}
+}
+
+func TestGetTaskPropagatesContextDeadline(t *testing.T) {
+	repo := &taskRepoServiceStub{getErr: context.DeadlineExceeded}
+	service := NewService(repo, nil, nil, 5, nil)
+
+	_, err := service.GetTask(context.Background(), 7, 42)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline error, got %v", err)
 	}
 }
 

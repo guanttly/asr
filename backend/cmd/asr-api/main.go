@@ -424,8 +424,11 @@ func main() {
 
 	router := api.NewRouter(logger)
 	router.Static("/uploads", cfg.Upload.Dir)
-	openASR := router.Group("/openapi/v1/asr", middleware.OpenAPIAudit(openCallLogRepo, "asr.recognize"), middleware.OpenAuthRequired(openPlatformService, "asr.recognize"))
-	api.NewOpenAPIASRHandler(asrService, workflowService, openPlatformService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(openASR)
+	openASRHandler := api.NewOpenAPIASRHandler(asrService, workflowService, openPlatformService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB)
+	openASRRecognize := router.Group("/openapi/v1/asr", middleware.OpenAPIAudit(openCallLogRepo, "asr.recognize"), middleware.OpenAuthRequired(openPlatformService, "asr.recognize"))
+	openASRHandler.RegisterRecognition(openASRRecognize)
+	openASRStream := router.Group("/openapi/v1/asr", middleware.OpenAPIAudit(openCallLogRepo, "asr.stream"), middleware.OpenAuthRequired(openPlatformService, "asr.stream"))
+	openASRHandler.RegisterStream(openASRStream)
 	openMeetings := router.Group("/openapi/v1/meetings", middleware.OpenAPIAudit(openCallLogRepo, "meeting.summary"), middleware.OpenAuthRequired(openPlatformService, "meeting.summary"))
 	api.NewOpenAPIMeetingHandler(meetingService, nlpService, workflowService, openPlatformService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, cfg.Product.Features()).Register(openMeetings)
 	openSkills := router.Group("/openapi/v1/skills", middleware.OpenAPIAudit(openCallLogRepo, "skill.register"), middleware.OpenAuthRequired(openPlatformService, "skill.register"))

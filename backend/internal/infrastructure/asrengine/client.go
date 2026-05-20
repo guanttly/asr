@@ -230,6 +230,9 @@ func (c *Client) SubmitBatch(ctx context.Context, req BatchTranscribeRequest) (*
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		if canFallbackToOpenAITranscription(err) {
+			return c.submitOpenAITranscriptionFallback(ctx, req, fmt.Sprintf("POST /transcribe failed: %v", err))
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -237,16 +240,7 @@ func (c *Client) SubmitBatch(ctx context.Context, req BatchTranscribeRequest) (*
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode == http.StatusNotFound {
-			c.setBatchSubmitMode(batchSubmitModeOpenAICompatible)
-			fallback, fallbackErr := c.submitOpenAITranscription(ctx, req)
-			if fallbackErr == nil {
-				return fallback, nil
-			}
-			var badRequestErr *UpstreamBadRequestError
-			if errors.As(fallbackErr, &badRequestErr) {
-				return nil, badRequestErr
-			}
-			return nil, fmt.Errorf("configured ASR endpoint %s does not implement POST /transcribe, and OpenAI-compatible POST /v1/audio/transcriptions also failed: %v. upstream body: %s", strings.TrimRight(c.baseURL, "/"), fallbackErr, strings.TrimSpace(string(body)))
+			return c.submitOpenAITranscriptionFallback(ctx, req, fmt.Sprintf("POST /transcribe returned status 404: %s", strings.TrimSpace(string(body))))
 		}
 		return nil, fmt.Errorf("batch asr request to %s/transcribe returned status %d: %s", strings.TrimRight(c.baseURL, "/"), resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -258,6 +252,23 @@ func (c *Client) SubmitBatch(ctx context.Context, req BatchTranscribeRequest) (*
 	c.setBatchSubmitMode(batchSubmitModeTaskAPI)
 
 	return &result, nil
+}
+
+func canFallbackToOpenAITranscription(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func (c *Client) submitOpenAITranscriptionFallback(ctx context.Context, req BatchTranscribeRequest, transcribeFailure string) (*BatchTranscribeResponse, error) {
+	c.setBatchSubmitMode(batchSubmitModeOpenAICompatible)
+	fallback, fallbackErr := c.submitOpenAITranscription(ctx, req)
+	if fallbackErr == nil {
+		return fallback, nil
+	}
+	var badRequestErr *UpstreamBadRequestError
+	if errors.As(fallbackErr, &badRequestErr) {
+		return nil, badRequestErr
+	}
+	return nil, fmt.Errorf("configured ASR endpoint %s failed via %s, and OpenAI-compatible POST /v1/audio/transcriptions also failed: %v", strings.TrimRight(c.baseURL, "/"), transcribeFailure, fallbackErr)
 }
 
 func (c *Client) getBatchSubmitMode() batchSubmitMode {

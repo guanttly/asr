@@ -63,10 +63,18 @@ func NewOpenAPIASRHandler(service *appasr.Service, workflowSvc *appwf.Service, o
 }
 
 func (h *OpenAPIASRHandler) Register(group *gin.RouterGroup) {
+	h.RegisterRecognition(group)
+	h.RegisterStream(group)
+}
+
+func (h *OpenAPIASRHandler) RegisterRecognition(group *gin.RouterGroup) {
 	group.POST("/recognize", h.Recognize)
 	group.POST("/recognize/vad", h.RecognizeVAD)
 	group.POST("/tasks", h.CreateTask)
 	group.GET("/tasks/:task_id", h.GetTask)
+}
+
+func (h *OpenAPIASRHandler) RegisterStream(group *gin.RouterGroup) {
 	group.POST("/stream-sessions", h.StartStreamSession)
 	group.POST("/stream-sessions/:id/chunks", h.PushStreamChunk)
 	group.POST("/stream-sessions/:id/commit", h.CommitStreamSession)

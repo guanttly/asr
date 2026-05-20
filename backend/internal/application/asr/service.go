@@ -903,6 +903,9 @@ func toRetryPostProcessRecord(result *RetryPostProcessResponse) *domain.RetryPos
 func (s *Service) getOwnedTask(ctx context.Context, userID, id uint64) (*domain.TranscriptionTask, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		return nil, ErrTaskNotFound
 	}
 	if task.UserID != userID {

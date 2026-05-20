@@ -1,4 +1,4 @@
-.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-frontend-unit test-frontend-e2e clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
+.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
 # 语音转写系统 Monorepo Makefile
@@ -94,6 +94,10 @@ lint:
 # 运行后端 Go 单元测试。
 test-backend:
 	cd backend && go test ./...
+
+# 针对运行中的网关执行 OpenAPI 真实可用性测试。
+test-openapi-real:
+	cd backend && go run ./cmd/openapi-real-test $(if $(OPENAPI_BASE_URL),--base-url $(OPENAPI_BASE_URL),) $(if $(OPENAPI_ADMIN_USERNAME),--admin-username $(OPENAPI_ADMIN_USERNAME),) $(if $(OPENAPI_ADMIN_PASSWORD),--admin-password $(OPENAPI_ADMIN_PASSWORD),) $(if $(OPENAPI_AUDIO_FILE),--audio-file $(OPENAPI_AUDIO_FILE),) $(if $(OPENAPI_SKIP_ASR_AUDIO),--skip-asr-audio,) $(if $(OPENAPI_FULL_STREAM),--full-stream,) $(if $(OPENAPI_KEEP_APPS),--keep-apps,)
 
 # 运行前端 Vitest 单元测试。
 test-frontend-unit:

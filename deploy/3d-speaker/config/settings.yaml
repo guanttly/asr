@@ -70,6 +70,8 @@ voiceprint:
   min_enrollment_duration: 5.0
   # 注册音频推荐时长（秒）
   recommended_enrollment_duration: 15.0
+  # 注册时用于提取声纹嵌入的最大音频时长（秒），原始音频仍会备份
+  max_enrollment_duration: 30.0
 
 # ─── 日志配置 ───
 logging:

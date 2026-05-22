@@ -6,6 +6,86 @@
 
 !define /ifndef INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
 !define /ifndef UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
+!define /ifndef ASR_APP_EXECUTABLE_FILENAME "${PRODUCT_FILENAME}.exe"
+!define /ifndef ASR_PROCESS_KILLER_FILENAME "process-killer.exe"
+
+!macro ASR_RunProcessKiller TARGET_PATH WAIT_MS
+  !ifndef BUILD_UNINSTALLER
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\${ASR_PROCESS_KILLER_FILENAME}" "${BUILD_RESOURCES_DIR}/native/win32-x64/${ASR_PROCESS_KILLER_FILENAME}"
+    StrCpy $R9 "$PLUGINSDIR\${ASR_PROCESS_KILLER_FILENAME}"
+  !else
+    StrCpy $R9 "$INSTDIR\resources\bin\${ASR_PROCESS_KILLER_FILENAME}"
+    IfFileExists "$R9" +2 0
+      StrCpy $R9 ""
+  !endif
+
+  ${If} $R9 != ""
+    ExecWait '"$R9" --name "${ASR_APP_EXECUTABLE_FILENAME}" --path "${TARGET_PATH}" --wait-ms ${WAIT_MS}' $R8
+    DetailPrint `process-killer exit code: $R8`
+  ${EndIf}
+!macroend
+
+!macro customCheckAppRunning
+  ${if} ${isUpdated}
+    Sleep 300
+  ${endIf}
+
+  !insertmacro FIND_PROCESS "${ASR_APP_EXECUTABLE_FILENAME}" $R0
+  ${if} $R0 == 0
+    ${if} ${isUpdated}
+      Sleep 1000
+      Goto doStopProcess
+    ${endIf}
+    MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK doStopProcess
+    Quit
+
+    doStopProcess:
+
+    DetailPrint `Closing running "${PRODUCT_NAME}"...`
+
+    !ifdef INSTALL_MODE_PER_ALL_USERS
+      nsExec::Exec `taskkill /im "${ASR_APP_EXECUTABLE_FILENAME}"`
+    !else
+      nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /im "${ASR_APP_EXECUTABLE_FILENAME}" /fi "USERNAME eq %USERNAME%"`
+    !endif
+    !insertmacro ASR_RunProcessKiller "$INSTDIR\${ASR_APP_EXECUTABLE_FILENAME}" 2500
+    Sleep 300
+
+    StrCpy $R1 0
+
+    loop:
+      IntOp $R1 $R1 + 1
+
+      !insertmacro FIND_PROCESS "${ASR_APP_EXECUTABLE_FILENAME}" $R0
+      ${if} $R0 == 0
+        Sleep 1000
+        !ifdef INSTALL_MODE_PER_ALL_USERS
+          nsExec::Exec `taskkill /f /im "${ASR_APP_EXECUTABLE_FILENAME}"`
+        ${else}
+          nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${ASR_APP_EXECUTABLE_FILENAME}" /fi "USERNAME eq %USERNAME%"`
+        !endif
+        !insertmacro ASR_RunProcessKiller "$INSTDIR\${ASR_APP_EXECUTABLE_FILENAME}" 5000
+        !insertmacro FIND_PROCESS "${ASR_APP_EXECUTABLE_FILENAME}" $R0
+        ${If} $R0 == 0
+          DetailPrint `Waiting for "${PRODUCT_NAME}" to close.`
+          Sleep 2000
+        ${else}
+          Goto not_running
+        ${endIf}
+      ${else}
+        Goto not_running
+      ${endIf}
+
+      ${if} $R1 > 1
+        MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY loop
+        Quit
+      ${else}
+        Goto loop
+      ${endIf}
+    not_running:
+  ${endIf}
+!macroend
 
 !ifndef BUILD_UNINSTALLER
 Var UpgradePromptDeleteCheckbox
@@ -320,6 +400,8 @@ Function UpgradePrompt_RunFallbackUninstall
     MessageBox MB_OK|MB_ICONEXCLAMATION "旧版本安装目录解析失败，请先手动卸载旧版本后再安装。"
     Quit
   ${EndIf}
+
+  !insertmacro ASR_RunProcessKiller "$R2\${ASR_APP_EXECUTABLE_FILENAME}" 5000
 
   IfFileExists "$R1" 0 upgrade_prompt_fallback_missing
 

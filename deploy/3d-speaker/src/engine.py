@@ -33,6 +33,18 @@ if TYPE_CHECKING:
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_NATIVE_CACHE_REQUIREMENTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "native CAM++",
+        "iic/speech_campplus_sv_zh_en_16k-common_advanced",
+        ("campplus_cn_en_common.pt",),
+    ),
+    (
+        "native FSMN-VAD",
+        "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+        ("configuration.json", "model.pt"),
+    ),
+)
 
 
 def _clean_subprocess_output(text: str) -> str:
@@ -154,11 +166,18 @@ class DiarizationEngine:
         return cache_dir
 
     @staticmethod
-    def _find_missing_native_cache_files(cache_dir: str, required_files: tuple[str, ...]) -> list[str]:
-        return [
-            file_name for file_name in required_files
-            if not any(Path(cache_dir).rglob(file_name))
-        ]
+    def _find_missing_native_cache_files(cache_dir: str) -> list[str]:
+        cache_path = Path(cache_dir)
+        missing_files: list[str] = []
+        for model_name, model_dir, required_files in _NATIVE_CACHE_REQUIREMENTS:
+            model_path = cache_path / model_dir
+            if not model_path.is_dir():
+                missing_files.append(f"{model_name}:{model_dir}")
+                continue
+            for file_name in required_files:
+                if not any(model_path.rglob(file_name)):
+                    missing_files.append(f"{model_name}:{file_name}")
+        return missing_files
 
     @staticmethod
     def _hydrate_native_model_cache(seed_cache_dir: str, cache_dir: str) -> None:
@@ -175,10 +194,9 @@ class DiarizationEngine:
             os.getenv("NATIVE_MODEL_CACHE_SEED_DIR", "./models/native_cache")
         )
 
-        required_files = ("campplus_cn_en_common.pt",)
-        missing_files = self._find_missing_native_cache_files(cache_dir, required_files)
+        missing_files = self._find_missing_native_cache_files(cache_dir)
         if missing_files:
-            seed_missing_files = self._find_missing_native_cache_files(seed_cache_dir, required_files)
+            seed_missing_files = self._find_missing_native_cache_files(seed_cache_dir)
             if Path(seed_cache_dir).exists() and not seed_missing_files:
                 try:
                     self._hydrate_native_model_cache(seed_cache_dir, cache_dir)
@@ -190,7 +208,7 @@ class DiarizationEngine:
                         cache_dir,
                     )
                 else:
-                    missing_files = self._find_missing_native_cache_files(cache_dir, required_files)
+                    missing_files = self._find_missing_native_cache_files(cache_dir)
                     if not missing_files:
                         logger.info(
                             "native diarization 运行时缓存已从 seed 目录预热: {} -> {}",

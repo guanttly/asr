@@ -101,5 +101,14 @@ echo " 所有模型下载完成"
 echo " 目录: ${MODEL_DIR}"
 du -sh "${MODEL_DIR}"/*
 echo "=========================================="
+
+if [ "$(id -u)" = "0" ]; then
+	OWNER="$(stat -c '%u:%g' "${SCRIPT_DIR}/.." 2>/dev/null || true)"
+	if [ -n "${OWNER}" ]; then
+		chown -R "${OWNER}" "${MODEL_DIR}" 2>/dev/null || true
+	fi
+fi
+chmod -R u+rwX,go+rX "${MODEL_DIR}" 2>/dev/null || true
+
 echo ""
 echo " 离线部署: 将 models/ 目录整体拷贝到目标服务器"

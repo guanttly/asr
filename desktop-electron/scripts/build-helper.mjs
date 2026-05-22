@@ -10,11 +10,9 @@ const helperDir = path.join(projectDir, 'native', 'inject-helper')
 const helperManifestPath = path.join(helperDir, 'Cargo.toml')
 const helperTargetDir = path.join(helperDir, 'target')
 const helperOutputDir = path.join(projectDir, 'build', 'native', 'win32-x64')
-const helperName = 'voice-input-bridge.exe'
+const helperNames = ['voice-input-bridge.exe', 'process-killer.exe']
 const helperToolchain = '1.77.2'
 const helperTarget = 'x86_64-pc-windows-msvc'
-const builtHelperPath = path.join(helperTargetDir, helperTarget, 'release', helperName)
-const packagedHelperPath = path.join(helperOutputDir, helperName)
 
 function run(command, args, envOverrides = {}) {
   return spawnSync(command, args, {
@@ -56,11 +54,16 @@ if (toolchainInstall.status !== 0) {
 
 runOrExit('cargo', [`+${helperToolchain}`, 'xwin', 'build', '--release', '--target', helperTarget, '--manifest-path', helperManifestPath, '--target-dir', helperTargetDir], '构建 Win7 注入 helper')
 
-if (!fs.existsSync(builtHelperPath)) {
-  console.error(`未找到已构建的 helper: ${builtHelperPath}`)
-  process.exit(1)
-}
-
 fs.mkdirSync(helperOutputDir, { recursive: true })
-fs.copyFileSync(builtHelperPath, packagedHelperPath)
-console.log(`已生成 Win7 输入桥: ${packagedHelperPath}`)
+for (const helperName of helperNames) {
+  const builtHelperPath = path.join(helperTargetDir, helperTarget, 'release', helperName)
+  const packagedHelperPath = path.join(helperOutputDir, helperName)
+
+  if (!fs.existsSync(builtHelperPath)) {
+    console.error(`未找到已构建的 helper: ${builtHelperPath}`)
+    process.exit(1)
+  }
+
+  fs.copyFileSync(builtHelperPath, packagedHelperPath)
+  console.log(`已生成 Win7 helper: ${packagedHelperPath}`)
+}

@@ -60,3 +60,8 @@ dist-*
 .cache
 
 tmp
+tests
+**/**/dist
+**/**/.pytest_cache
+**/**/wheels
+deploy/3d-speaker/models

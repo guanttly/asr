@@ -125,7 +125,9 @@ make serve
 
 基础 `requirements.txt` 还会一并安装 ModelScope pipeline 所需依赖，并显式包含 `funasr`。现在 VAD 的实际加载顺序是：先尝试 ModelScope pipeline；如果当前 `modelscope` 版本没有把 `voice_activity_detection` 注册出来，或者注册链路因为缺少音频组件失效，则自动切到 FunASR `AutoModel`；只有这两条链路都失败时，才回退到能量阈值模式。
 
-注意：原生 diarization 除了 `models/eres2netv2`、`models/campplus`、`models/fsmn_vad` 这三类业务层模型外，还会额外依赖 `models/native_cache`。其中至少需要包含 `campplus_cn_en_common.pt`，否则服务会自动回退到兼容模式，不再在请求过程中临时下载模型。
+注意：原生 diarization 除了 `models/eres2netv2`、`models/campplus`、`models/fsmn_vad` 这三类业务层模型外，还会额外依赖 `models/native_cache`。生产离线交付时必须同时包含 `iic/speech_campplus_sv_zh_en_16k-common_advanced/campplus_cn_en_common.pt` 和 `iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/{configuration.json,model.pt}`；缺失时默认拒绝构建或启动，避免 speakerlab 在服务启动阶段尝试联网补下载。
+
+`.run` 安装脚本会在启动前检查宿主机 IPv4 路由和已有 Docker 网络，自动选择一个未占用的 Docker 内部网段。默认候选不包含 `172.*`，适合客户局域网使用 172 网段的现场；如需手动固定，可在 `.env` 中设置 `SA_DOCKER_SUBNET`。
 
 完全离线的裸机场景如果没有 wheel，需要先准备一份 3D-Speaker 源码目录，然后执行：
 
@@ -140,7 +142,7 @@ SPEAKERLAB_SOURCE=/path/to/3D-Speaker make init
 | ERes2NetV2 | iic/speech_eres2netv2_sv_zh-cn_16k-common | 说话人嵌入（默认） | ~70MB |
 | CAM++ | iic/speech_campplus_sv_zh-cn_16k-common | 说话人嵌入（轻量） | ~30MB |
 | FSMN-VAD | iic/speech_fsmn_vad_zh-cn-16k-common-pytorch | 语音活动检测 | ~40MB |
-| Native diarization cache | iic/speech_campplus_sv_zh_en_16k-common_advanced | speakerlab 原生分离额外依赖 | ~30MB |
+| Native diarization cache | iic/speech_campplus_sv_zh_en_16k-common_advanced + iic/speech_fsmn_vad_zh-cn-16k-common-pytorch | speakerlab 原生分离额外依赖 | ~70MB |
 
 如果部署环境与打包环境分离，建议把服务器上的 `./models` 整体只读挂载到容器内的 `/app/models`。当前默认配置会把原生 diarization 的运行时 `MODELSCOPE_CACHE` 固定到可写目录 `/app/data/native_cache`，容器启动时会自动从 `/app/models/native_cache` 预热过去，避免 speakerlab 在只读模型目录上写缓存时报 `Read-only file system`。
 

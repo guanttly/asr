@@ -24,6 +24,7 @@ services:
       - TRANSFORMERS_OFFLINE=1
       - MODELSCOPE_OFFLINE=1
       - MODELSCOPE_CACHE=/app/data/native_cache
+      - ALLOW_INCOMPLETE_NATIVE_CACHE=${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}
       # 如需分开指定设备，可自行追加以下环境变量
       # - EMBEDDING_DEVICE=${SA_EMBEDDING_DEVICE:-cuda:0}
       # - VAD_DEVICE=${SA_VAD_DEVICE:-cuda:0}
@@ -58,3 +59,15 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+    networks:
+      - speaker-analysis-net
+
+networks:
+  speaker-analysis-net:
+    name: "${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}"
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${SA_DOCKER_SUBNET:-10.248.10.0/24}"
+          gateway: "${SA_DOCKER_GATEWAY:-10.248.10.1}"

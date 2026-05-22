@@ -16,7 +16,7 @@ from loguru import logger
 
 from src.embedding import EmbeddingExtractor
 from src.models import VoiceprintRecord
-from src.utils import get_audio_duration
+from src.utils import get_audio_duration, extract_segment, load_audio, save_temp_audio
 
 
 class VoiceprintManager:
@@ -39,12 +39,14 @@ class VoiceprintManager:
         embeddings_dir: str = "./data/voiceprint_embeddings",
         enrollment_audio_dir: str = "./data/enrollment_audio",
         min_enrollment_duration: float = 5.0,
+        max_enrollment_duration: float | None = 30.0,
     ):
         self.extractor = extractor
         self.db_path = db_path
         self.embeddings_dir = embeddings_dir
         self.enrollment_audio_dir = enrollment_audio_dir
         self.min_enrollment_duration = min_enrollment_duration
+        self.max_enrollment_duration = max_enrollment_duration if max_enrollment_duration and max_enrollment_duration > 0 else None
 
         # 内存中的声纹记录 {id: VoiceprintRecord}
         self._records: dict[str, VoiceprintRecord] = {}
@@ -95,8 +97,25 @@ class VoiceprintManager:
 
         logger.info(f"开始声纹注册: {speaker_name} (音频时长: {duration:.1f}s)")
 
-        # 提取嵌入
-        embedding = self.extractor.extract(audio_path)
+        # 提取嵌入。超长注册音频只取前 N 秒，避免整段音频特征提取导致内存峰值过高。
+        embedding_audio_path = audio_path
+        temp_embedding_audio_path: str | None = None
+        if self.max_enrollment_duration and duration > self.max_enrollment_duration:
+            logger.info(
+                "注册音频过长: {:.1f}s，仅使用前 {:.1f}s 提取声纹嵌入",
+                duration,
+                self.max_enrollment_duration,
+            )
+            waveform, sr = load_audio(audio_path, target_sr=16000, mono=True)
+            enrollment_waveform = extract_segment(waveform, sr, 0.0, self.max_enrollment_duration)
+            temp_embedding_audio_path = save_temp_audio(enrollment_waveform, sr)
+            embedding_audio_path = temp_embedding_audio_path
+
+        try:
+            embedding = self.extractor.extract(embedding_audio_path)
+        finally:
+            if temp_embedding_audio_path and os.path.exists(temp_embedding_audio_path):
+                os.unlink(temp_embedding_audio_path)
 
         # 创建记录
         record = VoiceprintRecord(

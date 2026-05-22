@@ -104,15 +104,21 @@ class TestSubprocessOutputCleaning:
 class TestNativeModelCache:
     """原生 diarization 模型缓存测试"""
 
+    def write_native_cache_files(self, base_path):
+        campplus_checkpoint = base_path / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
+        vad_config = base_path / "iic" / "speech_fsmn_vad_zh-cn-16k-common-pytorch" / "configuration.json"
+        vad_checkpoint = base_path / "iic" / "speech_fsmn_vad_zh-cn-16k-common-pytorch" / "model.pt"
+        for file_path in (campplus_checkpoint, vad_config, vad_checkpoint):
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(b"ok")
+
     def test_native_model_cache_ready_returns_false_when_checkpoint_missing(self, tmp_path):
         engine = DiarizationEngine.__new__(DiarizationEngine)
         engine.native_model_cache_dir = str(tmp_path)
         assert engine._native_model_cache_ready() is False
 
     def test_native_model_cache_ready_returns_true_when_checkpoint_exists(self, tmp_path):
-        checkpoint = tmp_path / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
-        checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        checkpoint.write_bytes(b"ok")
+        self.write_native_cache_files(tmp_path)
 
         engine = DiarizationEngine.__new__(DiarizationEngine)
         engine.native_model_cache_dir = str(tmp_path)
@@ -121,9 +127,7 @@ class TestNativeModelCache:
     def test_native_model_cache_ready_hydrates_runtime_cache_from_seed(self, tmp_path, monkeypatch):
         runtime_cache = tmp_path / "runtime"
         seed_cache = tmp_path / "seed"
-        checkpoint = seed_cache / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
-        checkpoint.parent.mkdir(parents=True, exist_ok=True)
-        checkpoint.write_bytes(b"ok")
+        self.write_native_cache_files(seed_cache)
 
         monkeypatch.setenv("NATIVE_MODEL_CACHE_SEED_DIR", str(seed_cache))
 
@@ -132,6 +136,16 @@ class TestNativeModelCache:
 
         assert engine._native_model_cache_ready() is True
         assert any(runtime_cache.rglob("campplus_cn_en_common.pt"))
+        assert any(runtime_cache.rglob("model.pt"))
+
+    def test_native_model_cache_ready_requires_native_vad(self, tmp_path):
+        checkpoint = tmp_path / "iic" / "speech_campplus_sv_zh_en_16k-common_advanced" / "campplus_cn_en_common.pt"
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_bytes(b"ok")
+
+        engine = DiarizationEngine.__new__(DiarizationEngine)
+        engine.native_model_cache_dir = str(tmp_path)
+        assert engine._native_model_cache_ready() is False
 
     def test_diarize_native_reuses_initialized_pipeline(self, monkeypatch):
         class DummyExtractor:

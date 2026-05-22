@@ -77,7 +77,9 @@ curl http://localhost:8100/api/v1/health
 
 说明：`./build.sh export` 只导出 Docker 镜像 tar.gz；因此离线部署时仍需要把当前目录下的 `build.sh`、`docker-compose.yml`、`config/` 和完整 `models/` 一并带到目标服务器。最终交付建议优先使用 `.run`。
 
-说明：如果部署环境与打包环境分离，服务器侧需要准备完整的 `./models` 目录，并通过 Compose 挂载到容器内 `/app/models`。除了 `eres2netv2`、`campplus`、`fsmn_vad` 外，还必须包含 `native_cache`，否则 speakerlab 原生 diarization 会因为缺少 `campplus_cn_en_common.pt` 而回退兼容模式。
+说明：如果部署环境与打包环境分离，服务器侧需要准备完整的 `./models` 目录，并通过 Compose 挂载到容器内 `/app/models`。除了 `eres2netv2`、`campplus`、`fsmn_vad` 外，还必须包含完整 `native_cache`。生产离线包默认要求 `iic/speech_campplus_sv_zh_en_16k-common_advanced/campplus_cn_en_common.pt` 和 `iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/{configuration.json,model.pt}` 都存在；缺失时会拒绝导出或启动，避免服务启动阶段尝试联网下载。
+
+安装脚本会在启动前检测宿主机路由和已有 Docker 网络，并自动写入 `SA_DOCKER_SUBNET` / `SA_DOCKER_GATEWAY`。默认候选网段不使用 `172.*`，用于避开客户 172 局域网；如果现场有特殊规划，可在 `.env` 中手动设置 `SA_DOCKER_SUBNET` 或 `SA_DOCKER_SUBNET_CANDIDATES`。
 
 ### 方式三：裸机部署
 
@@ -136,7 +138,19 @@ models/
 └── native_cache/
 ```
 
-其中 `native_cache/` 下面至少应包含 `campplus_cn_en_common.pt`。如果缺少这个文件，原生 diarization 不会再请求时临时下载，而是直接回退到兼容模式。
+其中 `native_cache/` 下面至少应包含：
+
+```bash
+native_cache/
+└── iic/
+  ├── speech_campplus_sv_zh_en_16k-common_advanced/
+  │   └── campplus_cn_en_common.pt
+  └── speech_fsmn_vad_zh-cn-16k-common-pytorch/
+    ├── configuration.json
+    └── model.pt
+```
+
+默认配置下，如果这些文件不完整，服务会在启动前失败并输出缺失项，而不是在请求或预热过程中临时联网下载。
 
 ## 4. API 使用示例
 

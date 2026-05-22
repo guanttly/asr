@@ -328,6 +328,16 @@ compose() {
     exit 1
 }
 
+docker_buildx_ready() {
+    docker buildx version >/dev/null 2>&1
+}
+
+prepare_legacy_dockerfile() {
+    local output_path="$1"
+
+    sed 's|^RUN --mount=type=cache,target=/root/.cache/pip,id=speaker-analysis-pip-cache,sharing=locked \\|RUN \\|' Dockerfile > "${output_path}"
+}
+
 detect_device_from_compose() {
     local compose_output
 
@@ -435,10 +445,25 @@ runtime_wheels_ready() {
     return 1
 }
 
+native_cache_file_exists() {
+    local base_dir="$1"
+    local model_dir="$2"
+    local file_name="$3"
+
+    find "${base_dir}/${model_dir}" -type f -name "${file_name}" -print -quit 2>/dev/null | grep -q .
+}
+
+native_cache_ready() {
+    local base_dir="$1"
+
+    native_cache_file_exists "${base_dir}" "iic/speech_campplus_sv_zh_en_16k-common_advanced" "campplus_cn_en_common.pt" \
+        && native_cache_file_exists "${base_dir}" "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch" "configuration.json" \
+        && native_cache_file_exists "${base_dir}" "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch" "model.pt"
+}
+
 # 构建镜像前校验必须的本地模型目录是否存在。
 check_models() {
     local missing=0
-    local native_cache_required_file="campplus_cn_en_common.pt"
     if { [ ! -d "${MODEL_DIR}/eres2netv2" ] || [ -z "$(ls -A "${MODEL_DIR}/eres2netv2" 2>/dev/null)" ]; } \
         && { [ ! -d "${MODEL_DIR}/campplus" ] || [ -z "$(ls -A "${MODEL_DIR}/campplus" 2>/dev/null)" ]; }; then
         warn "嵌入模型缺失: 需要准备 models/eres2netv2 或 models/campplus"
@@ -450,9 +475,14 @@ check_models() {
         missing=1
     fi
 
-    if ! find "${MODEL_DIR}/native_cache" -type f -name "${native_cache_required_file}" 2>/dev/null | grep -q .; then
-        warn "native diarization 缓存缺失: ${MODEL_DIR}/native_cache 未找到 ${native_cache_required_file}"
-        warn "镜像仍可构建，但 speakerlab 原生流水线会回退兼容模式；如需原生分离，请先执行 ./build.sh download-models 并同步 models/native_cache"
+    if ! native_cache_ready "${MODEL_DIR}/native_cache"; then
+        warn "native diarization 缓存不完整: ${MODEL_DIR}/native_cache"
+        warn "需要同时包含 iic/speech_campplus_sv_zh_en_16k-common_advanced/campplus_cn_en_common.pt 和 iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/{configuration.json,model.pt}"
+        if [ "${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}" = "1" ]; then
+            warn "ALLOW_INCOMPLETE_NATIVE_CACHE=1，允许构建但生产离线交付不建议使用兼容回退模式"
+        else
+            missing=1
+        fi
     fi
 
     if [ ${missing} -ne 0 ]; then
@@ -644,7 +674,18 @@ build)
     build_funasr_wheel
     prefetch_python_wheels "${DEVICE_VALUE}" "${TORCH_INDEX_VALUE}" "${TORCH_PACKAGES_VALUE}"
     info "开始构建 Docker 镜像: ${FULL_IMAGE}"
-    DOCKER_BUILDKIT=1 docker build \
+    DOCKERFILE_PATH="Dockerfile"
+    DOCKER_BUILDKIT_VALUE=1
+    LEGACY_DOCKERFILE=""
+    if ! docker_buildx_ready; then
+        warn "Docker buildx 不可用，使用 legacy docker build（不使用 BuildKit cache mount）"
+        LEGACY_DOCKERFILE="$(mktemp)"
+        prepare_legacy_dockerfile "${LEGACY_DOCKERFILE}"
+        DOCKERFILE_PATH="${LEGACY_DOCKERFILE}"
+        DOCKER_BUILDKIT_VALUE=0
+    fi
+    DOCKER_BUILDKIT=${DOCKER_BUILDKIT_VALUE} docker build \
+        -f "${DOCKERFILE_PATH}" \
         --build-arg PIP_INDEX="${PIP_INDEX_URL}" \
         --build-arg PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
         --build-arg RUNTIME_EXTRA_INDEX="${RUNTIME_EXTRA_INDEX_URL}" \
@@ -655,6 +696,7 @@ build)
         --build-arg APT_MIRROR="${APT_MIRROR}" \
         --build-arg APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR}" \
         -t "${FULL_IMAGE}" .
+    [ -z "${LEGACY_DOCKERFILE}" ] || rm -f "${LEGACY_DOCKERFILE}"
     docker tag "${FULL_IMAGE}" "${IMAGE_NAME}:latest"
     info "镜像构建完成: ${FULL_IMAGE}"
     docker images | grep "${IMAGE_NAME}"

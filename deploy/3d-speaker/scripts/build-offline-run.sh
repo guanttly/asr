@@ -107,8 +107,15 @@ require_model_payload() {
   fi
 
   if [ "$ALLOW_INCOMPLETE_NATIVE_CACHE" -eq 0 ]; then
-    if ! find "$MODEL_SOURCE_DIR/native_cache" -type f -name 'campplus_cn_en_common.pt' -print -quit 2>/dev/null | grep -q .; then
-      echo "native_cache 不完整: 未找到 campplus_cn_en_common.pt" >&2
+    if ! find "$MODEL_SOURCE_DIR/native_cache/iic/speech_campplus_sv_zh_en_16k-common_advanced" -type f -name 'campplus_cn_en_common.pt' -print -quit 2>/dev/null | grep -q .; then
+      echo "native_cache 不完整: 未找到 iic/speech_campplus_sv_zh_en_16k-common_advanced/campplus_cn_en_common.pt" >&2
+      echo "离线交付建议重新执行 ./build.sh download-models，确保 models/native_cache 一并打包。" >&2
+      echo "如确实只接受兼容回退模式，可追加 --allow-incomplete-native-cache。" >&2
+      exit 1
+    fi
+    if ! find "$MODEL_SOURCE_DIR/native_cache/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch" -type f -name 'configuration.json' -print -quit 2>/dev/null | grep -q . \
+      || ! find "$MODEL_SOURCE_DIR/native_cache/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch" -type f -name 'model.pt' -print -quit 2>/dev/null | grep -q .; then
+      echo "native_cache 不完整: 未找到 iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/{configuration.json,model.pt}" >&2
       echo "离线交付建议重新执行 ./build.sh download-models，确保 models/native_cache 一并打包。" >&2
       echo "如确实只接受兼容回退模式，可追加 --allow-incomplete-native-cache。" >&2
       exit 1
@@ -288,12 +295,20 @@ SA_PORT=${SA_PORT:-10002}
 SA_GPU_ID=${SA_GPU_ID:-2}
 SA_DEVICE=${SA_DEVICE:-cuda:0}
 WORKERS=${WORKERS:-1}
+ALLOW_INCOMPLETE_NATIVE_CACHE=${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}
+SA_DOCKER_NETWORK_NAME=${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}
+SA_DOCKER_SUBNET=${SA_DOCKER_SUBNET:-AUTO}
+SA_DOCKER_GATEWAY=${SA_DOCKER_GATEWAY:-}
 EOF
 fi
 
 update_env_value SA_IMAGE "$IMAGE_REF" "$STAGING_DIR/.env"
 update_env_value SA_RELEASE_VERSION "$VERSION" "$STAGING_DIR/.env"
 update_env_value SA_CONTAINER_NAME "${SA_CONTAINER_NAME:-speaker-analysis}" "$STAGING_DIR/.env"
+update_env_value ALLOW_INCOMPLETE_NATIVE_CACHE "${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}" "$STAGING_DIR/.env"
+update_env_value SA_DOCKER_NETWORK_NAME "${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}" "$STAGING_DIR/.env"
+update_env_value SA_DOCKER_SUBNET "${SA_DOCKER_SUBNET:-AUTO}" "$STAGING_DIR/.env"
+update_env_value SA_DOCKER_GATEWAY "${SA_DOCKER_GATEWAY:-}" "$STAGING_DIR/.env"
 cp "$STAGING_DIR/.env" "$STAGING_DIR/.env.example"
 
 echo "导出离线镜像: $IMAGE_REF"

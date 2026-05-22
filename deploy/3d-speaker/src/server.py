@@ -157,6 +157,7 @@ async def lifespan(app: FastAPI):
         embeddings_dir=vp_cfg.get("embeddings_dir", "./data/voiceprint_embeddings"),
         enrollment_audio_dir=vp_cfg.get("enrollment_audio_dir", "./data/enrollment_audio"),
         min_enrollment_duration=vp_cfg.get("min_enrollment_duration", 5.0),
+        max_enrollment_duration=vp_cfg.get("max_enrollment_duration", vp_cfg.get("recommended_enrollment_duration", 30.0)),
     )
 
     # 初始化匹配器

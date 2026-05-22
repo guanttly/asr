@@ -1,6 +1,0 @@
-# speakerlab 原生 diarization 使用的离线缓存目录
-# 生产离线部署需要包含 native CAM++ 和 native FSMN-VAD 缓存
-# 通过 scripts/download_models.sh 下载后应包含:
-# - iic/speech_campplus_sv_zh_en_16k-common_advanced/campplus_cn_en_common.pt
-# - iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/configuration.json
-# - iic/speech_fsmn_vad_zh-cn-16k-common-pytorch/model.pt

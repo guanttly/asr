@@ -7,6 +7,7 @@ import { uploadMeetingFile } from '@/api/meeting'
 import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
 import { WORKFLOW_BINDING_KEYS, WORKFLOW_TYPES } from '@/types/workflow'
 
 const router = useRouter()
@@ -46,6 +47,11 @@ async function loadWorkflows() {
 async function handleSubmit() {
   if (selectedFiles.value.length === 0) {
     message.warning('请先选择至少一个音频文件')
+    return
+  }
+  if (selectedFiles.value.some(file => isAudioFileOverSizeLimit(file))) {
+    selectedFiles.value = selectedFiles.value.filter(file => !isAudioFileOverSizeLimit(file))
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
     return
   }
 
@@ -89,8 +95,13 @@ function handleFileSelected(event: Event) {
   if (files.length === 0)
     return
 
+  const validFiles = files.filter(file => !isAudioFileOverSizeLimit(file))
+  const skippedCount = files.length - validFiles.length
+  if (skippedCount > 0)
+    message.warning(skippedCount === 1 ? AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE : `已跳过 ${skippedCount} 个超过 ${AUDIO_UPLOAD_MAX_SIZE_MB} MB 的音频文件，请压缩或切分后再上传`)
+
   const merged = [...selectedFiles.value]
-  for (const file of files) {
+  for (const file of validFiles) {
     const exists = merged.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)
     if (!exists)
       merged.push(file)
@@ -132,7 +143,7 @@ onMounted(loadWorkflows)
               </NButton>
             </div>
             <div class="rounded-2 border border-dashed border-gray-300 bg-[#fbfdff] px-4 py-3 text-sm text-slate">
-              上传后会直接创建会议记录，并由会议应用独立提交转写与摘要处理。支持 wav/mp3 单个大文件，也支持一次选择多个小文件批量提交。
+              上传后会直接创建会议记录，并由会议应用独立提交转写与摘要处理。支持 wav/mp3，单个文件不超过 {{ AUDIO_UPLOAD_MAX_SIZE_MB }} MB，也支持一次选择多个小文件批量提交。
             </div>
             <div class="text-xs text-slate/80">
               {{ totalSelectedSizeText }}

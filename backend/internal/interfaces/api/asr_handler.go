@@ -38,7 +38,7 @@ func NewASRHandler(service *appasr.Service, workflowSvc *appwf.Service, uploadDi
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 100
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 
 	return &ASRHandler{
@@ -107,10 +107,7 @@ func (h *ASRHandler) PushStreamChunk(c *gin.Context) {
 		return
 	}
 
-	maxBytes := h.maxAudioSizeMB * 1024 * 1024
-	if maxBytes <= 0 {
-		maxBytes = 100 * 1024 * 1024
-	}
+	maxBytes := maxAudioSizeBytes(h.maxAudioSizeMB)
 
 	pcmData, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
 	if err != nil {
@@ -118,7 +115,7 @@ func (h *ASRHandler) PushStreamChunk(c *gin.Context) {
 		return
 	}
 	if int64(len(pcmData)) > maxBytes {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, fmt.Sprintf("audio chunk exceeds %d MB limit", h.maxAudioSizeMB))
+		response.Error(c, http.StatusRequestEntityTooLarge, errcode.CodeBadRequest, audioTooLargeMessage(h.maxAudioSizeMB))
 		return
 	}
 	if len(pcmData) == 0 {

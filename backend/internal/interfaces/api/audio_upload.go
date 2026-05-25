@@ -26,6 +26,8 @@ type storedAudioFile struct {
 	Duration         float64
 }
 
+const defaultMaxAudioSizeMB int64 = 200
+
 type audioUploadError struct {
 	statusCode int
 	message    string
@@ -89,9 +91,10 @@ func parseUploadedAudio(c *gin.Context, fieldName string, maxAudioSizeMB int64) 
 		return nil, "", &audioUploadError{statusCode: http.StatusBadRequest, message: "missing audio file"}
 	}
 
-	maxBytes := maxAudioSizeMB * 1024 * 1024
-	if maxBytes > 0 && fileHeader.Size > maxBytes {
-		return nil, "", &audioUploadError{statusCode: http.StatusBadRequest, message: fmt.Sprintf("audio file exceeds %d MB limit", maxAudioSizeMB)}
+	maxAudioSizeMB = effectiveMaxAudioSizeMB(maxAudioSizeMB)
+	maxBytes := maxAudioSizeBytes(maxAudioSizeMB)
+	if fileHeader.Size > maxBytes {
+		return nil, "", &audioUploadError{statusCode: http.StatusRequestEntityTooLarge, message: audioTooLargeMessage(maxAudioSizeMB)}
 	}
 
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
@@ -100,6 +103,21 @@ func parseUploadedAudio(c *gin.Context, fieldName string, maxAudioSizeMB int64) 
 	}
 
 	return fileHeader, ext, nil
+}
+
+func effectiveMaxAudioSizeMB(maxAudioSizeMB int64) int64 {
+	if maxAudioSizeMB <= 0 {
+		return defaultMaxAudioSizeMB
+	}
+	return maxAudioSizeMB
+}
+
+func maxAudioSizeBytes(maxAudioSizeMB int64) int64 {
+	return effectiveMaxAudioSizeMB(maxAudioSizeMB) * 1024 * 1024
+}
+
+func audioTooLargeMessage(maxAudioSizeMB int64) string {
+	return fmt.Sprintf("音频文件不能超过 %d MB，请压缩或切分后再上传", effectiveMaxAudioSizeMB(maxAudioSizeMB))
 }
 
 func writeUploadedFile(fileHeader *multipart.FileHeader, absPath string) error {

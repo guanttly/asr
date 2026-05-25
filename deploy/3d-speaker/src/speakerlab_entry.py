@@ -74,11 +74,32 @@ def create_diarization_pipeline(
 
 
 def can_run_native_pipeline() -> bool:
+    return get_native_pipeline_unavailable_reason() is None
+
+
+def get_native_pipeline_unavailable_reason() -> str | None:
     try:
         _load_infer_module()
-        return True
-    except Exception:
-        return False
+        return None
+    except Exception as exc:
+        return _format_exception_chain(exc)
+
+
+def _format_exception_chain(exc: BaseException) -> str:
+    parts: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            parts.append(f"{type(current).__name__}: {message}")
+        else:
+            parts.append(type(current).__name__)
+        current = current.__cause__ or current.__context__
+
+    return " <- ".join(parts)
 
 
 def main() -> None:

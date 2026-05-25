@@ -234,16 +234,17 @@ class DiarizationEngine:
     def _check_native(self) -> bool:
         """检查 3D-Speaker 原生分离流水线是否可用"""
         try:
-            from src.speakerlab_entry import can_run_native_pipeline
+            from src.speakerlab_entry import get_native_pipeline_unavailable_reason
 
-            if can_run_native_pipeline():
+            unavailable_reason = get_native_pipeline_unavailable_reason()
+            if unavailable_reason is None:
                 return True
+            logger.info(f"speakerlab 原生流水线不可用，将使用兼容模式: {unavailable_reason}")
+            return False
         except Exception:
             logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
             return False
 
-        logger.info("speakerlab 原生流水线不可用，将使用兼容模式")
-        return False
 
     @staticmethod
     def _resolve_native_speaker_num(

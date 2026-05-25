@@ -44,7 +44,7 @@ services:
 upload:
   dir: uploads
   public_base_url: http://localhost:10010
-  max_audio_size_mb: 1024
+  max_audio_size_mb: 200
 
 download:
   dir: downloads

@@ -9,20 +9,20 @@ import (
 
 // Config is the shared runtime configuration for all backend apps.
 type Config struct {
-	AppName   string          `mapstructure:"app_name"`
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	JWT       JWTConfig       `mapstructure:"jwt"`
-	OpenAuth  OpenAuthConfig  `mapstructure:"open_auth"`
-	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
-	Product   ProductConfig   `mapstructure:"product"`
-	Services  ServiceConfig   `mapstructure:"services"`
-	Upload    UploadConfig    `mapstructure:"upload"`
-	Download  DownloadConfig  `mapstructure:"download"`
+	AppName      string             `mapstructure:"app_name"`
+	Server       ServerConfig       `mapstructure:"server"`
+	Database     DatabaseConfig     `mapstructure:"database"`
+	JWT          JWTConfig          `mapstructure:"jwt"`
+	OpenAuth     OpenAuthConfig     `mapstructure:"open_auth"`
+	Bootstrap    BootstrapConfig    `mapstructure:"bootstrap"`
+	Product      ProductConfig      `mapstructure:"product"`
+	Services     ServiceConfig      `mapstructure:"services"`
+	Upload       UploadConfig       `mapstructure:"upload"`
+	Download     DownloadConfig     `mapstructure:"download"`
 	Catalog      CatalogConfig      `mapstructure:"catalog"`
 	RulesCatalog RulesCatalogConfig `mapstructure:"rules_catalog"`
-	Gateway   GatewayConfig   `mapstructure:"gateway"`
-	Legacy    LegacyConfig    `mapstructure:"legacy"`
+	Gateway      GatewayConfig      `mapstructure:"gateway"`
+	Legacy       LegacyConfig       `mapstructure:"legacy"`
 }
 
 // ServerConfig describes HTTP server settings.
@@ -285,7 +285,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("services.summary_model", "qwen3-4b")
 	v.SetDefault("upload.dir", "uploads")
 	v.SetDefault("upload.public_base_url", "")
-	v.SetDefault("upload.max_audio_size_mb", 1024)
+	v.SetDefault("upload.max_audio_size_mb", 200)
 	v.SetDefault("download.dir", "downloads")
 	v.SetDefault("download.public_base_path", "/downloads/files")
 	v.SetDefault("catalog.dir", "")

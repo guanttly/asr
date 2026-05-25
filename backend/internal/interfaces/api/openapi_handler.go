@@ -49,7 +49,7 @@ func NewOpenAPIASRHandler(service *appasr.Service, workflowSvc *appwf.Service, o
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 1024
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 	return &OpenAPIASRHandler{
 		service:        service,
@@ -133,7 +133,18 @@ func (h *OpenAPIASRHandler) StartStreamSession(c *gin.Context) {
 func (h *OpenAPIASRHandler) PushStreamChunk(c *gin.Context) {
 	pcmData, err := readOpenChunk(c, h.maxAudioSizeMB)
 	if err != nil {
-		response.OpenError(c, http.StatusBadRequest, errcode.OpenValidation, err.Error())
+		status := http.StatusBadRequest
+		messageText := err.Error()
+		code := errcode.OpenValidation
+		var requestErr *audioUploadError
+		if errors.As(err, &requestErr) {
+			status = requestErr.statusCode
+			messageText = requestErr.message
+		}
+		if status == http.StatusRequestEntityTooLarge {
+			code = errcode.OpenAudioTooLarge
+		}
+		response.OpenError(c, status, code, messageText)
 		return
 	}
 	result, err := h.service.PushStreamChunk(c.Request.Context(), &appasr.PushStreamChunkRequest{SessionID: strings.TrimSpace(c.Param("id")), PCMData: pcmData})
@@ -287,7 +298,11 @@ func (h *OpenAPIASRHandler) createBatchRecognition(c *gin.Context, withVAD bool,
 	audioFile, err := savePermanentUploadedAudio(c, "file", h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
-		response.OpenError(c, status, errcode.OpenValidation, messageText)
+		code := errcode.OpenValidation
+		if status == http.StatusRequestEntityTooLarge {
+			code = errcode.OpenAudioTooLarge
+		}
+		response.OpenError(c, status, code, messageText)
 		return
 	}
 	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
@@ -481,7 +496,7 @@ func NewOpenAPIMeetingHandler(service *appmeeting.Service, nlpService *appnlp.Se
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 1024
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 	return &OpenAPIMeetingHandler{
 		service:        service,
@@ -517,7 +532,11 @@ func (h *OpenAPIMeetingHandler) AudioSummary(c *gin.Context) {
 	audioFile, err := savePermanentUploadedAudio(c, "audio_file", h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
-		response.OpenError(c, status, errcode.OpenValidation, messageText)
+		code := errcode.OpenValidation
+		if status == http.StatusRequestEntityTooLarge {
+			code = errcode.OpenAudioTooLarge
+		}
+		response.OpenError(c, status, code, messageText)
 		return
 	}
 	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
@@ -867,16 +886,13 @@ func toOpenTaskStatus(status asrdomain.TaskStatus) string {
 }
 
 func readOpenChunk(c *gin.Context, maxAudioSizeMB int64) ([]byte, error) {
-	maxBytes := maxAudioSizeMB * 1024 * 1024
-	if maxBytes <= 0 {
-		maxBytes = 1024 * 1024
-	}
+	maxBytes := maxAudioSizeBytes(maxAudioSizeMB)
 	chunk, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read audio chunk")
 	}
 	if int64(len(chunk)) > maxBytes {
-		return nil, fmt.Errorf("audio chunk exceeds size limit")
+		return nil, &audioUploadError{statusCode: http.StatusRequestEntityTooLarge, message: audioTooLargeMessage(maxAudioSizeMB)}
 	}
 	if len(chunk) == 0 {
 		return nil, fmt.Errorf("missing audio chunk")

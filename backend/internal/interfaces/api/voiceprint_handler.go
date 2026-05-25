@@ -23,7 +23,7 @@ type VoiceprintHandler struct {
 // NewVoiceprintHandler creates a new voiceprint handler.
 func NewVoiceprintHandler(service *appvoiceprint.Service, maxAudioSizeMB int64, features pkgconfig.ProductFeatures) *VoiceprintHandler {
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 100
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 	return &VoiceprintHandler{service: service, maxAudioSizeMB: maxAudioSizeMB, feature: newFeatureGate(features)}
 }
@@ -102,7 +102,7 @@ func (h *VoiceprintHandler) writeError(c *gin.Context, err error) {
 	case errors.Is(err, appvoiceprint.ErrServiceUnavailable):
 		response.Error(c, http.StatusServiceUnavailable, errcode.CodeInternal, err.Error())
 		return
-	case errors.Is(err, appvoiceprint.ErrMissingSpeakerName), errors.Is(err, appvoiceprint.ErrMissingAudioFile), errors.Is(err, appvoiceprint.ErrMissingRecordID):
+	case errors.Is(err, appvoiceprint.ErrMissingSpeakerName), errors.Is(err, appvoiceprint.ErrSpeakerNameTooLong), errors.Is(err, appvoiceprint.ErrMissingAudioFile), errors.Is(err, appvoiceprint.ErrMissingRecordID):
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
 	}

@@ -37,6 +37,7 @@ type MeetingMeta = Record<MeetingMetaKey, string>
 const EXPORT_OPTIONS_STORAGE_KEY = 'asr-desktop-meeting-export-options'
 const EXPORT_FONT_SIZES: ExportFontSize[] = ['compact', 'normal', 'large']
 const EXPORT_ACCENTS: ExportAccent[] = ['teal', 'blue', 'ink']
+const MAX_SUMMARY_MARKDOWN_LENGTH = 50000
 const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   includeTitle: true,
   includeMeta: true,
@@ -100,7 +101,8 @@ const currentTitle = computed(() => {
 const renderedHtml = computed(() => renderMarkdown(currentSummaryContent.value))
 
 const summaryReady = computed(() => Boolean(currentSummaryContent.value.trim()))
-const canSave = computed(() => Boolean(detail.value && draftTitle.value.trim() && !saving.value))
+const draftContentLength = computed(() => Array.from(draftContent.value.trim()).length)
+const canSave = computed(() => Boolean(detail.value && draftTitle.value.trim() && draftContentLength.value >= 1 && draftContentLength.value <= MAX_SUMMARY_MARKDOWN_LENGTH && !saving.value))
 const canExport = computed(() => Boolean(summaryReady.value && currentTitle.value.trim() && !exporting.value))
 
 const statusLabel = computed(() => {
@@ -446,6 +448,11 @@ async function saveEdits() {
   if (!detail.value || !canSave.value)
     return
   syncMetaFieldsToDraft()
+  const contentLength = Array.from(draftContent.value.trim()).length
+  if (contentLength < 1 || contentLength > MAX_SUMMARY_MARKDOWN_LENGTH) {
+    errorText.value = '会议纪要 Markdown 长度范围为 1-50000 个字符'
+    return
+  }
   saving.value = true
   errorText.value = ''
   saveNotice.value = ''

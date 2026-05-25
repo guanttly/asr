@@ -37,7 +37,7 @@ func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, 
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 100
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB, feature: newFeatureGate(features)}
 }
@@ -238,7 +238,7 @@ func (h *MeetingHandler) Update(c *gin.Context) {
 		switch {
 		case errors.Is(err, appmeeting.ErrMeetingNotFound):
 			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
-		case errors.Is(err, appmeeting.ErrMeetingTitleRequired):
+		case errors.Is(err, appmeeting.ErrMeetingTitleRequired), errors.Is(err, appmeeting.ErrMeetingSummaryContentRequired), errors.Is(err, appmeeting.ErrMeetingSummaryContentTooLong):
 			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		default:
 			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())

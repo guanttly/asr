@@ -56,7 +56,7 @@ type CreateAppResponse struct {
 
 type IssueTokenRequest struct {
 	AppID     string `json:"app_id" binding:"required"`
-	AppSecret string `json:"app_secret" binding:"required"`
+	AppSecret string `json:"app_secret" binding:"required,min=1,max=512"`
 }
 
 type IssueTokenResponse struct {

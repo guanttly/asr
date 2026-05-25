@@ -9,6 +9,7 @@ import { useRouter } from 'vue-router'
 import { createVoiceprint, deleteVoiceprint, getVoiceprints } from '@/api/voiceprint'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
 
 const router = useRouter()
 const message = useMessage()
@@ -221,6 +222,13 @@ function clearForm() {
 function handleFileSelected(event: Event) {
   const target = event.target as HTMLInputElement | null
   const file = target?.files?.[0] || null
+  if (isAudioFileOverSizeLimit(file)) {
+    applySelectedAudio(null, '')
+    if (target)
+      target.value = ''
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
+    return
+  }
   applySelectedAudio(file, file ? 'upload' : '')
   if (target)
     target.value = ''
@@ -258,6 +266,11 @@ function handleStopRecording() {
   }
 
   const recordedFile = createWavFileFromChunks(recordingChunks, `voiceprint-${Date.now()}.wav`)
+  if (isAudioFileOverSizeLimit(recordedFile)) {
+    recordingChunks = []
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
+    return
+  }
   applySelectedAudio(recordedFile, 'recorded')
   message.success('录音已生成，可先回放确认后再提交注册')
 }
@@ -300,18 +313,27 @@ async function loadVoiceprints(options?: { silent?: boolean }) {
 }
 
 async function handleSubmit() {
-  if (!speakerName.value.trim()) {
+  const normalizedSpeakerName = speakerName.value.trim()
+  if (!normalizedSpeakerName) {
     message.warning('请填写说话人姓名')
+    return
+  }
+  if (normalizedSpeakerName.length > 64) {
+    message.warning('说话人姓名长度范围为 1-64 个字符')
     return
   }
   if (!selectedFile.value) {
     message.warning('请上传注册音频')
     return
   }
+  if (isAudioFileOverSizeLimit(selectedFile.value)) {
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
+    return
+  }
 
   const payload = new FormData()
   payload.append('file', selectedFile.value)
-  payload.append('speaker_name', speakerName.value.trim())
+  payload.append('speaker_name', normalizedSpeakerName)
   if (department.value.trim())
     payload.append('department', department.value.trim())
   if (notes.value.trim())
@@ -636,7 +658,7 @@ onBeforeUnmount(() => {
               </NButton>
             </div>
             <div class="mt-2 text-xs leading-6 text-slate">
-              {{ selectedFile ? `${selectedFile.name} · ${Math.max(1, Math.round(selectedFile.size / 1024))} KB` : '支持 wav / mp3，也支持直接录音生成 wav。' }}
+              {{ selectedFile ? `${selectedFile.name} · ${Math.max(1, Math.round(selectedFile.size / 1024))} KB` : `支持 wav / mp3，也支持直接录音生成 wav，单个音频不超过 ${AUDIO_UPLOAD_MAX_SIZE_MB} MB。` }}
             </div>
             <div v-if="isRecording" class="mt-2 text-xs leading-6 text-amber-700">
               请保持单人近讲，按上方示例文案自然朗读 15 到 30 秒后再停止录音。

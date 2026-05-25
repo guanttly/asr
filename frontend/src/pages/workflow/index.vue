@@ -59,16 +59,16 @@ const form = reactive({
 
 const workflowScenarioOptions = computed<Array<{ value: ActiveWorkflowType, label: string, description: string }>>(() => {
   const options: Array<{ value: ActiveWorkflowType, label: string, description: string }> = [
-  {
-    value: WORKFLOW_TYPES.BATCH,
-    label: '批量转写整理',
-    description: '自动固化非实时 ASR 源节点，后续只编辑中间处理链路。',
-  },
-  {
-    value: WORKFLOW_TYPES.REALTIME,
-    label: '实时转写整理',
-    description: '自动固化实时 ASR 源节点，适合实时识别后的整理链路。',
-  },
+    {
+      value: WORKFLOW_TYPES.BATCH,
+      label: '批量转写整理',
+      description: '自动固化非实时 ASR 源节点，后续只编辑中间处理链路。',
+    },
+    {
+      value: WORKFLOW_TYPES.REALTIME,
+      label: '实时转写整理',
+      description: '自动固化实时 ASR 源节点，适合实时识别后的整理链路。',
+    },
   ]
   if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)) {
     options.push({
@@ -392,7 +392,7 @@ const columns: DataTableColumns<WorkflowItem> = [
     title: '固化',
     key: 'fixed_nodes',
     width: 90,
-    render: row => {
+    render: (row) => {
       const count = countFixedNodes(row)
       return count > 0 ? `${count} 个` : '-'
     },

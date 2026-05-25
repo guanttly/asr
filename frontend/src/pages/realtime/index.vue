@@ -16,6 +16,7 @@ import WorkflowSelectionPreview from '@/components/WorkflowSelectionPreview.vue'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
 import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
 import { useAppStore } from '@/stores/app'
@@ -893,8 +894,11 @@ async function persistRealtimeSession() {
     let result
     if (sessionAudioChunks.length > 0) {
       try {
+        const audioFile = createWavFileFromChunks(sessionAudioChunks, `realtime-session-${Date.now()}.wav`)
+        if (isAudioFileOverSizeLimit(audioFile))
+          throw new Error(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
         const formData = new FormData()
-        formData.append('file', createWavFileFromChunks(sessionAudioChunks, `realtime-session-${Date.now()}.wav`))
+        formData.append('file', audioFile)
         formData.append('result_text', transcript)
         if (sessionWorkflowId.value != null)
           formData.append('workflow_id', String(sessionWorkflowId.value))

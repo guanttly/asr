@@ -27,6 +27,13 @@ const createForm = reactive({
   role: 'user' as 'admin' | 'user',
 })
 
+function extractErrorMessage(error: unknown, fallback: string) {
+  const messageText = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+  if (typeof messageText === 'string' && messageText.trim())
+    return messageText.trim()
+  return fallback
+}
+
 const columns = [
   { title: 'ID', key: 'id', width: 64 },
   {
@@ -81,14 +88,29 @@ async function loadUsers() {
 }
 
 async function handleCreateUser() {
-  if (!createForm.username || !createForm.password) {
+  const username = createForm.username.trim()
+  const password = createForm.password
+  if (!username || !password) {
     message.warning('请填写用户名和密码')
+    return
+  }
+  if (username.length > 64) {
+    message.warning('用户名长度范围为 1-64 个字符')
+    return
+  }
+  if (password.length > 128) {
+    message.warning('密码长度范围为 1-128 个字符')
     return
   }
 
   creating.value = true
   try {
-    await createUser(createForm)
+    await createUser({
+      username,
+      password,
+      display_name: createForm.display_name.trim(),
+      role: createForm.role,
+    })
     message.success('用户创建成功')
     showCreateModal.value = false
     createForm.username = ''
@@ -97,8 +119,8 @@ async function handleCreateUser() {
     createForm.role = 'user'
     await loadUsers()
   }
-  catch {
-    message.error('用户创建失败，请检查是否重名或权限不足')
+  catch (error) {
+    message.error(extractErrorMessage(error, '用户创建失败，请检查是否重名或权限不足'))
   }
   finally {
     creating.value = false

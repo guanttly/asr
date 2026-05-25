@@ -220,7 +220,10 @@ func (h *OpenPlatformHandler) writeAdminError(c *gin.Context, err error) {
 }
 
 func (h *OpenPlatformHandler) writeOpenAuthError(c *gin.Context, err error) {
+	var validationErr *appopenplatform.ValidationError
 	switch {
+	case errors.As(err, &validationErr):
+		response.OpenError(c, http.StatusBadRequest, errcode.OpenValidation, validationErr.Error())
 	case errors.Is(err, appopenplatform.ErrOpenAuthInvalid):
 		response.OpenError(c, http.StatusUnauthorized, errcode.OpenAuthInvalid, "invalid app_id or app_secret")
 	case errors.Is(err, appopenplatform.ErrOpenAppDisabled):

@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,18 +17,27 @@ type userRepoStub struct {
 	identity    *userdomain.DeviceIdentity
 	bindings    *userdomain.WorkflowBindings
 	bindingsMap map[uint64]*userdomain.WorkflowBindings
+	created     *userdomain.User
 	saved       *userdomain.WorkflowBindings
 	upserted    *userdomain.DeviceIdentity
 }
 
-func (r *userRepoStub) Create(_ context.Context, _ *userdomain.User) error { return nil }
+func (r *userRepoStub) Create(_ context.Context, user *userdomain.User) error {
+	copy := *user
+	r.created = &copy
+	r.user = &copy
+	return nil
+}
 func (r *userRepoStub) GetByID(_ context.Context, id uint64) (*userdomain.User, error) {
 	if r.user == nil || r.user.ID != id {
 		return nil, userdomain.ErrUserNotFound
 	}
 	return r.user, nil
 }
-func (r *userRepoStub) GetByUsername(_ context.Context, _ string) (*userdomain.User, error) {
+func (r *userRepoStub) GetByUsername(_ context.Context, username string) (*userdomain.User, error) {
+	if r.user != nil && r.user.Username == username {
+		return r.user, nil
+	}
 	return nil, userdomain.ErrUserNotFound
 }
 func (r *userRepoStub) GetDeviceIdentityByMachineCode(_ context.Context, _ string) (*userdomain.DeviceIdentity, error) {
@@ -70,6 +80,64 @@ func (r *userRepoStub) List(_ context.Context, _, _ int) ([]*userdomain.User, in
 		return r.users, int64(len(r.users)), nil
 	}
 	return nil, 0, nil
+}
+
+func TestCreateUserValidatesLengthRangesAndTrimsUsername(t *testing.T) {
+	service := NewService(&userRepoStub{}, nil)
+
+	cases := []struct {
+		name string
+		req  *CreateUserRequest
+	}{
+		{
+			name: "empty username after trim",
+			req:  &CreateUserRequest{Username: "   ", Password: "secret", Role: string(userdomain.RoleUser)},
+		},
+		{
+			name: "username too long",
+			req:  &CreateUserRequest{Username: strings.Repeat("用", 65), Password: "secret", Role: string(userdomain.RoleUser)},
+		},
+		{
+			name: "empty password",
+			req:  &CreateUserRequest{Username: "alice", Password: "", Role: string(userdomain.RoleUser)},
+		},
+		{
+			name: "password too long",
+			req:  &CreateUserRequest{Username: "alice", Password: strings.Repeat("p", 129), Role: string(userdomain.RoleUser)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.CreateUser(context.Background(), tc.req)
+			if !IsValidationError(err) {
+				t.Fatalf("expected validation error, got %v", err)
+			}
+		})
+	}
+
+	repo := &userRepoStub{}
+	service = NewService(repo, nil)
+	_, err := service.CreateUser(context.Background(), &CreateUserRequest{
+		Username:    " alice ",
+		Password:    strings.Repeat("密", 128),
+		DisplayName: " Alice ",
+		Role:        string(userdomain.RoleUser),
+	})
+	if err != nil {
+		t.Fatalf("CreateUser returned error: %v", err)
+	}
+	if repo.created == nil || repo.created.Username != "alice" || repo.created.DisplayName != "Alice" {
+		t.Fatalf("expected trimmed created user, got %+v", repo.created)
+	}
+
+	authenticated, err := service.Authenticate(context.Background(), "alice", strings.Repeat("密", 128))
+	if err != nil {
+		t.Fatalf("Authenticate returned error for 128-char password: %v", err)
+	}
+	if authenticated == nil || authenticated.Username != "alice" {
+		t.Fatalf("expected authenticated alice, got %+v", authenticated)
+	}
 }
 
 type workflowRepoStub struct {

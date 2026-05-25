@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -73,6 +74,51 @@ func TestSavePermanentUploadedAudioPreparesFile(t *testing.T) {
 	}
 	if audioFile.OriginalFilename != "meeting.mp3" {
 		t.Fatalf("expected original filename preserved, got %s", audioFile.OriginalFilename)
+	}
+}
+
+func TestParseUploadedAudioAllowsFileAtLimit(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	sourcePath := filepath.Join(t.TempDir(), "limit.wav")
+	if err := os.WriteFile(sourcePath, make([]byte, 1024*1024), 0o644); err != nil {
+		t.Fatalf("write source audio: %v", err)
+	}
+
+	ctx := newAudioUploadTestContext(t, "file", "limit.wav", sourcePath)
+	fileHeader, _, err := parseUploadedAudio(ctx, "file", 1)
+	if err != nil {
+		t.Fatalf("parseUploadedAudio returned error: %v", err)
+	}
+	if fileHeader.Size != 1024*1024 {
+		t.Fatalf("expected size at limit, got %d", fileHeader.Size)
+	}
+}
+
+func TestParseUploadedAudioRejectsFileAboveLimit(t *testing.T) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	sourcePath := filepath.Join(t.TempDir(), "too-large.wav")
+	if err := os.WriteFile(sourcePath, make([]byte, 1024*1024+1), 0o644); err != nil {
+		t.Fatalf("write source audio: %v", err)
+	}
+
+	ctx := newAudioUploadTestContext(t, "file", "too-large.wav", sourcePath)
+	_, _, err := parseUploadedAudio(ctx, "file", 1)
+	if err == nil {
+		t.Fatal("expected size limit error")
+	}
+	var uploadErr *audioUploadError
+	if !errors.As(err, &uploadErr) {
+		t.Fatalf("expected audioUploadError, got %T", err)
+	}
+	if uploadErr.statusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", uploadErr.statusCode)
+	}
+	if uploadErr.message != "音频文件不能超过 1 MB，请压缩或切分后再上传" {
+		t.Fatalf("unexpected message: %s", uploadErr.message)
 	}
 }
 

@@ -112,6 +112,10 @@ func (h *UserHandler) CreateUser(c *gin.Context) {
 			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
 			return
 		}
+		if appuser.IsValidationError(err) {
+			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

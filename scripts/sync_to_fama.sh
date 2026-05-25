@@ -8,6 +8,8 @@ DELETE_REMOTE_EXTRAS=0
 DRY_RUN=0
 BATCH_MODE=0
 USE_GITIGNORE=0
+CHECKSUM_MODE=0
+FORCE_TRANSFER=0
 EXCLUDES=()
 GITIGNORE_EXCLUDE_FILE=""
 
@@ -31,6 +33,8 @@ Options:
   --remote-dir DIR  Remote destination directory. Default: /data/ganttly/fama
   --delete          Delete files on the remote side that no longer exist locally.
   --ignore          Exclude files ignored by gitignore/exclude rules.
+  --checksum        Compare file content checksums instead of only size/mtime.
+  --force-transfer  Transfer every non-excluded file even if rsync thinks it is unchanged.
   --exclude PATTERN Exclude an rsync pattern. Can be specified multiple times.
   --dry-run         Show what would be copied without changing the remote side.
   --batch           Disable password prompts and fail fast if SSH keys do not work.
@@ -61,6 +65,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ignore)
       USE_GITIGNORE=1
+      shift
+      ;;
+    --checksum)
+      CHECKSUM_MODE=1
+      shift
+      ;;
+    --force-transfer)
+      FORCE_TRANSFER=1
       shift
       ;;
     --exclude)
@@ -144,6 +156,14 @@ if [[ "$DELETE_REMOTE_EXTRAS" -eq 1 ]]; then
   RSYNC_ARGS+=(--delete)
 fi
 
+if [[ "$CHECKSUM_MODE" -eq 1 ]]; then
+  RSYNC_ARGS+=(--checksum)
+fi
+
+if [[ "$FORCE_TRANSFER" -eq 1 ]]; then
+  RSYNC_ARGS+=(--ignore-times)
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   RSYNC_ARGS+=(--dry-run --itemize-changes)
 fi
@@ -168,6 +188,12 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 if [[ "$USE_GITIGNORE" -eq 1 ]]; then
   echo "Gitignore:   enabled"
+fi
+if [[ "$CHECKSUM_MODE" -eq 1 ]]; then
+  echo "Compare:     checksum"
+fi
+if [[ "$FORCE_TRANSFER" -eq 1 ]]; then
+  echo "Transfer:    force all non-excluded files"
 fi
 
 ssh "${SSH_OPTS[@]}" "$REMOTE_USER_HOST" "mkdir -p '$REMOTE_DIR'"

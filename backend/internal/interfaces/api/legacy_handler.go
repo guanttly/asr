@@ -55,7 +55,7 @@ func NewLegacyASRHandler(asrService *appasr.Service, nlpService *appnlp.Service,
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
-		maxAudioSizeMB = 1024
+		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
 	return &LegacyASRHandler{
 		asrService:     asrService,

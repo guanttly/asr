@@ -12,7 +12,7 @@ pillow>=10.0.0
 python-dateutil>=2.1
 simplejson>=3.3.0
 sortedcontainers>=1.5.9
-transformers>=4.40.0
+transformers>=4.40.0,<5.0.0
 # 3D-Speaker 源码 / wheel 由 scripts/install_speakerlab.sh 处理
 # 优先使用本地 wheel，其次注册源码树并补齐原生运行依赖
 

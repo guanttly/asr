@@ -29,6 +29,7 @@ const (
 	argonThreads             = uint8(2)
 	argonKeyLen              = uint32(32)
 	argonSaltLen             = 16
+	maxAppSecretLength       = 512
 )
 
 var (
@@ -264,6 +265,9 @@ func (s *Service) IssueToken(ctx context.Context, req *IssueTokenRequest) (*Issu
 	appSecret := strings.TrimSpace(req.AppSecret)
 	if appID == "" || appSecret == "" {
 		return nil, ErrOpenAuthInvalid
+	}
+	if len([]rune(appSecret)) > maxAppSecretLength {
+		return nil, &ValidationError{message: "app_secret length must be between 1 and 512 characters"}
 	}
 	app, err := s.appRepo.GetByAppID(ctx, appID)
 	if err != nil {

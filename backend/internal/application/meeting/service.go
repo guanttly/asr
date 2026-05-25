@@ -23,11 +23,14 @@ import (
 var ErrMeetingNotFound = errors.New("meeting not found")
 var ErrMeetingDeleteNotAllowed = errors.New("processing meeting cannot be deleted")
 var ErrMeetingTitleRequired = errors.New("meeting title is required")
+var ErrMeetingSummaryContentRequired = errors.New("会议纪要 Markdown 长度范围为 1-50000 个字符")
+var ErrMeetingSummaryContentTooLong = errors.New("会议纪要 Markdown 长度范围为 1-50000 个字符")
 
 const (
 	baseSyncBackoff    = 30 * time.Second
 	maxSyncBackoff     = 10 * time.Minute
 	batchSubmitTimeout = 30 * time.Minute
+	maxSummaryMarkdown = 50000
 )
 
 // SummaryWorkflowExecutor runs a workflow against meeting transcript text.
@@ -267,6 +270,12 @@ func (s *Service) UpdateMeeting(ctx context.Context, meetingID uint64, userID ui
 			return nil, fmt.Errorf("summary repository unavailable")
 		}
 		content := strings.TrimSpace(*req.SummaryContent)
+		if content == "" {
+			return nil, ErrMeetingSummaryContentRequired
+		}
+		if len([]rune(content)) > maxSummaryMarkdown {
+			return nil, ErrMeetingSummaryContentTooLong
+		}
 		existing, err := s.summaryRepo.GetByMeeting(ctx, meetingID)
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err

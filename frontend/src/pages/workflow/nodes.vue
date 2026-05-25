@@ -11,6 +11,7 @@ import { getVoiceCommandDicts } from '@/api/voiceCommands'
 import { getNodeTypes, testNodeStream, updateNodeDefault } from '@/api/workflow'
 import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
+import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
 import { buildNodeConfigOverrides, fallbackNodeDefaultConfig, formatConfigText, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 
 interface DictOption {
@@ -262,7 +263,14 @@ function clearNodeTestAudioFile() {
 
 function handleNodeTestAudioSelected(event: Event) {
   const input = event.target as HTMLInputElement
-  nodeTestAudioFile.value = input.files?.[0] || null
+  const file = input.files?.[0] || null
+  if (isAudioFileOverSizeLimit(file)) {
+    nodeTestAudioFile.value = null
+    input.value = ''
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
+    return
+  }
+  nodeTestAudioFile.value = file
   input.value = ''
 }
 
@@ -385,6 +393,10 @@ async function handleTestNode() {
   }
   if (selectedNodeNeedsAudio.value && !nodeTestAudioFile.value) {
     message.warning('请先上传音频文件')
+    return
+  }
+  if (selectedNodeNeedsAudio.value && isAudioFileOverSizeLimit(nodeTestAudioFile.value)) {
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
     return
   }
 
@@ -958,7 +970,7 @@ onMounted(async () => {
                         测试音频
                       </div>
                       <div class="text-xs text-slate/60">
-                        {{ nodeTestAudioFile ? `${nodeTestAudioFile.name} · ${formatFileSize(nodeTestAudioFile.size)}` : '支持 WAV、MP3、M4A、AAC、FLAC、OGG、OPUS、WEBM。' }}
+                        {{ nodeTestAudioFile ? `${nodeTestAudioFile.name} · ${formatFileSize(nodeTestAudioFile.size)}` : `支持 WAV / MP3，单个音频不超过 ${AUDIO_UPLOAD_MAX_SIZE_MB} MB。` }}
                       </div>
                     </div>
                     <div class="flex items-center gap-2">

@@ -13,6 +13,7 @@ import { useBusinessSocket } from '@/composables/useBusinessSocket'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 import { useWorkflowBindingStatus } from '@/composables/useWorkflowBindingStatus'
 import { useWorkflowCatalog } from '@/composables/useWorkflowCatalog'
+import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
 import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { TRANSCRIPTION_TASK_TYPE_LABELS, TRANSCRIPTION_TASK_TYPES } from '@/constants/transcription'
 import { useAppStore } from '@/stores/app'
@@ -825,7 +826,15 @@ function handleChooseFile() {
 
 function handleFileSelected(event: Event) {
   const target = event.target as HTMLInputElement | null
-  selectedFile.value = target?.files?.[0] ?? null
+  const file = target?.files?.[0] ?? null
+  if (isAudioFileOverSizeLimit(file)) {
+    selectedFile.value = null
+    if (target)
+      target.value = ''
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
+    return
+  }
+  selectedFile.value = file
 }
 
 function clearSelectedFile() {
@@ -936,6 +945,10 @@ async function handleResumePostProcess() {
 async function handleUploadTask() {
   if (!selectedFile.value) {
     message.warning('请先选择音频文件')
+    return
+  }
+  if (isAudioFileOverSizeLimit(selectedFile.value)) {
+    message.warning(AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE)
     return
   }
 
@@ -1100,7 +1113,7 @@ onBeforeUnmount(() => {
             </NButton>
           </div>
           <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate">
-            <span>{{ selectedFile ? `文件大小 ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : '未选择文件' }}</span>
+            <span>{{ selectedFile ? `文件大小 ${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : `单个音频不超过 ${AUDIO_UPLOAD_MAX_SIZE_MB} MB` }}</span>
             <span>{{ configuredWorkflowMessage }}</span>
             <NButton v-if="selectedFile" text size="small" @click="clearSelectedFile">
               清除

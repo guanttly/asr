@@ -11,9 +11,12 @@ import (
 var (
 	ErrServiceUnavailable = errors.New("未配置人声服务地址，请设置 services.speaker_service_url")
 	ErrMissingSpeakerName = errors.New("speaker_name is required")
+	ErrSpeakerNameTooLong = errors.New("说话人姓名长度范围为 1-64 个字符")
 	ErrMissingAudioFile   = errors.New("voiceprint audio file is required")
 	ErrMissingRecordID    = errors.New("voiceprint id is required")
 )
+
+const maxSpeakerNameLength = 64
 
 type client interface {
 	BaseURL() string
@@ -83,6 +86,9 @@ func (s *Service) Enroll(ctx context.Context, req *EnrollRequest) (*Record, erro
 	speakerName := strings.TrimSpace(req.SpeakerName)
 	if speakerName == "" {
 		return nil, ErrMissingSpeakerName
+	}
+	if len([]rune(speakerName)) > maxSpeakerNameLength {
+		return nil, ErrSpeakerNameTooLong
 	}
 	audioFilePath := strings.TrimSpace(req.AudioFilePath)
 	if audioFilePath == "" {

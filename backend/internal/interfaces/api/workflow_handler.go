@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -267,7 +266,8 @@ func (h *WorkflowHandler) ExecuteWorkflow(c *gin.Context) {
 
 	req, cleanup, err := h.bindExecuteWorkflowRequest(c)
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		status, messageText := workflowBindErrorResponse(err)
+		response.Error(c, status, errcode.CodeBadRequest, messageText)
 		return
 	}
 	defer cleanup()
@@ -343,7 +343,8 @@ func (h *WorkflowHandler) CloneWorkflow(c *gin.Context) {
 func (h *WorkflowHandler) TestNode(c *gin.Context) {
 	req, cleanup, err := h.bindTestNodeRequest(c)
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		status, messageText := workflowBindErrorResponse(err)
+		response.Error(c, status, errcode.CodeBadRequest, messageText)
 		return
 	}
 	defer cleanup()
@@ -574,37 +575,31 @@ func saveOptionalWorkflowAudio(c *gin.Context, prefix string) (string, func(), e
 		}
 		return "", func() {}, err
 	}
-
+	if fileHeader.Size > maxAudioSizeBytes(defaultMaxAudioSizeMB) {
+		return "", func() {}, &audioUploadError{statusCode: http.StatusRequestEntityTooLarge, message: audioTooLargeMessage(defaultMaxAudioSizeMB)}
+	}
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if !isSupportedAudioExtension(ext) {
-		return "", func() {}, fmt.Errorf("unsupported audio file type")
+		return "", func() {}, &audioUploadError{statusCode: http.StatusBadRequest, message: "音频格式不支持，仅支持 wav/mp3"}
 	}
 
 	absPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d%s", prefix, time.Now().UnixNano(), ext))
-	src, err := fileHeader.Open()
-	if err != nil {
-		return "", func() {}, fmt.Errorf("failed to open uploaded audio file: %w", err)
-	}
-	defer src.Close()
-
-	dst, err := os.Create(absPath)
-	if err != nil {
-		return "", func() {}, fmt.Errorf("failed to create temp audio file: %w", err)
-	}
-
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
+	if err := writeUploadedFile(fileHeader, absPath); err != nil {
 		_ = os.Remove(absPath)
 		return "", func() {}, fmt.Errorf("failed to save audio file: %w", err)
-	}
-	if err := dst.Close(); err != nil {
-		_ = os.Remove(absPath)
-		return "", func() {}, fmt.Errorf("failed to finalize audio file: %w", err)
 	}
 
 	return absPath, func() {
 		_ = os.Remove(absPath)
 	}, nil
+}
+
+func workflowBindErrorResponse(err error) (int, string) {
+	var requestErr *audioUploadError
+	if errors.As(err, &requestErr) {
+		return requestErr.statusCode, requestErr.message
+	}
+	return http.StatusBadRequest, err.Error()
 }
 
 func firstEnabledNodeType(nodes []appwf.NodeResponse) *domain.NodeType {

@@ -7,7 +7,8 @@ HTTP_REDIRECT_TO_HTTPS=${ASR_HTTP_REDIRECT_TO_HTTPS:-0}
 COMMON_LOCATIONS=$(cat <<'EOF'
   root /srv/asr/frontend-dist;
   index index.html;
-  client_max_body_size 1024m;
+  client_max_body_size 201m;
+  error_page 413 = @payload_too_large;
 
   location = /healthz {
     proxy_pass http://127.0.0.1:10010/healthz;
@@ -78,6 +79,11 @@ COMMON_LOCATIONS=$(cat <<'EOF'
     add_header Cache-Control "public, max-age=60";
     add_header Content-Disposition 'attachment; filename="asr-server.crt"';
     default_type application/x-x509-ca-cert;
+  }
+
+  location @payload_too_large {
+    default_type application/json;
+    return 413 '{"code":40000,"message":"音频文件不能超过 200 MB，请压缩或切分后再上传"}';
   }
 EOF
 )

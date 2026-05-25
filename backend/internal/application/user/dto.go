@@ -27,9 +27,9 @@ type AnonymousLoginRequest struct {
 
 // CreateUserRequest is the DTO for creating a user.
 type CreateUserRequest struct {
-	Username    string `json:"username" binding:"required,min=3,max=32"`
-	Password    string `json:"password" binding:"required,min=6"`
-	DisplayName string `json:"display_name"`
+	Username    string `json:"username" binding:"required,min=1,max=64"`
+	Password    string `json:"password" binding:"required,min=1,max=128"`
+	DisplayName string `json:"display_name" binding:"max=128"`
 	Role        string `json:"role" binding:"required,oneof=admin user"`
 }
 

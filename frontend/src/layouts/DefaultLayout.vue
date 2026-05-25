@@ -1,28 +1,19 @@
 <script setup lang="ts">
 import type { MenuOption } from 'naive-ui'
-import type { CatalogTreeNode } from '@/api/termCatalog'
+import type { RulesTreeNode } from '@/api/rulesCatalog'
 
+import type { CatalogTreeNode } from '@/api/termCatalog'
 import { NIcon, NTooltip } from 'naive-ui'
+
 import { computed, h, onMounted, ref, watch } from 'vue'
 
 import { useRoute, useRouter } from 'vue-router'
-
-import { getTermCatalogTree } from '@/api/termCatalog'
 import { getRulesCatalogTree } from '@/api/rulesCatalog'
-import type { RulesTreeNode } from '@/api/rulesCatalog'
+import { getTermCatalogTree } from '@/api/termCatalog'
 import { useBusinessSocket } from '@/composables/useBusinessSocket'
 import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
-import {
-  catalogMenuLabel,
-  findCatalogNodeByPath,
-  findCatalogParentPaths,
-  findFirstCatalogFile,
-  TERM_CATALOG_ROUTE,
-  termCatalogDirMenuKey,
-  termCatalogRouteKey,
-} from '@/utils/termCatalogMenu'
 import {
   findFirstRulesFile,
   findRulesNodeByPath,
@@ -32,6 +23,15 @@ import {
   rulesCatalogMenuLabel,
   rulesCatalogRouteKey,
 } from '@/utils/rulesCatalogMenu'
+import {
+  catalogMenuLabel,
+  findCatalogNodeByPath,
+  findCatalogParentPaths,
+  findFirstCatalogFile,
+  TERM_CATALOG_ROUTE,
+  termCatalogDirMenuKey,
+  termCatalogRouteKey,
+} from '@/utils/termCatalogMenu'
 
 const router = useRouter()
 const route = useRoute()

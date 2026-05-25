@@ -5,9 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,6 +300,19 @@ func TestAuthenticateRejectsCapabilityOutsideGrant(t *testing.T) {
 	_, _, err = service.AuthenticateAccessToken(context.Background(), token.AccessToken, "meeting.summary")
 	if err != ErrOpenCapDenied {
 		t.Fatalf("expected ErrOpenCapDenied, got %v", err)
+	}
+}
+
+func TestIssueTokenRejectsSecretAboveLengthLimit(t *testing.T) {
+	service := NewService(newOpenAppRepoStub(), noopSkillRepo{}, noopCallLogRepo{}, nil, "unit-test-secret", 3600)
+
+	_, err := service.IssueToken(context.Background(), &IssueTokenRequest{
+		AppID:     "app_test",
+		AppSecret: strings.Repeat("s", 513),
+	})
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("expected ValidationError, got %v", err)
 	}
 }
 

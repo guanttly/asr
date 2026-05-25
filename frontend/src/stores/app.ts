@@ -1,11 +1,11 @@
-import type { WorkflowBindingKey, WorkflowBindings } from '@/types/workflow'
 import type { HardwareProfilePayload, ProductCapabilitiesPayload, ProductFeaturesPayload, ProductLanguagePayload } from '@/api/appSettings'
 import type { ProductFeatureKey } from '@/constants/product'
+import type { WorkflowBindingKey, WorkflowBindings } from '@/types/workflow'
 
 import { defineStore } from 'pinia'
 
-import { getCurrentUserWorkflowBindings, updateCurrentUserWorkflowBindings } from '@/api/user'
 import { getProductFeatures } from '@/api/appSettings'
+import { getCurrentUserWorkflowBindings, updateCurrentUserWorkflowBindings } from '@/api/user'
 import { PRODUCT_EDITIONS, PRODUCT_FEATURE_KEYS } from '@/constants/product'
 import { WORKFLOW_BINDING_KEYS } from '@/types/workflow'
 
@@ -153,29 +153,29 @@ export const useAppStore = defineStore('app', {
       return Boolean(this.productCapabilities[key])
     },
     applyProductFeatures(payload?: ProductFeaturesPayload | null) {
-    const normalized = normalizeProductFeatures(payload)
-    this.productEdition = normalized.edition
-    this.productCapabilities = normalized.capabilities
-    this.productSupportedLanguages = normalized.supported_languages
-    this.productHardwareTier = normalized.hardware_tier
-    this.productHardwareRequirements = normalized.hardware_requirements
-    this.productFeaturesReady = true
-    this.workflowBindings = sanitizeWorkflowBindings(this.workflowBindings, normalized.capabilities)
-  },
+      const normalized = normalizeProductFeatures(payload)
+      this.productEdition = normalized.edition
+      this.productCapabilities = normalized.capabilities
+      this.productSupportedLanguages = normalized.supported_languages
+      this.productHardwareTier = normalized.hardware_tier
+      this.productHardwareRequirements = normalized.hardware_requirements
+      this.productFeaturesReady = true
+      this.workflowBindings = sanitizeWorkflowBindings(this.workflowBindings, normalized.capabilities)
+    },
     async bootstrapProductFeatures() {
-    if (typeof window === 'undefined' || !localStorage.getItem('asr_token')) {
-      this.applyProductFeatures(null)
-      return
-    }
+      if (typeof window === 'undefined' || !localStorage.getItem('asr_token')) {
+        this.applyProductFeatures(null)
+        return
+      }
 
-    try {
-      const result = await getProductFeatures()
-      this.applyProductFeatures(result.data)
-    }
-    catch {
-      this.applyProductFeatures(null)
-    }
-  },
+      try {
+        const result = await getProductFeatures()
+        this.applyProductFeatures(result.data)
+      }
+      catch {
+        this.applyProductFeatures(null)
+      }
+    },
     resetWorkflowBindings() {
       this.workflowBindings = sanitizeWorkflowBindings(defaultWorkflowBindings(), this.productCapabilities)
       this.workflowBindingsReady = true
@@ -218,9 +218,9 @@ export const useAppStore = defineStore('app', {
       }
       catch {
         this.workflowBindings = sanitizeWorkflowBindings(
-				hasWorkflowBindingValue(legacyBindings) ? legacyBindings : defaultWorkflowBindings(),
-				this.productCapabilities,
-			)
+          hasWorkflowBindingValue(legacyBindings) ? legacyBindings : defaultWorkflowBindings(),
+          this.productCapabilities,
+        )
       }
       finally {
         this.workflowBindingsLoading = false

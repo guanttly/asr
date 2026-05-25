@@ -341,23 +341,40 @@ prepare_legacy_dockerfile() {
 detect_device_from_compose() {
     local compose_output
 
+    if [ -z "$(compose_version)" ]; then
+        return 1
+    fi
+
     compose_output="$(compose config 2>/dev/null || true)"
     if [ -z "${compose_output}" ]; then
         return 1
     fi
 
     printf '%s\n' "${compose_output}" | awk '
+        function clean(value) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            gsub(/^"/, "", value)
+            gsub(/"$/, "", value)
+            gsub(/^'\''/, "", value)
+            gsub(/'\''$/, "", value)
+            return value
+        }
         /^[[:space:]]+environment:$/ {
             in_env = 1
             next
+        }
+        in_env && /^[[:space:]]+-[[:space:]]*DEVICE=/ {
+            value = $0
+            sub(/^[[:space:]]+-[[:space:]]*DEVICE=/, "", value)
+            print clean(value)
+            exit
         }
         in_env && /^[[:space:]]+[A-Za-z0-9_]+:/ {
             key = $1
             sub(/:$/, "", key)
             if (key == "DEVICE") {
                 value = $2
-                gsub(/"/, "", value)
-                print value
+                print clean(value)
                 exit
             }
             next
@@ -368,18 +385,83 @@ detect_device_from_compose() {
     '
 }
 
-# 读取目标设备；默认按 CPU 模式运行。
+clean_device_value() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//;s/^'\''//;s/'\''$//'
+}
+
+detect_device_from_env_file() {
+    local env_file="${WORKSPACE_DIR}/.env"
+    local key
+    local value
+
+    [ -f "${env_file}" ] || return 1
+
+    for key in DEVICE SA_DEVICE; do
+        value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "${env_file}" | tail -n 1 || true)"
+        value="$(clean_device_value "${value}")"
+        if [ -n "${value}" ]; then
+            echo "${value}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+detect_device_from_host_gpu() {
+    if [ "${SA_AUTO_DETECT_GPU:-1}" = "0" ]; then
+        return 1
+    fi
+
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        echo "cuda:0"
+        return 0
+    fi
+
+    if [ -d /proc/driver/nvidia/gpus ] && find /proc/driver/nvidia/gpus -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+        echo "cuda:0"
+        return 0
+    fi
+
+    if [ -e /dev/nvidiactl ] || [ -e /dev/nvidia0 ]; then
+        echo "cuda:0"
+        return 0
+    fi
+
+    return 1
+}
+
+# 读取目标设备：显式配置优先，其次 compose/.env，最后自动探测宿主机 GPU。
 detect_device() {
+    local env_file_device
     local compose_device
+    local host_gpu_device
 
     if [ -n "${DEVICE:-}" ]; then
         echo "${DEVICE}"
         return
     fi
 
+    if [ -n "${SA_DEVICE:-}" ]; then
+        echo "${SA_DEVICE}"
+        return
+    fi
+
+    env_file_device="$(detect_device_from_env_file || true)"
+    if [ -n "${env_file_device}" ]; then
+        echo "${env_file_device}"
+        return
+    fi
+
     compose_device="$(detect_device_from_compose || true)"
     if [ -n "${compose_device}" ]; then
         echo "${compose_device}"
+        return
+    fi
+
+    host_gpu_device="$(detect_device_from_host_gpu || true)"
+    if [ -n "${host_gpu_device}" ]; then
+        echo "${host_gpu_device}"
         return
     fi
 
@@ -411,19 +493,59 @@ resolve_torch_packages() {
     echo "torch==${TORCH_VERSION}+${torch_channel} torchaudio==${TORCHAUDIO_VERSION}+${torch_channel}"
 }
 
+torch_package_version() {
+    local package_name="$1"
+    local torch_packages="$2"
+    local package
+
+    for package in ${torch_packages}; do
+        case "${package}" in
+            ${package_name}==*)
+                echo "${package#${package_name}==}"
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
 runtime_requirements_signature() {
     grep -viE '^(torch|torchaudio)([<>=!~].*)?$' "${WORKSPACE_DIR}/requirements.txt" | tr -d '\r' | sha256sum | awk '{print $1}'
 }
 
 torch_wheels_ready() {
-    local wheel_count
+    local torch_packages="$1"
+    local torch_version
+    local torchaudio_version
 
     if [ ! -d "${PYTHON_WHEEL_DIR}" ]; then
         return 1
     fi
 
-    wheel_count="$(find "${PYTHON_WHEEL_DIR}" -maxdepth 1 -type f \( -name 'torch-*.whl' -o -name 'torchaudio-*.whl' \) | wc -l | tr -d ' ')"
-    [ "${wheel_count}" -ge 2 ]
+    torch_version="$(torch_package_version torch "${torch_packages}" || true)"
+    torchaudio_version="$(torch_package_version torchaudio "${torch_packages}" || true)"
+    if [ -z "${torch_version}" ] || [ -z "${torchaudio_version}" ]; then
+        return 1
+    fi
+
+    find "${PYTHON_WHEEL_DIR}" -maxdepth 1 -type f -name "torch-${torch_version}-*.whl" -print -quit | grep -q . \
+        && find "${PYTHON_WHEEL_DIR}" -maxdepth 1 -type f -name "torchaudio-${torchaudio_version}-*.whl" -print -quit | grep -q .
+}
+
+clear_mismatched_torch_wheels() {
+    local torch_packages="$1"
+
+    if torch_wheels_ready "${torch_packages}"; then
+        return 0
+    fi
+
+    if find "${PYTHON_WHEEL_DIR}" -maxdepth 1 -type f \( -name 'torch-*.whl' -o -name 'torchaudio-*.whl' \) -print -quit 2>/dev/null | grep -q .; then
+        warn "本地 torch/torchaudio wheel 与目标不匹配，清理后重新下载: ${torch_packages}"
+        rm -f "${PYTHON_WHEEL_DIR}"/torch-*.whl "${PYTHON_WHEEL_DIR}"/torchaudio-*.whl
+    fi
+
+    return 1
 }
 
 runtime_wheels_ready() {
@@ -559,10 +681,12 @@ prefetch_python_wheels() {
 
     info "预下载 Python 依赖到本地缓存: ${PYTHON_WHEEL_DIR}"
     info "当前 DEVICE=${device_value}，PyTorch 源: ${torch_index_url}"
+    info "目标 PyTorch 包: ${torch_packages}"
 
-    if torch_wheels_ready; then
-        info "检测到本地 torch/torchaudio wheel，跳过 PyTorch 预下载"
+    if torch_wheels_ready "${torch_packages}"; then
+        info "检测到匹配当前目标的本地 torch/torchaudio wheel，跳过 PyTorch 预下载"
     else
+        clear_mismatched_torch_wheels "${torch_packages}" || true
         docker run --rm \
             -e TORCH_INDEX_URL="${torch_index_url}" \
             -e TORCH_INDEX_TRUSTED_HOST="${TORCH_INDEX_TRUSTED_HOST}" \
@@ -578,6 +702,11 @@ prefetch_python_wheels() {
                     --index-url "$TORCH_INDEX_URL" \
                     --trusted-host "$TORCH_INDEX_TRUSTED_HOST" \
                     $TORCH_PACKAGES'
+        if ! torch_wheels_ready "${torch_packages}"; then
+            error "PyTorch wheel 下载完成后仍未找到目标包: ${torch_packages}"
+            error "请检查 TORCH_CUDA_CHANNEL/TORCH_CPU_CHANNEL、TORCH_VERSION、TORCHAUDIO_VERSION 或 PyTorch 源。"
+            exit 1
+        fi
     fi
 
     if runtime_wheels_ready; then

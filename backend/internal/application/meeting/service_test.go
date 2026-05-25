@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,6 +294,39 @@ func TestUpdateMeetingPersistsTitleAndSummary(t *testing.T) {
 	}
 	if result.Title != title || result.Summary == nil || result.Summary.Content != content {
 		t.Fatalf("expected refreshed detail response, got %+v", result)
+	}
+}
+
+func TestUpdateMeetingRejectsSummaryMarkdownOutsideLengthRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantErr error
+	}{
+		{name: "empty", content: "   ", wantErr: ErrMeetingSummaryContentRequired},
+		{name: "too long", content: strings.Repeat("纪", 50001), wantErr: ErrMeetingSummaryContentTooLong},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meetingRepo := &meetingRepoServiceStub{meeting: &domain.Meeting{
+				ID:       21,
+				UserID:   9,
+				Title:    "原始标题",
+				AudioURL: "https://example.com/a.wav",
+				Status:   domain.MeetingStatusCompleted,
+			}}
+			summaryRepo := &summaryRepoServiceStub{current: &domain.Summary{ID: 31, MeetingID: 21, Content: "旧纪要", ModelVersion: "qwen-summary"}}
+			service := NewService(meetingRepo, &transcriptRepoServiceStub{}, summaryRepo, nil, nil, nil)
+
+			_, err := service.UpdateMeeting(context.Background(), 21, 9, &UpdateMeetingRequest{SummaryContent: &tc.content})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+			if summaryRepo.updated != nil {
+				t.Fatalf("expected no summary update, got %+v", summaryRepo.updated)
+			}
+		})
 	}
 }
 

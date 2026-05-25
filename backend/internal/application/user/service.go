@@ -2,6 +2,8 @@ package user
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,6 +20,25 @@ type Service struct {
 	workflowRepo wfdomain.WorkflowRepository
 }
 
+const (
+	maxUsernameLength    = 64
+	maxPasswordLength    = 128
+	maxDisplayNameLength = 128
+)
+
+type ValidationError struct {
+	message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.message
+}
+
+func IsValidationError(err error) bool {
+	var validationErr *ValidationError
+	return errors.As(err, &validationErr)
+}
+
 // NewService creates a new user application service.
 func NewService(userRepo domain.UserRepository, workflowRepo wfdomain.WorkflowRepository) *Service {
 	return &Service{userRepo: userRepo, workflowRepo: workflowRepo}
@@ -25,26 +46,44 @@ func NewService(userRepo domain.UserRepository, workflowRepo wfdomain.WorkflowRe
 
 // CreateUser registers a new user.
 func (s *Service) CreateUser(ctx context.Context, req *CreateUserRequest) (*UserResponse, error) {
+	if req == nil {
+		return nil, &ValidationError{message: "username is required"}
+	}
+	username := strings.TrimSpace(req.Username)
+	displayName := strings.TrimSpace(req.DisplayName)
+	if username == "" {
+		return nil, &ValidationError{message: "用户名长度范围为 1-64 个字符"}
+	}
+	if runeCount(username) > maxUsernameLength {
+		return nil, &ValidationError{message: "用户名长度范围为 1-64 个字符"}
+	}
+	if req.Password == "" || runeCount(req.Password) > maxPasswordLength {
+		return nil, &ValidationError{message: "密码长度范围为 1-128 个字符"}
+	}
+	if runeCount(displayName) > maxDisplayNameLength {
+		return nil, &ValidationError{message: "display_name length must be at most 128 characters"}
+	}
+
 	role := domain.Role(req.Role)
 	if role != domain.RoleAdmin && role != domain.RoleUser {
 		return nil, errors.New("invalid role")
 	}
 
-	if _, err := s.userRepo.GetByUsername(ctx, req.Username); err == nil {
+	if _, err := s.userRepo.GetByUsername(ctx, username); err == nil {
 		return nil, domain.ErrUserAlreadyExists
 	} else if !errors.Is(err, domain.ErrUserNotFound) {
 		return nil, err
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword(passwordBcryptInput(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}
 
 	user := &domain.User{
-		Username:     req.Username,
+		Username:     username,
 		PasswordHash: string(hash),
-		DisplayName:  req.DisplayName,
+		DisplayName:  displayName,
 		Role:         role,
 	}
 
@@ -55,6 +94,26 @@ func (s *Service) CreateUser(ctx context.Context, req *CreateUserRequest) (*User
 	return toResponse(user), nil
 }
 
+func runeCount(value string) int {
+	return len([]rune(value))
+}
+
+func passwordBcryptInput(password string) []byte {
+	raw := []byte(password)
+	if len(raw) <= 72 {
+		return raw
+	}
+	sum := sha256.Sum256(raw)
+	return []byte("sha256:" + base64.RawURLEncoding.EncodeToString(sum[:]))
+}
+
+func comparePassword(hash, password string) error {
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err == nil {
+		return nil
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), passwordBcryptInput(password))
+}
+
 // Authenticate verifies credentials and returns the user.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*domain.User, error) {
 	user, err := s.userRepo.GetByUsername(ctx, username)
@@ -62,7 +121,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 		return nil, errors.New("invalid credentials")
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	if err := comparePassword(user.PasswordHash, password); err != nil {
 		return nil, errors.New("invalid credentials")
 	}
 

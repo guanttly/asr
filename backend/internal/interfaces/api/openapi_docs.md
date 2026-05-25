@@ -16,6 +16,8 @@ Content-Type: application/json
 }
 ```
 
+字段限制：`app_secret` 长度为 1-512 个字符。
+
 成功响应：
 
 ```json
@@ -75,7 +77,7 @@ token 失效原因可通过响应体的错误码区分：`ERR_OPEN_AUTH_EXPIRED`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `file` | file | 待识别的音频，最大尺寸由部署侧 `upload.max_audio_size_mb` 控制 |
+| `file` | file | 待识别的音频，默认最大 200 MB，可由部署侧 `upload.max_audio_size_mb` 控制 |
 | `language` | string | 可选，`auto` / `zh` / `en` 等，缺省 `auto` |
 | `use_itn` | bool | 可选，是否启用反向文本归一化（数字、日期等） |
 | `hotwords` | string | 可选，逗号或换行分隔的热词列表 |

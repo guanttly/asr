@@ -692,7 +692,7 @@ onBeforeUnmount(() => {
               <section v-else-if="summaryMode === 'edit'" class="editor-panel">
                 <label class="editor-field wide">
                   <span>标题</span>
-                  <input v-model="draftTitle" type="text" maxlength="120" spellcheck="false">
+                  <input v-model="draftTitle" type="text" maxlength="128" spellcheck="false">
                 </label>
 
                 <div class="meta-grid">

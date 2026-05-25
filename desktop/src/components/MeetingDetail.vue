@@ -701,6 +701,7 @@ onBeforeUnmount(() => {
                     <input
                       v-model="draftMeta[field.key]"
                       type="text"
+                      maxlength="128"
                       spellcheck="false"
                       :placeholder="field.placeholder"
                       @input="syncMetaFieldToDraft(field.key)"
@@ -715,7 +716,7 @@ onBeforeUnmount(() => {
 
                 <label class="editor-field wide">
                   <span>Markdown</span>
-                  <textarea v-model="draftContent" spellcheck="false" />
+                  <textarea v-model="draftContent" maxlength="50000" spellcheck="false" />
                 </label>
               </section>
 

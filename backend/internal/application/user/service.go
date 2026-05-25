@@ -75,14 +75,24 @@ func (s *Service) AuthenticateAnonymously(ctx context.Context, req *AnonymousLog
 	if machineCode == "" {
 		return nil, errors.New("machine_code is required")
 	}
+	normalizedIPAddresses := normalizeStringSlice(req.IPAddresses)
+	normalizedMACAddresses := normalizeMACAddresses(req.MACAddresses)
 
 	identity, err := s.userRepo.GetDeviceIdentityByMachineCode(ctx, machineCode)
 	if err != nil && !errors.Is(err, domain.ErrDeviceIdentityNotFound) {
 		return nil, err
 	}
+	if identity == nil && len(normalizedMACAddresses) > 0 {
+		identity, err = s.userRepo.GetDeviceIdentityByMACAddresses(ctx, normalizedMACAddresses)
+		if err != nil && !errors.Is(err, domain.ErrDeviceIdentityNotFound) {
+			return nil, err
+		}
+	}
 
 	var user *domain.User
+	var identityID uint64
 	if identity != nil {
+		identityID = identity.ID
 		user, err = s.userRepo.GetByID(ctx, identity.UserID)
 		if err != nil {
 			return nil, err
@@ -108,12 +118,13 @@ func (s *Service) AuthenticateAnonymously(ctx context.Context, req *AnonymousLog
 	}
 
 	deviceIdentity := &domain.DeviceIdentity{
+		ID:           identityID,
 		UserID:       user.ID,
 		MachineCode:  machineCode,
 		Hostname:     strings.TrimSpace(req.Hostname),
 		Platform:     strings.TrimSpace(req.Platform),
-		IPAddresses:  normalizeStringSlice(req.IPAddresses),
-		MACAddresses: normalizeStringSlice(req.MACAddresses),
+		IPAddresses:  normalizedIPAddresses,
+		MACAddresses: normalizedMACAddresses,
 	}
 	if err := s.userRepo.UpsertDeviceIdentity(ctx, deviceIdentity); err != nil {
 		return nil, err
@@ -424,4 +435,13 @@ func normalizeStringSlice(items []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func normalizeMACAddresses(items []string) []string {
+	normalized := normalizeStringSlice(items)
+	for index, item := range normalized {
+		normalized[index] = strings.ToLower(item)
+	}
+	sort.Strings(normalized)
+	return normalized
 }

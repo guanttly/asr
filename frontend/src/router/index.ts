@@ -144,7 +144,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'system/users',
         name: 'system-users',
-        meta: { title: '用户管理', desc: '当前已接入 admin-api 用户查询接口，可用于联调登录、权限和系统管理。' },
+        meta: { title: '用户管理', desc: '维护系统账号、显示名称与角色权限。' },
         component: () => import('@/pages/system/users.vue'),
       },
       {

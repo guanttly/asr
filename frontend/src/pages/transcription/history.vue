@@ -1109,7 +1109,7 @@ onBeforeUnmount(() => {
         </NTabPane>
         <NTabPane name="url" tab="提交音频 URL">
           <div class="flex flex-wrap items-center gap-3 pt-3">
-            <NInput v-model:value="submitForm.audioUrl" placeholder="https://example.com/audio/demo.wav" class="w-full sm:!w-96" />
+            <NInput v-model:value="submitForm.audioUrl" :maxlength="2048" placeholder="https://example.com/audio/report.wav" class="w-full sm:!w-96" />
             <NButton quaternary @click="router.push('/workflows/application-settings')">
               应用配置
             </NButton>

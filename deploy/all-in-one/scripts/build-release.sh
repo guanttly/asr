@@ -16,16 +16,16 @@ VERSION=""
 OUTPUT_ROOT="$DEPLOY_DIR/dist"
 SKIP_DOCKER=0
 SERVER_HOST="localhost"
-HTTP_PORT="80"
+HTTP_PORT="9855"
 HTTP_PORT_EXPLICIT=0
 HTTPS_PORT=""
 ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="change-me-now"
+ADMIN_PASSWORD="jusha1996"
 ADMIN_DISPLAY_NAME="系统管理员"
 MYSQL_PASSWORD=""
 JWT_SECRET=""
-ASR_SERVICE_URL="http://host.docker.internal:11001"
-SPEAKER_SERVICE_URL="http://host.docker.internal:11002"
+ASR_SERVICE_URL="http://jusha-asr-asr:8000"
+SPEAKER_SERVICE_URL="http://jusha-asr-speaker:8100"
 DESKTOP_INSTALLER_OVERRIDE=""
 DESKTOP_ELECTRON_INSTALLER_OVERRIDE=""
 SKIP_ELECTRON_BUILD=0
@@ -34,6 +34,8 @@ DESKTOP_CARGO_TOML_OWNER=""
 DESKTOP_CARGO_LOCK_OWNER=""
 DESKTOP_ELECTRON_PACKAGE_OWNER=""
 OUTPUT_OWNER=""
+PART_SIZE="${ASR_RELEASE_PART_SIZE:-${JUSHA_ASR_PART_SIZE:-500m}}"
+KEEP_ARCHIVE="${ASR_RELEASE_KEEP_ARCHIVE:-${JUSHA_ASR_KEEP_ARCHIVE:-0}}"
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -137,13 +139,13 @@ usage() {
   --server-host <host> | server-host <host>
                                      服务器 IP 或域名，用于客户端默认地址和 TLS 证书
   --http-port <port> | http-port <port>
-                                     HTTP 对外端口，默认 80；若显式传入且未传 --https-port，则 HTTPS 自动取 http+1
+                                     HTTP 对外端口，默认 9855；若显式传入且未传 --https-port，则 HTTPS 自动取 http+1
   --https-port <port> | https-port <port>
-                                     HTTPS 对外端口，默认 443
+                                     HTTPS 对外端口，默认 9856
   --admin-username <username> | admin-username <username>
                                      默认管理员用户名，默认 admin
   --admin-password <password> | admin-password <password>
-                                     默认管理员密码，默认 change-me-now
+                                     默认管理员密码，默认 jusha1996
   --admin-display-name <name> | admin-display-name <name>
                                      默认管理员显示名，默认 系统管理员
   --mysql-password <password> | mysql-password <password>
@@ -151,9 +153,9 @@ usage() {
   --jwt-secret <secret> | jwt-secret <secret>
                                      JWT 密钥，默认自动生成
   --asr-service-url <url> | asr-service-url <url>
-                                     外部 ASR 服务地址，默认 http://host.docker.internal:11001
+                                     ASR 服务地址，默认 http://jusha-asr-asr:8000
   --speaker-service-url <url> | speaker-service-url <url>
-                                     统一的人声服务地址，默认 http://host.docker.internal:11002
+                                     统一的人声服务地址，默认 http://jusha-asr-speaker:8100
   --desktop-installer <path> | desktop-installer <path>
                                      直接使用现成桌面端（Tauri Win10/11）安装包，不自动构建
   --desktop-electron-installer <path> | desktop-electron-installer <path>
@@ -161,6 +163,10 @@ usage() {
   --skip-electron | skip-electron   跳过 Win7 兼容版 Electron 安装包的构建与打包
   --dry-run | dry-run               跳过 Docker 镜像构建和桌面端自动构建
   -h, --help                        显示帮助
+
+环境变量:
+  ASR_RELEASE_PART_SIZE=500m         .run 分包大小，默认 500m
+  ASR_RELEASE_KEEP_ARCHIVE=1         保留中间 .tar.gz，默认只保留 .run 与 .run.partNNN
 EOF
 }
 
@@ -561,6 +567,23 @@ build_desktop_electron_installer() {
   return 1
 }
 
+split_payload_archive() {
+  PAYLOAD_ARCHIVE="$1"
+  RUN_PATH_VALUE="$2"
+
+  if ! command -v split >/dev/null 2>&1; then
+    echo "缺少 split 命令，无法生成分包发布文件" >&2
+    exit 1
+  fi
+
+  rm -f "$RUN_PATH_VALUE".part[0-9][0-9][0-9]*
+  if split --help 2>/dev/null | grep -q -- '--numeric-suffixes'; then
+    split -b "$PART_SIZE" -d -a 3 --numeric-suffixes=1 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
+  else
+    split -b "$PART_SIZE" -d -a 3 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
+  fi
+}
+
 create_self_extract_run() {
   RUN_PATH="$1"
   PAYLOAD_ARCHIVE="$2"
@@ -571,13 +594,15 @@ create_self_extract_run() {
 set -eu
 
 SELF="$0"
+SELF_DIR=$(CDPATH= cd -- "$(dirname "$SELF")" && pwd)
+SELF_NAME=$(basename "$SELF")
 TARGET_BASE=${ASR_RUN_TARGET_DIR:-$PWD}
-TARGET_DIR="$TARGET_BASE/asr-all-in-one"
-PAYLOAD_LINE=$(awk '/^__ASR_ARCHIVE_BELOW__$/ {print NR + 1; exit 0; }' "$SELF")
+TARGET_DIR="$TARGET_BASE/jusha-asr-business"
+PART_FILES=$(find "$SELF_DIR" -maxdepth 1 -type f -name "$SELF_NAME.part[0-9][0-9][0-9]*" | sort)
 EXTRACT_ROOT=
 
-if [ -z "${PAYLOAD_LINE:-}" ]; then
-  echo "无效的安装包：未找到内置归档数据" >&2
+if [ -z "$PART_FILES" ]; then
+  echo "无效的安装包：未找到分包文件 $SELF_NAME.part001" >&2
   exit 1
 fi
 
@@ -689,15 +714,15 @@ fi
 
 mkdir -p "$TARGET_BASE"
 EXTRACT_ROOT=$(mktemp -d)
-tail -n +"$PAYLOAD_LINE" "$SELF" | tar -xzf - -C "$EXTRACT_ROOT"
+cat $PART_FILES | tar -xzf - -C "$EXTRACT_ROOT"
 
-if [ ! -d "$EXTRACT_ROOT/asr-all-in-one" ]; then
-  echo "无效的安装包：未找到 asr-all-in-one 目录" >&2
+if [ ! -d "$EXTRACT_ROOT/jusha-asr-business" ]; then
+  echo "无效的安装包：未找到 jusha-asr-business 目录" >&2
   exit 1
 fi
 
 if [ ! -d "$TARGET_DIR" ]; then
-  mv "$EXTRACT_ROOT/asr-all-in-one" "$TARGET_DIR"
+  mv "$EXTRACT_ROOT/jusha-asr-business" "$TARGET_DIR"
 else
   find "$TARGET_DIR" -mindepth 1 -maxdepth 1 | while read -r EXISTING_PATH; do
     ENTRY_NAME=$(basename "$EXISTING_PATH")
@@ -705,12 +730,12 @@ else
       continue
     fi
 
-    if [ ! -e "$EXTRACT_ROOT/asr-all-in-one/$ENTRY_NAME" ]; then
+    if [ ! -e "$EXTRACT_ROOT/jusha-asr-business/$ENTRY_NAME" ]; then
       rm -rf "$EXISTING_PATH"
     fi
   done
 
-  find "$EXTRACT_ROOT/asr-all-in-one" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
+  find "$EXTRACT_ROOT/jusha-asr-business" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
     ENTRY_NAME=$(basename "$INCOMING_PATH")
     case "$ENTRY_NAME" in
       .env)
@@ -735,10 +760,9 @@ fi
 cd "$TARGET_DIR"
 sh install.sh
 exit 0
-__ASR_ARCHIVE_BELOW__
 EOF
 
-  cat "$PAYLOAD_ARCHIVE" >> "$TMP_RUN"
+  split_payload_archive "$PAYLOAD_ARCHIVE" "$RUN_PATH"
   chmod +x "$TMP_RUN"
   mv "$TMP_RUN" "$RUN_PATH"
 }
@@ -852,7 +876,7 @@ if [ -z "$HTTPS_PORT" ]; then
   if [ "$HTTP_PORT_EXPLICIT" -eq 1 ]; then
     HTTPS_PORT=$((HTTP_PORT + 1))
   else
-    HTTPS_PORT=443
+    HTTPS_PORT=9856
   fi
 fi
 validate_port "$HTTPS_PORT" "HTTPS 端口"
@@ -864,8 +888,8 @@ if [ -z "$JWT_SECRET" ]; then
   JWT_SECRET=$(generate_secret)
 fi
 
-IMAGE_TAG="asr-all-in-one:$VERSION"
-PACKAGE_ROOT_NAME="asr-all-in-one"
+IMAGE_TAG="jusha-asr-business:$VERSION"
+PACKAGE_ROOT_NAME="jusha-asr-business"
 PACKAGE_NAME="${PACKAGE_ROOT_NAME}-${VERSION}"
 STAGING_DIR="$OUTPUT_ROOT/$PACKAGE_ROOT_NAME"
 ARCHIVE_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.tar.gz"
@@ -879,6 +903,10 @@ OUTPUT_OWNER=$(resolve_path_owner "$OUTPUT_ROOT")
 
 ensure_output_owner_matches_current_user "$ARCHIVE_PATH"
 ensure_output_owner_matches_current_user "$RUN_PATH"
+for EXISTING_PART in "$RUN_PATH".part[0-9][0-9][0-9]*; do
+  [ -e "$EXISTING_PART" ] || continue
+  ensure_output_owner_matches_current_user "$EXISTING_PART"
+done
 
 reset_staging_dir "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog"
@@ -891,10 +919,10 @@ chmod +x "$STAGING_DIR/install.sh"
 chmod +x "$STAGING_DIR/uninstall.sh"
 
 cat > "$STAGING_DIR/.env" <<EOF
-ASR_RELEASE_IMAGE=asr-all-in-one:latest
+ASR_RELEASE_IMAGE=jusha-asr-business:latest
 ASR_RELEASE_VERSION=$VERSION
-ASR_CONTAINER_NAME=asr-all-in-one
-ASR_DOCKER_NETWORK_NAME=asr-all-in-one-net
+ASR_CONTAINER_NAME=jusha-asr-business
+ASR_DOCKER_NETWORK_NAME=jusha-asr
 ASR_DOCKER_SUBNET=
 ASR_DOCKER_GATEWAY=
 ASR_ENABLE_HTTPS=1
@@ -919,7 +947,7 @@ cp "$STAGING_DIR/.env" "$STAGING_DIR/.env.example"
 
 cat > "$STAGING_DIR/.release-manifest" <<EOF
 RELEASE_VERSION=$VERSION
-RELEASE_IMAGE=asr-all-in-one:latest
+RELEASE_IMAGE=jusha-asr-business:latest
 EOF
 
 DESKTOP_INSTALLER_PATH=""
@@ -990,25 +1018,36 @@ if [ "$SKIP_DOCKER" -eq 0 ]; then
 
   echo "构建 Docker 镜像: $IMAGE_TAG"
   docker build --build-arg ASR_APP_VERSION="$VERSION" --build-arg ASR_BUILD_DATE="$BUILD_DATE" -f "$DEPLOY_DIR/Dockerfile" -t "$IMAGE_TAG" "$REPO_ROOT"
-  docker tag "$IMAGE_TAG" asr-all-in-one:latest
+  docker tag "$IMAGE_TAG" jusha-asr-business:latest
 
   echo "导出离线镜像..."
-  docker save "$IMAGE_TAG" asr-all-in-one:latest | gzip -c > "$STAGING_DIR/image/asr-all-in-one-image.tar.gz"
+  docker save "$IMAGE_TAG" jusha-asr-business:latest | gzip -c > "$STAGING_DIR/image/jusha-asr-business-image.tar.gz"
 else
   echo "dry-run 模式：跳过 Docker 构建与镜像导出"
 fi
 
 rm -f "$ARCHIVE_PATH"
 rm -f "$RUN_PATH"
+rm -f "$RUN_PATH".part[0-9][0-9][0-9]*
 tar -czf "$ARCHIVE_PATH" -C "$OUTPUT_ROOT" "$PACKAGE_ROOT_NAME"
 create_self_extract_run "$RUN_PATH" "$ARCHIVE_PATH"
+if [ "$KEEP_ARCHIVE" != "1" ]; then
+  rm -f "$ARCHIVE_PATH"
+fi
 maybe_restore_tree_owner "$OUTPUT_OWNER" "$STAGING_DIR"
 maybe_restore_owner "$OUTPUT_OWNER" "$ARCHIVE_PATH"
 maybe_restore_owner "$OUTPUT_OWNER" "$RUN_PATH"
+for PART_PATH in "$RUN_PATH".part[0-9][0-9][0-9]*; do
+  [ -e "$PART_PATH" ] || continue
+  maybe_restore_owner "$OUTPUT_OWNER" "$PART_PATH"
+done
 
 echo "发布目录: $STAGING_DIR"
-echo "压缩包: $ARCHIVE_PATH"
 echo "一键安装包: $RUN_PATH"
+echo "分包文件: $RUN_PATH.part001 ..."
+if [ "$KEEP_ARCHIVE" = "1" ]; then
+  echo "压缩包: $ARCHIVE_PATH"
+fi
 echo "默认客户端地址: $DEFAULT_CLIENT_URL"
 echo "默认管理员账号: $ADMIN_USERNAME"
 echo "默认管理员密码: $ADMIN_PASSWORD"

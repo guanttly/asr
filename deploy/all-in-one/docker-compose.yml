@@ -5,14 +5,14 @@ services:
     build:
       context: ../..
       dockerfile: deploy/all-in-one/Dockerfile
-    image: asr-all-in-one:latest
-    container_name: asr-all-in-one
+    image: jusha-asr-business:latest
+    container_name: jusha-asr-business
     restart: unless-stopped
     extra_hosts:
       - 'host.docker.internal:${ASR_DOCKER_GATEWAY:-10.248.0.1}'
     ports:
-      - '80:80'
-      - '443:443'
+      - '9855:80'
+      - '9856:443'
     environment:
       ASR_ENABLE_HTTPS: '1'
       ASR_HTTP_REDIRECT_TO_HTTPS: '0'
@@ -24,9 +24,9 @@ services:
       ASR_BOOTSTRAP_ADMIN_PASSWORD: change-me-now
       ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME: 系统管理员
       ASR_JWT_SECRET: replace-with-random-secret
-      ASR_SERVICES_ASR: http://host.docker.internal:8000
+      ASR_SERVICES_ASR: http://jusha-asr-asr:8000
       ASR_SERVICES_ASR_STREAM: ''
-      ASR_SERVICES_SPEAKER_SERVICE_URL: ''
+      ASR_SERVICES_SPEAKER_SERVICE_URL: http://jusha-asr-speaker:8100
       ASR_SERVICES_SUMMARY_MODEL: qwen3-4b
     volumes:
       - ./runtime/mysql:/var/lib/asr/mysql
@@ -46,7 +46,7 @@ services:
 
 networks:
   asr-internal:
-    name: ${ASR_DOCKER_NETWORK_NAME:-asr-all-in-one-net}
+    name: ${ASR_DOCKER_NETWORK_NAME:-jusha-asr}
     driver: bridge
     ipam:
       config:

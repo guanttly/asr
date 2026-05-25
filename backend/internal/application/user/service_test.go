@@ -13,9 +13,11 @@ import (
 type userRepoStub struct {
 	user        *userdomain.User
 	users       []*userdomain.User
+	identity    *userdomain.DeviceIdentity
 	bindings    *userdomain.WorkflowBindings
 	bindingsMap map[uint64]*userdomain.WorkflowBindings
 	saved       *userdomain.WorkflowBindings
+	upserted    *userdomain.DeviceIdentity
 }
 
 func (r *userRepoStub) Create(_ context.Context, _ *userdomain.User) error { return nil }
@@ -31,6 +33,12 @@ func (r *userRepoStub) GetByUsername(_ context.Context, _ string) (*userdomain.U
 func (r *userRepoStub) GetDeviceIdentityByMachineCode(_ context.Context, _ string) (*userdomain.DeviceIdentity, error) {
 	return nil, userdomain.ErrDeviceIdentityNotFound
 }
+func (r *userRepoStub) GetDeviceIdentityByMACAddresses(_ context.Context, _ []string) (*userdomain.DeviceIdentity, error) {
+	if r.identity != nil {
+		return r.identity, nil
+	}
+	return nil, userdomain.ErrDeviceIdentityNotFound
+}
 func (r *userRepoStub) GetWorkflowBindings(_ context.Context, userID uint64) (*userdomain.WorkflowBindings, error) {
 	if r.bindingsMap != nil {
 		if bindings, ok := r.bindingsMap[userID]; ok && bindings != nil {
@@ -43,7 +51,9 @@ func (r *userRepoStub) GetWorkflowBindings(_ context.Context, userID uint64) (*u
 	}
 	return &userdomain.WorkflowBindings{UserID: userID}, nil
 }
-func (r *userRepoStub) UpsertDeviceIdentity(_ context.Context, _ *userdomain.DeviceIdentity) error {
+func (r *userRepoStub) UpsertDeviceIdentity(_ context.Context, identity *userdomain.DeviceIdentity) error {
+	copy := *identity
+	r.upserted = &copy
 	return nil
 }
 func (r *userRepoStub) SaveWorkflowBindings(_ context.Context, bindings *userdomain.WorkflowBindings) error {
@@ -81,6 +91,40 @@ func (r *workflowRepoStub) List(_ context.Context, _ *wfdomain.OwnerType, _ *uin
 }
 func (r *workflowRepoStub) ListFiltered(_ context.Context, _ *wfdomain.OwnerType, _ *uint64, _ bool, _ wfdomain.WorkflowListFilter, _, _ int) ([]*wfdomain.Workflow, int64, error) {
 	return nil, 0, nil
+}
+
+func TestAuthenticateAnonymouslyReusesDeviceIdentityByMAC(t *testing.T) {
+	userRepo := &userRepoStub{
+		user:     &userdomain.User{ID: 77, DisplayName: "DESKTOP-A", Role: userdomain.RoleUser},
+		identity: &userdomain.DeviceIdentity{ID: 55, UserID: 77, MachineCode: "old-machine-code"},
+	}
+	service := NewService(userRepo, &workflowRepoStub{})
+
+	result, err := service.AuthenticateAnonymously(context.Background(), &AnonymousLoginRequest{
+		MachineCode:  "NEW-MACHINE-CODE",
+		Hostname:     "DESKTOP-A",
+		Platform:     "windows-amd64",
+		IPAddresses:  []string{"192.168.1.10"},
+		MACAddresses: []string{"AA:BB:CC:DD:EE:FF"},
+	})
+	if err != nil {
+		t.Fatalf("AuthenticateAnonymously returned error: %v", err)
+	}
+	if result == nil || result.ID != 77 {
+		t.Fatalf("expected existing user 77 to be reused, got %#v", result)
+	}
+	if userRepo.upserted == nil {
+		t.Fatal("expected device identity to be upserted")
+	}
+	if userRepo.upserted.ID != 55 {
+		t.Fatalf("expected existing identity ID to be updated, got %#v", userRepo.upserted)
+	}
+	if userRepo.upserted.MachineCode != "new-machine-code" {
+		t.Fatalf("expected normalized new machine code, got %q", userRepo.upserted.MachineCode)
+	}
+	if len(userRepo.upserted.MACAddresses) != 1 || userRepo.upserted.MACAddresses[0] != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("expected MAC addresses to be preserved, got %#v", userRepo.upserted.MACAddresses)
+	}
 }
 
 func TestUpdateWorkflowBindingsPersistsValidatedBindings(t *testing.T) {

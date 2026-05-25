@@ -109,7 +109,7 @@ make serve
 ./build.sh export-run
 ```
 
-产物默认输出到 `dist/speaker-analysis-service-<version>.run`。把这个文件拷贝到断网环境后执行 `bash speaker-analysis-service-<version>.run`，安装脚本只会解包、校验内置镜像、执行 `docker load` 并使用 `pull_policy: never` / `--pull never` 启动容器，不会主动拉取镜像、模型或 Python 依赖。若服务器模型目录不在当前目录，可使用 `./scripts/build-offline-run.sh --models-dir /path/to/models`。
+产物默认输出到 `dist/jusha-asr-speaker-<version>.run`。把这个文件拷贝到断网环境后执行 `bash jusha-asr-speaker-<version>.run`，安装脚本只会解包、校验内置镜像、执行 `docker load` 并使用 `pull_policy: never` / `--pull never` 启动容器，不会主动拉取镜像、模型或 Python 依赖。默认宿主端口是 9852，默认加入共享 Docker 网络 `jusha-asr`。若服务器模型目录不在当前目录，可使用 `./scripts/build-offline-run.sh --models-dir /path/to/models`。
 
 `make init` 会优先安装 `wheels/` 下的 `speakerlab-*.whl`；如果没有 wheel，则自动拉取 3D-Speaker 源码并通过 `.pth` 注册到当前 Python 环境。
 

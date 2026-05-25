@@ -491,10 +491,11 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="mt-4 grid gap-3">
-          <NInput v-model:value="speakerName" placeholder="说话人姓名，例如 张三" />
-          <NInput v-model:value="department" placeholder="所属部门，可选" />
+          <NInput v-model:value="speakerName" :maxlength="64" placeholder="说话人姓名，例如 张三" />
+          <NInput v-model:value="department" :maxlength="128" placeholder="所属部门，可选" />
           <NInput
             v-model:value="notes"
+            :maxlength="512"
             type="textarea"
             placeholder="备注信息，可选，例如 主讲人 / 常驻发言人"
             :autosize="{ minRows: 3, maxRows: 5 }"

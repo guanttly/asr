@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
-import { promises as fs, existsSync, mkdirSync } from 'node:fs'
+import { promises as fs, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import { clearInterval, setInterval } from 'node:timers'
+import { execFileSync } from 'node:child_process'
 
 import { configureHotkeys } from './hotkeys'
 import { deleteHistoryTarget, flashInputTargetOverlay, getInputBridgeState, injectText, lockInputTarget, readClipboard, unlockInputTarget, useHistoryTarget } from './injector'
@@ -41,6 +42,86 @@ function appendRuntimeLog(scope: string, message: string) {
   }
 }
 
+function normalizeMachineSeed(value: string | undefined | null): string | null {
+  const normalized = String(value || '').trim().replace(/\0/g, '').toLowerCase()
+  if (!normalized || normalized === 'none' || normalized === 'unknown' || normalized === 'to be filled by o.e.m.')
+    return null
+  if (/^[0-]+$/.test(normalized) || /^[f-]+$/.test(normalized))
+    return null
+  return normalized
+}
+
+function commandOutput(command: string, args: string[]): string | null {
+  try {
+    return execFileSync(command, args, { encoding: 'utf8', timeout: 2500, windowsHide: true }).trim()
+  }
+  catch {
+    return null
+  }
+}
+
+function platformMachineUuid(): string | null {
+  if (process.platform === 'win32') {
+    const wmicOutput = commandOutput('wmic', ['csproduct', 'get', 'uuid'])
+    if (wmicOutput) {
+      for (const line of wmicOutput.split(/\r?\n/)) {
+        if (line.trim().toLowerCase() === 'uuid')
+          continue
+        const uuid = normalizeMachineSeed(line)
+        if (uuid)
+          return uuid
+      }
+    }
+
+    const regOutput = commandOutput('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'])
+    if (regOutput) {
+      for (const line of regOutput.split(/\r?\n/)) {
+        if (!line.includes('MachineGuid'))
+          continue
+        const uuid = normalizeMachineSeed(line.trim().split(/\s+/).at(-1))
+        if (uuid)
+          return uuid
+      }
+    }
+  }
+
+  if (process.platform === 'linux') {
+    for (const filePath of ['/sys/class/dmi/id/product_uuid', '/etc/machine-id']) {
+      try {
+        const uuid = normalizeMachineSeed(readFileSync(filePath, 'utf8'))
+        if (uuid)
+          return uuid
+      }
+      catch {}
+    }
+  }
+
+  if (process.platform === 'darwin') {
+    const output = commandOutput('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'])
+    if (output) {
+      for (const line of output.split(/\r?\n/)) {
+        if (!line.includes('IOPlatformUUID'))
+          continue
+        const uuid = normalizeMachineSeed(line.split('=').at(1)?.trim().replace(/^"|"$/g, ''))
+        if (uuid)
+          return uuid
+      }
+    }
+  }
+
+  return null
+}
+
+function buildMachineCode(hostname: string, platform: string, ipAddresses: string[], macAddresses: string[]) {
+  const hardwareSeed = platformMachineUuid()
+  const macSeed = normalizeMachineSeed(macAddresses[0])
+  const stableSeed = hardwareSeed ? `hardware:${hardwareSeed}` : (macSeed ? `mac:${macSeed}` : null)
+  const fingerprint = stableSeed
+    ? JSON.stringify({ version: 2, stable_id: stableSeed })
+    : JSON.stringify({ version: 1, hostname, platform, ip_addresses: ipAddresses, mac_addresses: macAddresses })
+  return createHash('sha256').update(fingerprint).digest('hex')
+}
+
 async function readRuntimeLogTail(lines: number): Promise<string> {
   const max = Math.min(Math.max(lines || 120, 1), 400)
   try {
@@ -74,14 +155,8 @@ function collectMachineIdentity() {
   }
 
   const ipAddresses = [...ipSet].sort()
-  const macAddresses = [...macSet].sort()
-  const fingerprint = JSON.stringify({
-    hostname,
-    platform,
-    ip_addresses: ipAddresses,
-    mac_addresses: macAddresses,
-  })
-  const machineCode = createHash('sha256').update(fingerprint).digest('hex')
+  const macAddresses = [...macSet].map(item => item.toLowerCase()).sort()
+  const machineCode = buildMachineCode(hostname, platform, ipAddresses, macAddresses)
 
   return {
     machine_code: machineCode,

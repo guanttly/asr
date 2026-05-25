@@ -57,8 +57,8 @@ if [ -f .release-manifest ]; then
   . ./.release-manifest
 fi
 
-ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-asr-all-in-one}
-ASR_RELEASE_IMAGE=${ASR_RELEASE_IMAGE:-${RELEASE_IMAGE:-asr-all-in-one:latest}}
+ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-jusha-asr-business}
+ASR_RELEASE_IMAGE=${ASR_RELEASE_IMAGE:-${RELEASE_IMAGE:-jusha-asr-business:latest}}
 
 find_cleanup_image() {
   if docker image inspect "$ASR_RELEASE_IMAGE" >/dev/null 2>&1; then
@@ -66,8 +66,8 @@ find_cleanup_image() {
     return 0
   fi
 
-  if [ "$ASR_RELEASE_IMAGE" != "asr-all-in-one:latest" ] && docker image inspect asr-all-in-one:latest >/dev/null 2>&1; then
-    printf '%s\n' 'asr-all-in-one:latest'
+  if [ "$ASR_RELEASE_IMAGE" != "jusha-asr-business:latest" ] && docker image inspect jusha-asr-business:latest >/dev/null 2>&1; then
+    printf '%s\n' 'jusha-asr-business:latest'
     return 0
   fi
 
@@ -81,7 +81,7 @@ purge_runtime_data() {
 
   CLEANUP_IMAGE=$(find_cleanup_image || true)
   if [ -z "$CLEANUP_IMAGE" ]; then
-    echo "清理失败：当前用户无权删除 runtime 数据目录，且本地找不到可用于容器内清理的 all-in-one 镜像。" >&2
+    echo "清理失败：当前用户无权删除 runtime 数据目录，且本地找不到可用于容器内清理的业务镜像。" >&2
     return 1
   fi
 
@@ -109,7 +109,7 @@ fi
 if [ "$REMOVE_IMAGE" -eq 1 ]; then
   echo "删除本地镜像标签..."
   docker image rm "$ASR_RELEASE_IMAGE" >/dev/null 2>&1 || true
-  docker image rm asr-all-in-one:latest >/dev/null 2>&1 || true
+  docker image rm jusha-asr-business:latest >/dev/null 2>&1 || true
 fi
 
 echo "卸载完成。"

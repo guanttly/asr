@@ -65,3 +65,5 @@ tests
 **/**/.pytest_cache
 **/**/wheels
 deploy/3d-speaker/models
+deploy/qwen3-asr/models
+deploy/qwen3-asr/image

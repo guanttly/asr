@@ -12,6 +12,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::Manager;
@@ -273,12 +274,124 @@ struct MachineIdentityPayload {
     mac_addresses: Vec<String>,
 }
 
+fn normalize_machine_seed(value: &str) -> Option<String> {
+    let normalized = value.trim().trim_matches('\0').to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized == "none"
+        || normalized == "unknown"
+        || normalized == "to be filled by o.e.m."
+        || normalized.chars().all(|ch| ch == '0' || ch == '-')
+        || normalized.chars().all(|ch| ch == 'f' || ch == '-')
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_machine_uuid() -> Option<String> {
+    if let Some(output) = command_output("wmic", &["csproduct", "get", "uuid"]) {
+        for line in output.lines() {
+            let value = line.trim();
+            if value.eq_ignore_ascii_case("uuid") {
+                continue;
+            }
+            if let Some(uuid) = normalize_machine_seed(value) {
+                return Some(uuid);
+            }
+        }
+    }
+
+    if let Some(output) = command_output("reg", &["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"]) {
+        for line in output.lines() {
+            if !line.contains("MachineGuid") {
+                continue;
+            }
+            if let Some(value) = line.split_whitespace().last().and_then(normalize_machine_seed) {
+                return Some(value);
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn platform_machine_uuid() -> Option<String> {
+    for path in ["/sys/class/dmi/id/product_uuid", "/etc/machine-id"] {
+        if let Ok(value) = fs::read_to_string(path) {
+            if let Some(uuid) = normalize_machine_seed(&value) {
+                return Some(uuid);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn platform_machine_uuid() -> Option<String> {
+    let output = command_output("ioreg", &["-rd1", "-c", "IOPlatformExpertDevice"])?;
+    for line in output.lines() {
+        if !line.contains("IOPlatformUUID") {
+            continue;
+        }
+        if let Some(raw) = line.split('=').nth(1) {
+            let value = raw.trim().trim_matches('"');
+            if let Some(uuid) = normalize_machine_seed(value) {
+                return Some(uuid);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+fn platform_machine_uuid() -> Option<String> {
+    None
+}
+
+fn build_machine_code(hostname: &str, platform: &str, ip_list: &[String], mac_list: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let stable_seed = platform_machine_uuid()
+        .map(|value| format!("hardware:{value}"))
+        .or_else(|| mac_list.first().and_then(|value| normalize_machine_seed(value)).map(|value| format!("mac:{value}")));
+    let fingerprint = match stable_seed {
+        Some(stable_id) => serde_json::json!({
+            "version": 2,
+            "stable_id": stable_id,
+        }),
+        None => serde_json::json!({
+            "version": 1,
+            "hostname": hostname,
+            "platform": platform,
+            "ip_addresses": ip_list,
+            "mac_addresses": mac_list,
+        }),
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(fingerprint.to_string().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 #[tauri::command]
 async fn get_machine_identity() -> Result<MachineIdentityPayload, String> {
     // 必须是 async——Tauri 2 同步 command 在主线程执行，
     // hostname/network 系统调用在 Windows 复杂网络环境下可阻塞数秒导致 UI "未响应"。
-    use sha2::{Digest, Sha256};
-
     let hostname = hostname::get()
         .map_err(|err| err.to_string())?
         .to_string_lossy()
@@ -303,16 +416,7 @@ async fn get_machine_identity() -> Result<MachineIdentityPayload, String> {
 
     let ip_list: Vec<String> = ip_addresses.into_iter().collect();
     let mac_list: Vec<String> = mac_addresses.into_iter().collect();
-    let fingerprint = serde_json::json!({
-        "hostname": hostname,
-        "platform": platform,
-        "ip_addresses": ip_list,
-        "mac_addresses": mac_list,
-    });
-
-    let mut hasher = Sha256::new();
-    hasher.update(fingerprint.to_string().as_bytes());
-    let machine_code = hex::encode(hasher.finalize());
+    let machine_code = build_machine_code(&hostname, &platform, &ip_list, &mac_list);
 
     Ok(MachineIdentityPayload {
         machine_code,

@@ -115,7 +115,7 @@ onMounted(loadUsers)
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">用户列表</span>
           <div class="flex flex-wrap items-center gap-2">
-            <NInput v-model:value="keyword" clearable placeholder="搜索用户名 / 显示名 / 角色" size="small" class="w-full sm:!w-56" />
+            <NInput v-model:value="keyword" :maxlength="128" clearable placeholder="搜索用户名 / 显示名 / 角色" size="small" class="w-full sm:!w-56" />
             <NButton quaternary size="small" @click="loadUsers">
               刷新
             </NButton>
@@ -131,13 +131,13 @@ onMounted(loadUsers)
     <NModal v-model:show="showCreateModal" preset="card" title="新增用户" class="modal-card max-w-140">
       <NForm :model="createForm" label-placement="top">
         <NFormItem label="用户名">
-          <NInput v-model:value="createForm.username" placeholder="请输入用户名" />
+          <NInput v-model:value="createForm.username" :maxlength="64" placeholder="请输入用户名" />
         </NFormItem>
         <NFormItem label="密码">
-          <NInput v-model:value="createForm.password" type="password" show-password-on="click" placeholder="请输入密码" />
+          <NInput v-model:value="createForm.password" :maxlength="128" type="password" show-password-on="click" placeholder="请输入密码" />
         </NFormItem>
         <NFormItem label="显示名">
-          <NInput v-model:value="createForm.display_name" placeholder="请输入显示名" />
+          <NInput v-model:value="createForm.display_name" :maxlength="128" placeholder="请输入显示名" />
         </NFormItem>
         <NFormItem label="角色">
           <NSelect

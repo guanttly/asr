@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -115,6 +116,29 @@ func (r *UserRepo) GetDeviceIdentityByMachineCode(ctx context.Context, machineCo
 	return toDeviceIdentity(&model), nil
 }
 
+func (r *UserRepo) GetDeviceIdentityByMACAddresses(ctx context.Context, macAddresses []string) (*domain.DeviceIdentity, error) {
+	for _, macAddress := range macAddresses {
+		value := strings.TrimSpace(macAddress)
+		if value == "" {
+			continue
+		}
+
+		var model DeviceIdentityModel
+		if err := r.db.WithContext(ctx).
+			Where("mac_addresses_json LIKE ?", "%"+value+"%").
+			Order("last_seen_at desc, updated_at desc").
+			First(&model).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		return toDeviceIdentity(&model), nil
+	}
+
+	return nil, domain.ErrDeviceIdentityNotFound
+}
+
 func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*domain.WorkflowBindings, error) {
 	var model UserWorkflowBindingsModel
 	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&model).Error; err != nil {
@@ -136,6 +160,25 @@ func (r *UserRepo) GetWorkflowBindings(ctx context.Context, userID uint64) (*dom
 }
 
 func (r *UserRepo) UpsertDeviceIdentity(ctx context.Context, identity *domain.DeviceIdentity) error {
+	now := time.Now()
+	if identity.ID > 0 {
+		if err := r.db.WithContext(ctx).Model(&DeviceIdentityModel{}).Where("id = ?", identity.ID).Updates(map[string]any{
+			"user_id":            identity.UserID,
+			"machine_code":       identity.MachineCode,
+			"hostname":           identity.Hostname,
+			"platform":           identity.Platform,
+			"ip_addresses_json":  marshalStringSlice(identity.IPAddresses),
+			"mac_addresses_json": marshalStringSlice(identity.MACAddresses),
+			"last_seen_at":       now,
+			"updated_at":         now,
+		}).Error; err != nil {
+			return err
+		}
+		identity.LastSeenAt = now
+		identity.UpdatedAt = now
+		return nil
+	}
+
 	model := &DeviceIdentityModel{
 		UserID:           identity.UserID,
 		MachineCode:      identity.MachineCode,
@@ -143,7 +186,7 @@ func (r *UserRepo) UpsertDeviceIdentity(ctx context.Context, identity *domain.De
 		Platform:         identity.Platform,
 		IPAddressesJSON:  marshalStringSlice(identity.IPAddresses),
 		MACAddressesJSON: marshalStringSlice(identity.MACAddresses),
-		LastSeenAt:       time.Now(),
+		LastSeenAt:       now,
 	}
 
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -155,7 +198,7 @@ func (r *UserRepo) UpsertDeviceIdentity(ctx context.Context, identity *domain.De
 			"ip_addresses_json":  model.IPAddressesJSON,
 			"mac_addresses_json": model.MACAddressesJSON,
 			"last_seen_at":       model.LastSeenAt,
-			"updated_at":         time.Now(),
+			"updated_at":         now,
 		}),
 	}).Create(model).Error; err != nil {
 		return err

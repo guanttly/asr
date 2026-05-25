@@ -1370,8 +1370,8 @@ watch(selectedIndex, () => {
 
           <!-- 基本信息 -->
           <div class="flex items-center gap-3">
-            <NInput v-model:value="workflow.name" placeholder="工作流名称" class="flex-1" />
-            <NInput v-model:value="workflow.description" placeholder="用途说明" class="flex-1" />
+            <NInput v-model:value="workflow.name" :maxlength="128" placeholder="工作流名称" class="flex-1" />
+            <NInput v-model:value="workflow.description" :maxlength="512" placeholder="用途说明" class="flex-1" />
             <div class="flex flex-shrink-0 items-center gap-2 rounded-2 bg-mist/50 px-3 py-1.5">
               <span class="text-xs text-slate">{{ publishStatusMeta().toggleLabel }}</span>
               <NSwitch :value="workflow.is_published" size="small" @update:value="handlePublishedChange" />
@@ -1723,6 +1723,7 @@ watch(selectedIndex, () => {
                       </div>
                       <NInput
                         :value="listToText(selectedConfig.custom_words)"
+                        :maxlength="4000"
                         type="textarea"
                         :autosize="{ minRows: 3, maxRows: 6 }"
                         placeholder="补充业务口语词，例如：然后呢、是这样的"
@@ -1755,6 +1756,7 @@ watch(selectedIndex, () => {
                       </div>
                       <NInput
                         :value="listToText(selectedConfig.custom_words)"
+                        :maxlength="4000"
                         type="textarea"
                         :autosize="{ minRows: 3, maxRows: 6 }"
                         placeholder="每行一个，补充当前节点专用的敏感词"
@@ -1767,6 +1769,7 @@ watch(selectedIndex, () => {
                       </div>
                       <NInput
                         :value="selectedConfig.replacement"
+                        :maxlength="128"
                         placeholder="例如：[已过滤]"
                         @update:value="updateSelectedConfig({ replacement: $event || '[已过滤]' })"
                       />
@@ -1777,19 +1780,20 @@ watch(selectedIndex, () => {
                 <template v-else-if="selectedNode.node_type === 'llm_correction'">
                   <div class="grid gap-3">
                     <div class="grid gap-3 lg:grid-cols-2">
-                      <NInput :value="selectedConfig.endpoint" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                      <NInput :value="selectedConfig.model" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
+                      <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.model" :maxlength="128" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
                     </div>
                     <div class="text-xs leading-6 text-slate/75">
                       示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
-                    <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                    <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                     <div class="grid gap-3 lg:grid-cols-2">
                       <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0.3 })" />
                       <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="256" @update:value="updateSelectedConfig({ max_tokens: $event ?? 4096 })" />
                     </div>
                     <NInput
                       :value="selectedConfig.prompt_template"
+                      :maxlength="20000"
                       type="textarea"
                       :autosize="{ minRows: 6, maxRows: 12 }"
                       placeholder="Prompt 模板，使用 {{TEXT}} 作为原文占位符"
@@ -1839,16 +1843,17 @@ watch(selectedIndex, () => {
                     </div>
                     <template v-if="selectedConfig.enable_llm">
                       <div class="grid gap-3 lg:grid-cols-2">
-                        <NInput :value="selectedConfig.endpoint" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                        <NInput :value="selectedConfig.model" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
+                        <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                        <NInput :value="selectedConfig.model" :maxlength="128" placeholder="模型名，如 qwen3-4b" @update:value="updateSelectedConfig({ model: $event })" />
                       </div>
-                      <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                      <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                       <div class="grid gap-3 lg:grid-cols-2">
                         <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0 })" />
                         <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="64" @update:value="updateSelectedConfig({ max_tokens: $event ?? 512 })" />
                       </div>
                       <NInput
                         :value="selectedConfig.prompt_template"
+                        :maxlength="20000"
                         type="textarea"
                         :autosize="{ minRows: 6, maxRows: 12 }"
                         placeholder="Prompt 模板，支持 {{TEXT}}、{{COMMAND_LIBRARY}}、{{EXTRA_PROMPT}} 占位符"
@@ -1856,6 +1861,7 @@ watch(selectedIndex, () => {
                       />
                       <NInput
                         :value="selectedConfig.extra_prompt"
+                        :maxlength="4000"
                         type="textarea"
                         :autosize="{ minRows: 3, maxRows: 6 }"
                         placeholder="可选附加提示：补充当前控制流程的限制、优先级或禁用项"
@@ -1924,13 +1930,13 @@ watch(selectedIndex, () => {
                 <template v-else-if="selectedNode.node_type === 'meeting_summary'">
                   <div class="grid gap-3">
                     <div class="grid gap-3 lg:grid-cols-2">
-                      <NInput :value="selectedConfig.endpoint" placeholder="摘要 LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions；留空则使用内置摘要器" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                      <NInput :value="selectedConfig.model" placeholder="摘要模型名" @update:value="updateSelectedConfig({ model: $event })" />
+                      <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="摘要 LLM Endpoint，可填 base URL、带 /v1 的 base URL 或完整 /chat/completions；留空则使用内置摘要器" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.model" :maxlength="128" placeholder="摘要模型名" @update:value="updateSelectedConfig({ model: $event })" />
                     </div>
                     <div class="text-xs leading-6 text-slate/75">
                       示例：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或 https://dashscope.aliyuncs.com/compatible-mode/v1。
                     </div>
-                    <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                    <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                     <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
                     <NSelect
                       :value="selectedConfig.output_format || 'markdown'"
@@ -1942,6 +1948,7 @@ watch(selectedIndex, () => {
                     />
                     <NInput
                       :value="selectedConfig.prompt_template"
+                      :maxlength="20000"
                       type="textarea"
                       :autosize="{ minRows: 6, maxRows: 12 }"
                       placeholder="会议纪要 Prompt 模板，使用 {{TEXT}} 作为转写文本占位符"
@@ -1966,8 +1973,8 @@ watch(selectedIndex, () => {
                         </div>
                       </div>
                       <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                        <NInput :value="rule.pattern" placeholder="正则表达式" @update:value="updateRegexRule(index, { pattern: $event })" />
-                        <NInput :value="rule.replacement" placeholder="替换文本" @update:value="updateRegexRule(index, { replacement: $event })" />
+                        <NInput :value="rule.pattern" :maxlength="1000" placeholder="正则表达式" @update:value="updateRegexRule(index, { pattern: $event })" />
+                        <NInput :value="rule.replacement" :maxlength="1000" placeholder="替换文本" @update:value="updateRegexRule(index, { replacement: $event })" />
                       </div>
                     </div>
                     <div>
@@ -1982,6 +1989,7 @@ watch(selectedIndex, () => {
               <NInput
                 v-if="showRawConfig"
                 v-model:value="nodeDraft.configText"
+                :maxlength="20000"
                 type="textarea"
                 :autosize="{ minRows: 10, maxRows: 20 }"
                 placeholder="使用 JSON 配置当前节点"
@@ -2015,7 +2023,7 @@ watch(selectedIndex, () => {
                     </div>
                   </div>
                 </template>
-                <NInput v-else v-model:value="nodeTestInput" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入样本文本，验证当前节点输出。" />
+                <NInput v-else v-model:value="nodeTestInput" :maxlength="20000" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入样本文本，验证当前节点输出。" />
                 <div class="flex justify-end">
                   <NButton size="small" type="primary" color="#0f766e" :loading="testingNode" @click="handleTestNode">
                     测试当前节点
@@ -2069,7 +2077,7 @@ watch(selectedIndex, () => {
                   </div>
                 </div>
               </template>
-              <NInput v-else v-model:value="executeInput" type="textarea" :autosize="{ minRows: 9, maxRows: 14 }" placeholder="输入整条工作流测试文本。" />
+              <NInput v-else v-model:value="executeInput" :maxlength="20000" type="textarea" :autosize="{ minRows: 9, maxRows: 14 }" placeholder="输入整条工作流测试文本。" />
               <div class="flex justify-end">
                 <NButton type="primary" color="#0f766e" :loading="executing" @click="handleExecuteWorkflow">
                   保存并执行
@@ -2117,8 +2125,8 @@ watch(selectedIndex, () => {
 
     <NModal v-model:show="showSaveAsDialog" preset="card" title="另存为新工作流" class="modal-card max-w-xl">
       <div class="grid gap-4">
-        <NInput v-model:value="saveAsForm.name" placeholder="新工作流名称" />
-        <NInput v-model:value="saveAsForm.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="新工作流用途说明" />
+        <NInput v-model:value="saveAsForm.name" :maxlength="128" placeholder="新工作流名称" />
+        <NInput v-model:value="saveAsForm.description" :maxlength="512" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="新工作流用途说明" />
         <div class="rounded-2.5 bg-mist/60 p-4 text-xs leading-6 text-slate">
           会把当前编辑器里的节点顺序、启用状态和配置一并保存到新工作流，适合先复制再继续试验改动。
         </div>

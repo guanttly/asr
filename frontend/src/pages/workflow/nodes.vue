@@ -480,7 +480,7 @@ onMounted(async () => {
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <NInput v-model:value="keyword" clearable size="small" placeholder="搜索节点类型 / 描述" class="w-full sm:!w-64" />
+            <NInput v-model:value="keyword" :maxlength="128" clearable size="small" placeholder="搜索节点类型 / 描述" class="w-full sm:!w-64" />
             <NButton quaternary size="small" @click="loadNodeTypeList">
               刷新
             </NButton>
@@ -662,6 +662,7 @@ onMounted(async () => {
                     </div>
                     <NInput
                       :value="listToText(selectedConfig.custom_words)"
+                      :maxlength="4000"
                       type="textarea"
                       :autosize="{ minRows: 3, maxRows: 6 }"
                       placeholder="补充业务口语词"
@@ -694,6 +695,7 @@ onMounted(async () => {
                     </div>
                     <NInput
                       :value="listToText(selectedConfig.custom_words)"
+                      :maxlength="4000"
                       type="textarea"
                       :autosize="{ minRows: 3, maxRows: 6 }"
                       placeholder="每行一个，补充当前节点专用的敏感词"
@@ -706,6 +708,7 @@ onMounted(async () => {
                     </div>
                     <NInput
                       :value="selectedConfig.replacement"
+                      :maxlength="128"
                       placeholder="例如：[已过滤]"
                       @update:value="updateSelectedConfig({ replacement: $event || '[已过滤]' })"
                     />
@@ -716,13 +719,13 @@ onMounted(async () => {
               <template v-else-if="selectedNode.type === 'llm_correction'">
                 <div class="grid gap-3">
                   <div class="grid gap-3 lg:grid-cols-2">
-                    <NInput :value="selectedConfig.endpoint" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                    <NInput :value="selectedConfig.model" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
+                    <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                    <NInput :value="selectedConfig.model" :maxlength="128" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
                   </div>
                   <div class="text-xs leading-6 text-slate/75">
                     例如：http://192.168.200.182:9888、http://192.168.200.182:9888/v1，或完整的 OpenAI 兼容 /chat/completions 地址。
                   </div>
-                  <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                  <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                   <div class="grid gap-3 lg:grid-cols-3">
                     <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0.3 })" />
                     <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="256" @update:value="updateSelectedConfig({ max_tokens: $event ?? 4096 })" />
@@ -733,6 +736,7 @@ onMounted(async () => {
                   </div>
                   <NInput
                     :value="selectedConfig.prompt_template"
+                    :maxlength="20000"
                     type="textarea"
                     :autosize="{ minRows: 6, maxRows: 12 }"
                     placeholder="默认 Prompt 模板，使用 {{TEXT}} 作为原文占位符"
@@ -782,16 +786,17 @@ onMounted(async () => {
                   </div>
                   <template v-if="selectedConfig.enable_llm">
                     <div class="grid gap-3 lg:grid-cols-2">
-                      <NInput :value="selectedConfig.endpoint" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                      <NInput :value="selectedConfig.model" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
+                      <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="默认 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                      <NInput :value="selectedConfig.model" :maxlength="128" placeholder="默认模型名" @update:value="updateSelectedConfig({ model: $event })" />
                     </div>
-                    <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                    <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                     <div class="grid gap-3 lg:grid-cols-2">
                       <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0 })" />
                       <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="64" @update:value="updateSelectedConfig({ max_tokens: $event ?? 512 })" />
                     </div>
                     <NInput
                       :value="selectedConfig.prompt_template"
+                      :maxlength="20000"
                       type="textarea"
                       :autosize="{ minRows: 6, maxRows: 12 }"
                       placeholder="默认 Prompt 模板，支持 {{TEXT}}、{{COMMAND_LIBRARY}}、{{EXTRA_PROMPT}} 占位符"
@@ -799,6 +804,7 @@ onMounted(async () => {
                     />
                     <NInput
                       :value="selectedConfig.extra_prompt"
+                      :maxlength="4000"
                       type="textarea"
                       :autosize="{ minRows: 3, maxRows: 6 }"
                       placeholder="可选附加提示：补充当前控制流程的约束、禁止项或业务解释"
@@ -864,10 +870,10 @@ onMounted(async () => {
               <template v-else-if="selectedNode.type === 'meeting_summary'">
                 <div class="grid gap-3">
                   <div class="grid gap-3 lg:grid-cols-2">
-                    <NInput :value="selectedConfig.endpoint" placeholder="默认摘要 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
-                    <NInput :value="selectedConfig.model" placeholder="默认摘要模型" @update:value="updateSelectedConfig({ model: $event })" />
+                    <NInput :value="selectedConfig.endpoint" :maxlength="2048" placeholder="默认摘要 LLM Endpoint" @update:value="updateSelectedConfig({ endpoint: $event })" />
+                    <NInput :value="selectedConfig.model" :maxlength="128" placeholder="默认摘要模型" @update:value="updateSelectedConfig({ model: $event })" />
                   </div>
-                  <NInput :value="selectedConfig.api_key" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
+                  <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                   <div class="grid gap-3 lg:grid-cols-2">
                     <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
                     <NSelect
@@ -881,6 +887,7 @@ onMounted(async () => {
                   </div>
                   <NInput
                     :value="selectedConfig.prompt_template"
+                    :maxlength="20000"
                     type="textarea"
                     :autosize="{ minRows: 6, maxRows: 12 }"
                     placeholder="默认会议纪要 Prompt 模板"
@@ -905,8 +912,8 @@ onMounted(async () => {
                       </div>
                     </div>
                     <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                      <NInput :value="rule.pattern" placeholder="正则表达式" @update:value="updateRegexRule(index, { pattern: $event })" />
-                      <NInput :value="rule.replacement" placeholder="替换文本" @update:value="updateRegexRule(index, { replacement: $event })" />
+                      <NInput :value="rule.pattern" :maxlength="1000" placeholder="正则表达式" @update:value="updateRegexRule(index, { pattern: $event })" />
+                      <NInput :value="rule.replacement" :maxlength="1000" placeholder="替换文本" @update:value="updateRegexRule(index, { replacement: $event })" />
                     </div>
                   </div>
                   <div>
@@ -927,6 +934,7 @@ onMounted(async () => {
             <NInput
               v-if="showRawConfig"
               v-model:value="defaultDraft.configText"
+              :maxlength="20000"
               type="textarea"
               :autosize="{ minRows: 10, maxRows: 20 }"
               placeholder="使用 JSON 编辑节点默认配置"
@@ -964,7 +972,7 @@ onMounted(async () => {
                   </div>
                 </div>
               </template>
-              <NInput v-else v-model:value="nodeTestInput" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入测试文本，验证当前节点默认配置下的输出。" />
+              <NInput v-else v-model:value="nodeTestInput" :maxlength="20000" type="textarea" :autosize="{ minRows: 5, maxRows: 10 }" placeholder="输入测试文本，验证当前节点默认配置下的输出。" />
               <div class="flex justify-end">
                 <NButton size="small" type="primary" color="#0f766e" :loading="testing" @click="handleTestNode">
                   测试当前节点

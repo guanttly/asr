@@ -779,7 +779,7 @@ watch(activeTab, (tab) => {
                 <span class="text-xs text-slate">管理 app_id / app_secret、能力授权、默认工作流和最近调用日志。</span>
               </div>
               <div class="flex flex-wrap items-center gap-2">
-                <NInput v-model:value="keyword" clearable placeholder="搜索名称 / App ID / 能力" size="small" class="w-full sm:!w-72" />
+                <NInput v-model:value="keyword" :maxlength="128" clearable placeholder="搜索名称 / App ID / 能力" size="small" class="w-full sm:!w-72" />
                 <NButton quaternary size="small" :loading="loading || initializing" @click="initializePage">
                   刷新
                 </NButton>
@@ -845,7 +845,7 @@ watch(activeTab, (tab) => {
             <div class="flex flex-col gap-3 py-4 flex-1 min-h-0">
               <div class="flex flex-wrap items-center gap-2 shrink-0">
                 <NSelect v-model:value="docsCapabilityFilter" class="w-full sm:!w-56" size="small" :options="docsCapabilityOptions" />
-                <NInput v-model:value="docsKeyword" clearable placeholder="搜索接口、字段或示例" size="small" class="w-full sm:!w-72" />
+                <NInput v-model:value="docsKeyword" :maxlength="128" clearable placeholder="搜索接口、字段或示例" size="small" class="w-full sm:!w-72" />
                 <NButton v-if="docsHasFilter" size="small" quaternary @click="resetDocsFilters">
                   清除筛选
                 </NButton>
@@ -931,7 +931,7 @@ watch(activeTab, (tab) => {
           <NForm :model="form" label-placement="top">
             <div class="grid gap-4 md:grid-cols-2">
               <NFormItem label="应用名称" required>
-                <NInput v-model:value="form.name" placeholder="例如：第三方会议助手" />
+                <NInput v-model:value="form.name" :maxlength="128" placeholder="例如：第三方会议助手" />
               </NFormItem>
               <NFormItem label="每秒限流">
                 <NInputNumber v-model:value="form.rate_limit_per_sec" :min="1" :max="5000" class="w-full" />
@@ -939,7 +939,7 @@ watch(activeTab, (tab) => {
             </div>
 
             <NFormItem label="描述">
-              <NInput v-model:value="form.description" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="描述应用用途、调用场景或租户信息" />
+              <NInput v-model:value="form.description" :maxlength="512" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="描述应用用途、调用场景或租户信息" />
             </NFormItem>
 
             <NFormItem label="能力授权" required>
@@ -1026,6 +1026,7 @@ watch(activeTab, (tab) => {
             <NFormItem label="回调白名单">
               <NInput
                 v-model:value="form.callback_whitelist_text"
+                :maxlength="4000"
                 type="textarea"
                 :autosize="{ minRows: 3, maxRows: 6 }"
                 placeholder="每行一个地址前缀，例如：https://partner.example.com/openapi/callback"
@@ -1038,9 +1039,10 @@ watch(activeTab, (tab) => {
             <NFormItem label="Meta JSON">
               <NInput
                 v-model:value="form.meta_json"
+                :maxlength="4000"
                 type="textarea"
                 :autosize="{ minRows: 2, maxRows: 5 }"
-                placeholder="可选，原样存储的扩展元数据，例如：{&quot;tenant&quot;:&quot;demo&quot;}"
+                placeholder="可选，原样存储的扩展元数据，例如：{&quot;tenant&quot;:&quot;hospital-a&quot;}"
               />
             </NFormItem>
           </NForm>

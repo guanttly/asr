@@ -1,4 +1,4 @@
-.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e clean release-all-in-one generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
+.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e clean release-all-in-one release-jusha-asr release-jusha-all release-jusha-business release-jusha-models generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
 # 语音转写系统 Monorepo Makefile
@@ -13,7 +13,28 @@
 #   make dev-frontend                       # 启动前端开发服务器
 #   make lint                               # 执行前后端静态检查
 #   make docker-up                          # 启动 deploy/docker compose 环境
+#   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist
+#   make release-jusha-business VERSION=0.8.6 OUTPUT_DIR=./dist BUSINESS_ARGS="--dry-run"
+#   make release-jusha-models VERSION=0.8.6 OUTPUT_DIR=./dist
 #   make release-all-in-one VERSION=0.3.9 OUTPUT_DIR=./dist DRY_RUN=1
+#
+# release-jusha-* 可选参数：
+#   VERSION             统一发布版本号
+#   OUTPUT_DIR          发布产物输出目录
+#   JUSHA_MODE          all|business|models，release-jusha-asr 使用，默认 all
+#   BUSINESS_ARGS       透传给 deploy/all-in-one/scripts/build-release.sh，例如 "--dry-run --server-host 192.168.40.221"
+#   SPEAKER_ARGS        透传给 deploy/3d-speaker/scripts/build-offline-run.sh，例如 "--allow-incomplete-native-cache"
+#   KEEP_WORK=1         保留统一发布脚本临时目录
+#   JUSHA_ASR_PART_SIZE .run 分包大小，默认 500m；输出为 xxx.run + xxx.run.part001...
+#   JUSHA_ASR_KEEP_ARCHIVE=1 保留中间 .tar.gz，默认不保留大单文件
+#   SOURCE_DIR          Qwen3-ASR 源目录，默认仓库内 deploy/qwen3-asr
+#   CONTAINER           Qwen3-ASR 源容器名，默认 qwen3-asr-serve
+#   SOURCE_IMAGE        Qwen3-ASR 源镜像，默认 qwenllm/qwen3-asr:latest；源容器不存在时回退使用
+#   GPU_COUNT           Qwen3-ASR 默认 GPU 数量，默认 1
+#   GPU_DEVICE_IDS      Qwen3-ASR 指定 GPU ID，设置后优先于 GPU_COUNT
+#   SA_GPU_ID           3D-Speaker GPU ID，默认 0
+#   默认包/镜像/容器名：jusha-asr-business、jusha-asr-asr、jusha-asr-speaker
+#   默认网络：jusha-asr；默认端口：业务 HTTP 9855 / HTTPS 9856，ASR 9851，3D-Speaker 9852
 #
 # release-all-in-one 可选参数：
 #   VERSION             发布版本号
@@ -126,6 +147,22 @@ docker-build:
 # 生成一体化发布包，参数透传给 deploy/all-in-one/scripts/build-release.sh。
 release-all-in-one:
 	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
+
+# 统一 Jusha ASR 发布入口，支持 all / business / models 三种发布形态。
+release-jusha-asr:
+	bash deploy/jusha-asr/build-release.sh --mode $(or $(JUSHA_MODE),all) $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(foreach ARG,$(BUSINESS_ARGS),--business-arg $(ARG)) $(foreach ARG,$(SPEAKER_ARGS),--speaker-arg $(ARG)) $(if $(KEEP_WORK),--keep-work,)
+
+# 生成大包：业务服务 + ASR + 3D-Speaker。
+release-jusha-all:
+	$(MAKE) release-jusha-asr JUSHA_MODE=all
+
+# 只生成业务服务包。
+release-jusha-business:
+	$(MAKE) release-jusha-asr JUSHA_MODE=business
+
+# 只生成模型服务组合包：ASR + 3D-Speaker。
+release-jusha-models:
+	$(MAKE) release-jusha-asr JUSHA_MODE=models
 
 # --- Utilities ---
 # 根据影像科 markdown 生成随目录发布的术语 Excel。

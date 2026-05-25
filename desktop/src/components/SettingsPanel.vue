@@ -526,6 +526,7 @@ onBeforeUnmount(() => {
         <input
           v-model="appStore.serverUrl"
           type="text"
+          maxlength="2048"
           :placeholder="DEFAULT_SERVER_URL"
           spellcheck="false"
         >
@@ -535,6 +536,7 @@ onBeforeUnmount(() => {
         <input
           v-model="appStore.deviceAlias"
           type="text"
+          maxlength="128"
           placeholder="例如：张医生诊室电脑"
           spellcheck="false"
         >
@@ -686,7 +688,7 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">使用场景</h4>
-      <p class="section-hint">{{ appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING) ? '报告模式：录音结束仅保存为实时转写历史；会议模式：录音结束自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。' : '当前版本仅开放报告模式，录音结束后保存为实时转写历史。' }}</p>
+      <p class="section-hint">{{ appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING) ? '报告模式：录音结束后保存为实时转写历史；会议模式：录音结束后自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。' : '报告模式会在录音结束后保存实时转写历史。' }}</p>
       <div class="scene-segmented" role="tablist">
         <button
           type="button"

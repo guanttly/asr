@@ -228,11 +228,11 @@ function handleCancel() {
             <div v-if="showCreateForm || dicts.length === 0" class="dict-create">
               <label class="dict-field">
                 <span>词库名称</span>
-                <input v-model="newDictName" type="text" placeholder="例如：科室通用术语">
+                <input v-model="newDictName" type="text" maxlength="128" placeholder="例如：科室通用术语">
               </label>
               <label class="dict-field">
                 <span>{{ tagLabel }}</span>
-                <input v-model="newDictTag" type="text" :placeholder="tagPlaceholder">
+                <input v-model="newDictTag" type="text" maxlength="128" :placeholder="tagPlaceholder">
               </label>
             </div>
           </div>
@@ -244,17 +244,17 @@ function handleCancel() {
             <template v-if="kind === 'term'">
               <label class="dict-field">
                 <span>正确术语</span>
-                <input v-model="correctTerm" type="text" placeholder="规范写法">
+                <input v-model="correctTerm" type="text" maxlength="128" placeholder="规范写法">
               </label>
               <label class="dict-field">
                 <span>易错变体（可多个，用 , 或换行分隔）</span>
-                <textarea v-model="wrongVariantsText" rows="2" placeholder="模型常错写法，例如：左室肥后\n左心室肥后" />
+                <textarea v-model="wrongVariantsText" rows="2" maxlength="1000" placeholder="模型常错写法，例如：左室肥后\n左心室肥后" />
               </label>
             </template>
             <template v-else>
               <label class="dict-field">
                 <span>敏感词</span>
-                <input v-model="sensitiveWord" type="text" placeholder="需要被屏蔽或高亮的词汇">
+                <input v-model="sensitiveWord" type="text" maxlength="128" placeholder="需要被屏蔽或高亮的词汇">
               </label>
             </template>
           </div>

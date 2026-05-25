@@ -36,8 +36,8 @@ else
 fi
 
 RELEASE_VERSION=unknown
-RELEASE_IMAGE=speaker-analysis-service:latest
-RELEASE_IMAGE_ARCHIVE=image/speaker-analysis-service-image.tar.gz
+RELEASE_IMAGE=jusha-asr-speaker:latest
+RELEASE_IMAGE_ARCHIVE=image/jusha-asr-speaker-image.tar.gz
 RELEASE_IMAGE_ARCHIVE_SHA256=""
 if [ -f "$MANIFEST_FILE" ]; then
   # shellcheck disable=SC1090
@@ -397,20 +397,50 @@ ensure_docker_network_matches_config() {
   }
 }
 
+existing_docker_network_config() {
+  NETWORK_NAME="$1"
+  docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet .Gateway}}{{end}}' "$NETWORK_NAME" 2>/dev/null | awk 'NF { print; exit }' || true
+}
+
+ensure_docker_network_exists() {
+  NETWORK_NAME="$1"
+  SUBNET_VALUE="$2"
+  GATEWAY_VALUE="$3"
+
+  if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  docker network create --driver bridge --subnet "$SUBNET_VALUE" --gateway "$GATEWAY_VALUE" "$NETWORK_NAME" >/dev/null
+}
+
 ensure_docker_network_env() {
-  NETWORK_NAME=${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}
+  NETWORK_NAME=${SA_DOCKER_NETWORK_NAME:-jusha-asr}
   case "$NETWORK_NAME" in
     ''|AUTO|auto)
-      NETWORK_NAME=speaker-analysis-net
+      NETWORK_NAME=jusha-asr
       ;;
   esac
 
-  if ! SELECTED_SUBNET=$(choose_docker_subnet "$NETWORK_NAME"); then
-    echo "未能找到可用的 Docker 内部网段，请在 .env 中手动设置 SA_DOCKER_SUBNET。" >&2
-    return 1
+  CURRENT_SUBNET=${SA_DOCKER_SUBNET:-}
+  EXISTING_CONFIG=""
+  if [ -z "$CURRENT_SUBNET" ] || [ "$CURRENT_SUBNET" = "AUTO" ] || [ "$CURRENT_SUBNET" = "auto" ]; then
+    EXISTING_CONFIG=$(existing_docker_network_config "$NETWORK_NAME")
   fi
 
-  SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+  if [ -n "$EXISTING_CONFIG" ]; then
+    SELECTED_SUBNET=$(printf '%s\n' "$EXISTING_CONFIG" | awk '{print $1}')
+    SELECTED_GATEWAY=$(printf '%s\n' "$EXISTING_CONFIG" | awk '{print $2}')
+    if [ -z "$SELECTED_GATEWAY" ]; then
+      SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+    fi
+  else
+    if ! SELECTED_SUBNET=$(choose_docker_subnet "$NETWORK_NAME"); then
+      echo "未能找到可用的 Docker 内部网段，请在 .env 中手动设置 SA_DOCKER_SUBNET。" >&2
+      return 1
+    fi
+    SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+  fi
 
   update_env_value SA_DOCKER_NETWORK_NAME "$NETWORK_NAME" .env
   update_env_value SA_DOCKER_SUBNET "$SELECTED_SUBNET" .env
@@ -421,6 +451,7 @@ ensure_docker_network_env() {
   SA_DOCKER_GATEWAY="$SELECTED_GATEWAY"
 
   ensure_docker_network_matches_config "$SA_DOCKER_NETWORK_NAME" "$SA_DOCKER_SUBNET" "$SA_DOCKER_GATEWAY"
+  ensure_docker_network_exists "$SA_DOCKER_NETWORK_NAME" "$SA_DOCKER_SUBNET" "$SA_DOCKER_GATEWAY"
   echo "Docker 内部网络: $SA_DOCKER_NETWORK_NAME ($SA_DOCKER_SUBNET, gateway $SA_DOCKER_GATEWAY)"
 }
 
@@ -564,8 +595,8 @@ update_env_value SA_RELEASE_VERSION "$RELEASE_VERSION" .env
 . ./.env
 
 SA_IMAGE=${SA_IMAGE:-$RELEASE_IMAGE}
-SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-speaker-analysis}
-SA_PORT=${SA_PORT:-10002}
+SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-jusha-asr-speaker}
+SA_PORT=${SA_PORT:-9852}
 
 prepare_compose_file
 validate_models

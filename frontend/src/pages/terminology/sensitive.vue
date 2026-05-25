@@ -402,7 +402,7 @@ onMounted(loadDicts)
               </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <NInput v-model:value="dictKeyword" clearable size="small" placeholder="搜索词库名称 / 场景 / 说明" class="w-full sm:!w-64" />
+              <NInput v-model:value="dictKeyword" :maxlength="128" clearable size="small" placeholder="搜索词库名称 / 场景 / 说明" class="w-full sm:!w-64" />
               <NSelect v-model:value="dictTypeFilter" size="small" :options="dictTypeOptions" class="w-full sm:!w-34" />
               <NSelect v-model:value="sceneFilter" size="small" :options="sceneOptions" class="w-full sm:!w-40" />
               <NButton quaternary size="small" @click="loadDicts">
@@ -430,7 +430,7 @@ onMounted(loadDicts)
               </NTag>
             </div>
             <div class="flex items-center gap-2">
-              <NInput v-model:value="entryKeyword" clearable size="small" placeholder="搜索敏感词" class="w-full sm:!w-56" />
+              <NInput v-model:value="entryKeyword" :maxlength="128" clearable size="small" placeholder="搜索敏感词" class="w-full sm:!w-56" />
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && selectDict(currentDictId)">
                 刷新
               </NButton>
@@ -450,13 +450,13 @@ onMounted(loadDicts)
     <NModal v-model:show="showDictModal" preset="card" :title="dictModalTitle" class="modal-card max-w-160">
       <NForm :model="dictForm" label-placement="top">
         <NFormItem label="词库名称">
-          <NInput v-model:value="dictForm.name" placeholder="如：政务投诉场景" />
+          <NInput v-model:value="dictForm.name" :maxlength="128" placeholder="如：政务投诉场景" />
         </NFormItem>
         <NFormItem label="场景">
-          <NInput v-model:value="dictForm.scene" placeholder="如：政务 / 医疗 / 金融" />
+          <NInput v-model:value="dictForm.scene" :maxlength="128" placeholder="如：政务 / 医疗 / 金融" />
         </NFormItem>
         <NFormItem label="说明">
-          <NInput v-model:value="dictForm.description" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" placeholder="描述该词库适用的业务场景或过滤目标" />
+          <NInput v-model:value="dictForm.description" :maxlength="512" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }" placeholder="描述该词库适用的业务场景或过滤目标" />
         </NFormItem>
         <NFormItem label="词库类型">
           <div class="flex items-center gap-3 rounded-2 bg-white/70 px-3 py-3">
@@ -484,7 +484,7 @@ onMounted(loadDicts)
           <NInput :value="currentDict?.name || ''" disabled />
         </NFormItem>
         <NFormItem label="敏感词">
-          <NInput v-model:value="entryForm.word" placeholder="输入需要过滤的词" />
+          <NInput v-model:value="entryForm.word" :maxlength="128" placeholder="输入需要过滤的词" />
         </NFormItem>
         <NFormItem label="启用状态">
           <div class="flex items-center gap-3 rounded-2 bg-white/70 px-3 py-3">

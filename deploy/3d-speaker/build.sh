@@ -20,10 +20,10 @@
 set -e
 
 # 镜像与离线包命名。
-IMAGE_NAME="speaker-analysis-service"
+IMAGE_NAME="jusha-asr-speaker"
 IMAGE_TAG="1.1.7"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
-EXPORT_FILE="speaker-analysis-service-offline.tar.gz"
+EXPORT_FILE="jusha-asr-speaker-offline.tar.gz"
 RUN_EXPORT_SCRIPT="scripts/build-offline-run.sh"
 MODEL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/models"
 DOWNLOAD_IMAGE="${DOWNLOAD_IMAGE:-python:3.10-slim}"
@@ -748,7 +748,7 @@ start)
     check_gpu_readiness
     SA_IMAGE="${FULL_IMAGE}" compose up -d --no-build
     info "服务启动中，首次启动需加载模型，约 60-120 秒..."
-    info "API 文档: http://localhost:${SA_PORT:-10002}/docs"
+    info "API 文档: http://localhost:${SA_PORT:-9852}/docs"
     ;;
 
 # 停止 compose 管理的服务实例。
@@ -761,7 +761,7 @@ stop)
 # 快速连通性测试：默认检查 health，可选再调用一次 VAD 接口。
 test)
     info "测试健康检查接口..."
-    HEALTH=$(curl -s "http://localhost:${SA_PORT:-10002}/api/v1/health" 2>/dev/null)
+    HEALTH=$(curl -s "http://localhost:${SA_PORT:-9852}/api/v1/health" 2>/dev/null)
     if [ $? -eq 0 ]; then
         info "健康检查响应: ${HEALTH}"
     else
@@ -772,7 +772,7 @@ test)
 
     if [ -n "${2}" ]; then
         info "测试 VAD 接口: ${2}"
-        curl -s -X POST "http://localhost:${SA_PORT:-10002}/api/v1/vad" \
+        curl -s -X POST "http://localhost:${SA_PORT:-9852}/api/v1/vad" \
             -F "file=@${2}" \
             | python3 -m json.tool
     else

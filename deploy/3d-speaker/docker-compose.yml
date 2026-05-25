@@ -4,17 +4,17 @@
 
 services:
   speaker-analysis:
-    image: "${SA_IMAGE:-speaker-analysis-service:1.1.7}"
+    image: "${SA_IMAGE:-jusha-asr-speaker:1.1.7}"
     pull_policy: never
-    container_name: "${SA_CONTAINER_NAME:-speaker-analysis}"
+    container_name: "${SA_CONTAINER_NAME:-jusha-asr-speaker}"
     restart: unless-stopped
 
     ports:
-      - "${SA_PORT:-10002}:8100"
+      - "${SA_PORT:-9852}:8100"
 
     environment:
       # 仅暴露宿主机的指定 GPU 给容器；容器内可见设备会重新编号为 cuda:0
-      - NVIDIA_VISIBLE_DEVICES=${SA_GPU_ID:-2}
+      - NVIDIA_VISIBLE_DEVICES=${SA_GPU_ID:-0}
       - DEVICE=${SA_DEVICE:-cuda:0}
       - WORKERS=${WORKERS:-1}
       - HOST=0.0.0.0
@@ -44,7 +44,7 @@ services:
           memory: 2G
           devices:
             - driver: nvidia
-              device_ids: ["${SA_GPU_ID:-2}"]
+              device_ids: ["${SA_GPU_ID:-0}"]
               capabilities: [gpu]
 
     healthcheck:
@@ -61,13 +61,9 @@ services:
         max-file: "3"
 
     networks:
-      - speaker-analysis-net
+      - jusha-asr-net
 
 networks:
-  speaker-analysis-net:
-    name: "${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}"
-    driver: bridge
-    ipam:
-      config:
-        - subnet: "${SA_DOCKER_SUBNET:-10.248.10.0/24}"
-          gateway: "${SA_DOCKER_GATEWAY:-10.248.10.1}"
+  jusha-asr-net:
+    name: "${SA_DOCKER_NETWORK_NAME:-jusha-asr}"
+    external: true

@@ -297,7 +297,7 @@ onBeforeUnmount(() => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">会议列表</span>
           <div class="flex flex-wrap items-center gap-2">
-            <NInput v-model:value="keyword" clearable placeholder="搜索会议标题 / 状态" size="small" class="w-full sm:!w-56" />
+            <NInput v-model:value="keyword" :maxlength="128" clearable placeholder="搜索会议标题 / 状态" size="small" class="w-full sm:!w-56" />
             <NButton quaternary size="small" @click="loadMeetings">
               刷新
             </NButton>

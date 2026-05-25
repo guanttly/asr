@@ -3,7 +3,7 @@ set -eu
 
 ACTION=${1:-install}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-IMAGE_ARCHIVE="$SCRIPT_DIR/image/asr-all-in-one-image.tar.gz"
+IMAGE_ARCHIVE="$SCRIPT_DIR/image/jusha-asr-business-image.tar.gz"
 MANIFEST_FILE="$SCRIPT_DIR/.release-manifest"
 
 case "$ACTION" in
@@ -30,7 +30,7 @@ else
 fi
 
 RELEASE_VERSION=unknown
-RELEASE_IMAGE=asr-all-in-one:latest
+RELEASE_IMAGE=jusha-asr-business:latest
 if [ -f "$MANIFEST_FILE" ]; then
   # shellcheck disable=SC1090
   . "$MANIFEST_FILE"
@@ -142,8 +142,8 @@ print_access_summary() {
   PRIMARY_IP=$(detect_primary_ip || true)
   HOST_NAME=$(hostname 2>/dev/null || printf '')
   HTTPS_ENABLED=${ASR_ENABLE_HTTPS:-1}
-  HTTP_PORT_VALUE=${ASR_HTTP_PORT:-80}
-  HTTPS_PORT_VALUE=${ASR_HTTPS_PORT:-443}
+  HTTP_PORT_VALUE=${ASR_HTTP_PORT:-9855}
+  HTTPS_PORT_VALUE=${ASR_HTTPS_PORT:-9856}
   CERT_PATH="$SCRIPT_DIR/runtime/certs/tls.crt"
   CERT_SAN=$(get_certificate_san "$CERT_PATH" || true)
 
@@ -502,20 +502,50 @@ ensure_docker_network_matches_config() {
   }
 }
 
+existing_docker_network_config() {
+  NETWORK_NAME="$1"
+  docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet .Gateway}}{{end}}' "$NETWORK_NAME" 2>/dev/null | awk 'NF { print; exit }' || true
+}
+
+ensure_docker_network_exists() {
+  NETWORK_NAME="$1"
+  SUBNET_VALUE="$2"
+  GATEWAY_VALUE="$3"
+
+  if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  docker network create --driver bridge --subnet "$SUBNET_VALUE" --gateway "$GATEWAY_VALUE" "$NETWORK_NAME" >/dev/null
+}
+
 ensure_docker_network_env() {
-  NETWORK_NAME=${ASR_DOCKER_NETWORK_NAME:-asr-all-in-one-net}
+  NETWORK_NAME=${ASR_DOCKER_NETWORK_NAME:-jusha-asr}
   case "$NETWORK_NAME" in
     ''|AUTO|auto)
-      NETWORK_NAME=asr-all-in-one-net
+      NETWORK_NAME=jusha-asr
       ;;
   esac
 
-  if ! SELECTED_SUBNET=$(choose_docker_subnet "$NETWORK_NAME"); then
-    echo "未能找到可用的 Docker 内部网段，请在 .env 中手动设置 ASR_DOCKER_SUBNET。" >&2
-    return 1
+  CURRENT_SUBNET=${ASR_DOCKER_SUBNET:-}
+  EXISTING_CONFIG=""
+  if [ -z "$CURRENT_SUBNET" ] || [ "$CURRENT_SUBNET" = "AUTO" ] || [ "$CURRENT_SUBNET" = "auto" ]; then
+    EXISTING_CONFIG=$(existing_docker_network_config "$NETWORK_NAME")
   fi
 
-  SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+  if [ -n "$EXISTING_CONFIG" ]; then
+    SELECTED_SUBNET=$(printf '%s\n' "$EXISTING_CONFIG" | awk '{print $1}')
+    SELECTED_GATEWAY=$(printf '%s\n' "$EXISTING_CONFIG" | awk '{print $2}')
+    if [ -z "$SELECTED_GATEWAY" ]; then
+      SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+    fi
+  else
+    if ! SELECTED_SUBNET=$(choose_docker_subnet "$NETWORK_NAME"); then
+      echo "未能找到可用的 Docker 内部网段，请在 .env 中手动设置 ASR_DOCKER_SUBNET。" >&2
+      return 1
+    fi
+    SELECTED_GATEWAY=$(cidr_gateway "$SELECTED_SUBNET")
+  fi
 
   update_env_value ASR_DOCKER_NETWORK_NAME "$NETWORK_NAME" .env
   update_env_value ASR_DOCKER_SUBNET "$SELECTED_SUBNET" .env
@@ -526,6 +556,7 @@ ensure_docker_network_env() {
   ASR_DOCKER_GATEWAY="$SELECTED_GATEWAY"
 
   ensure_docker_network_matches_config "$ASR_DOCKER_NETWORK_NAME" "$ASR_DOCKER_SUBNET" "$ASR_DOCKER_GATEWAY"
+  ensure_docker_network_exists "$ASR_DOCKER_NETWORK_NAME" "$ASR_DOCKER_SUBNET" "$ASR_DOCKER_GATEWAY"
   echo "Docker 内部网络: $ASR_DOCKER_NETWORK_NAME ($ASR_DOCKER_SUBNET, gateway $ASR_DOCKER_GATEWAY)"
 }
 
@@ -653,13 +684,13 @@ ensure_tls_env_defaults
 # shellcheck disable=SC1091
 . ./.env
 
-ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-asr-all-in-one}
+ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-jusha-asr-business}
 ensure_docker_network_env
 
 # shellcheck disable=SC1091
 . ./.env
 
-ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-asr-all-in-one}
+ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-jusha-asr-business}
 
 BACKUP_DIR="$SCRIPT_DIR/backups/$(date +%Y%m%d%H%M%S)"
 mkdir -p "$BACKUP_DIR"

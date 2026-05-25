@@ -15,8 +15,8 @@ const appStore = useAppStore()
 const userStore = useUserStore()
 
 const form = reactive({
-  username: 'admin',
-  password: '123456',
+  username: '',
+  password: '',
 })
 
 const loading = ref(false)
@@ -38,7 +38,7 @@ async function handleLogin() {
   }
   catch (error) {
     const responseMessage = (error as AxiosError<{ message?: string }>)?.response?.data?.message
-    message.warning(responseMessage || '登录失败，请确认 gateway 与 admin-api 已启动，且默认管理员已初始化')
+    message.warning(responseMessage || '登录失败，请检查用户名或密码')
   }
   finally {
     loading.value = false
@@ -51,41 +51,14 @@ async function handleLogin() {
     <div class="scroll-shell mx-auto grid h-full w-full max-w-6xl content-center gap-5 grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
       <section class="card-main px-5 py-6 sm:px-7 sm:py-8">
         <div class="inline-flex rounded-full bg-tide/12 px-4 py-1 text-sm font-600 text-tide">
-          语音转写与会议摘要平台
+          巨鲨语音转写系统
         </div>
         <h1 class="mt-5 font-display text-3xl leading-tight font-700 text-ink sm:text-4xl lg:text-5xl">
-          为局域网私有部署准备的现代化转写工作台
+          语音转写、报告整理与会议纪要工作台
         </h1>
         <p class="mt-4 max-w-2xl text-sm leading-7 text-slate sm:text-base">
-          统一连接流式 ASR、术语纠错、会议逐字稿和纪要生成。前端骨架已经就位，后续只需要接入真实接口即可进入联调。
+          请使用管理员分配的账号登录系统。
         </p>
-
-        <div class="mt-8 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div class="subtle-panel">
-            <div class="text-xs text-slate/70">
-              实时转写
-            </div>
-            <div class="mt-1.5 text-xl font-700 text-ink">
-              P95 ≤ 1.5s
-            </div>
-          </div>
-          <div class="subtle-panel">
-            <div class="text-xs text-slate/70">
-              术语纠错
-            </div>
-            <div class="mt-1.5 text-xl font-700 text-ink">
-              规则优先
-            </div>
-          </div>
-          <div class="subtle-panel">
-            <div class="text-xs text-slate/70">
-              会议摘要
-            </div>
-            <div class="mt-1.5 text-xl font-700 text-ink">
-              结构化输出
-            </div>
-          </div>
-        </div>
       </section>
 
       <section class="card-main p-5 sm:p-6">
@@ -93,21 +66,15 @@ async function handleLogin() {
           <div class="font-display text-2xl font-700 text-ink">
             登录
           </div>
-          <div class="mt-1 text-sm text-slate/70">
-            管理后台、转写工作台和会议模块共用统一认证。
-          </div>
         </div>
 
         <NForm :model="form" label-placement="top">
           <NFormItem label="用户名">
-            <NInput v-model:value="form.username" placeholder="请输入用户名" />
+            <NInput v-model:value="form.username" :maxlength="64" placeholder="请输入用户名" />
           </NFormItem>
           <NFormItem label="密码">
-            <NInput v-model:value="form.password" type="password" show-password-on="click" placeholder="请输入密码" />
+            <NInput v-model:value="form.password" :maxlength="128" type="password" show-password-on="click" placeholder="请输入密码" />
           </NFormItem>
-          <div class="mb-4 rounded-2.5 bg-mist/60 px-4 py-3 text-sm text-slate">
-            默认管理员会在 admin-api 启动时自动创建：{{ form.username }} / {{ form.password }}
-          </div>
           <NButton block type="primary" color="#0f766e" size="large" :loading="loading" @click="handleLogin">
             进入系统
           </NButton>

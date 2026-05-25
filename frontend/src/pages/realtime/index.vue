@@ -1010,12 +1010,6 @@ function handleResume() {
   updateDraftText()
 }
 
-function pushMockSentence() {
-  const sentence = normalizeRecognizedText('当前是转写演示文本。')
-  store.appendSentence(sentence)
-  queueImmediateChunk(sentence)
-}
-
 onMounted(loadWorkflowOptions)
 
 watch(realtimeSettings, (value) => {
@@ -1101,9 +1095,6 @@ onBeforeUnmount(() => {
           </NButton>
           <NButton size="small" tertiary :disabled="!isRecording || stoppingSession" :loading="stoppingSession" @click="handleStop">
             停止
-          </NButton>
-          <NButton size="small" quaternary @click="pushMockSentence">
-            模拟片段
           </NButton>
           <NButton size="small" quaternary :disabled="!effectiveOutputText || savingSession" :loading="savingSession" @click="copyTranscript">
             复制输出
@@ -1418,7 +1409,7 @@ onBeforeUnmount(() => {
                 {{ workflowLabel(latestTask?.workflow_id) }}
               </div>
               <div class="mt-2 text-xs leading-6 text-slate">
-                {{ latestTask?.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING) ? `已生成会议数据 #${latestTask.meeting_id}` : '当前版本仅展示实时转写结果与复核输出。' }}
+                {{ latestTask?.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING) ? `已生成会议数据 #${latestTask.meeting_id}` : '已保存实时转写结果与复核输出。' }}
               </div>
             </div>
           </div>

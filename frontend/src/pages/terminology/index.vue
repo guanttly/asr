@@ -1104,10 +1104,10 @@ onMounted(loadDicts)
     <NModal v-model:show="showDictModal" preset="card" :title="dictModalTitle" class="modal-card max-w-140">
       <NForm :model="dictForm" label-placement="top">
         <NFormItem label="词库名称">
-          <NInput v-model:value="dictForm.name" placeholder="如：医疗查房" />
+          <NInput v-model:value="dictForm.name" :maxlength="128" placeholder="如：医疗查房" />
         </NFormItem>
         <NFormItem label="领域">
-          <NInput v-model:value="dictForm.domain" placeholder="如：医疗" />
+          <NInput v-model:value="dictForm.domain" :maxlength="128" placeholder="如：医疗" />
         </NFormItem>
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <NFormItem label="规则处理">
@@ -1171,11 +1171,12 @@ onMounted(loadDicts)
           <NInput :value="currentDict?.name || ''" disabled />
         </NFormItem>
         <NFormItem label="标准术语">
-          <NInput v-model:value="entryForm.correctTerm" placeholder="如：冠状动脉" />
+          <NInput v-model:value="entryForm.correctTerm" :maxlength="128" placeholder="如：冠状动脉" />
         </NFormItem>
         <NFormItem label="误写变体">
           <NInput
             v-model:value="entryForm.wrongVariantsText"
+            :maxlength="1000"
             type="textarea"
             :autosize="{ minRows: 3, maxRows: 5 }"
             placeholder="每行一个，或使用逗号分隔"
@@ -1218,13 +1219,13 @@ onMounted(loadDicts)
         <template v-if="ruleForm.matchType === 'regex'">
           <div class="rule-input-grid">
             <NFormItem :show-feedback="false" :label="currentRuleMatch.patternLabel">
-              <NInput v-model:value="ruleForm.pattern" :placeholder="currentRuleMatch.patternPlaceholder" />
+              <NInput v-model:value="ruleForm.pattern" :maxlength="1000" :placeholder="currentRuleMatch.patternPlaceholder" />
               <div class="rule-field-tip">
                 这项用于复杂格式，现场不确定时请使用下方示例或联系技术支持。
               </div>
             </NFormItem>
             <NFormItem :show-feedback="false" :label="currentRuleMatch.replacementLabel">
-              <NInput v-model:value="ruleForm.replacement" :placeholder="currentRuleMatch.replacementPlaceholder" />
+              <NInput v-model:value="ruleForm.replacement" :maxlength="1000" :placeholder="currentRuleMatch.replacementPlaceholder" />
               <div class="rule-field-tip">
                 可使用 $1、$2 这类占位结果，请按技术人员提供的内容填写。
               </div>

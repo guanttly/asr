@@ -7,6 +7,11 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const { connect, disconnect } = useBusinessSocket()
+const componentProps = {
+  Input: {
+    maxlength: 4000,
+  },
+}
 
 watch(() => userStore.token, (token) => {
   if (!token) {
@@ -18,7 +23,7 @@ watch(() => userStore.token, (token) => {
 </script>
 
 <template>
-  <NConfigProvider :locale="zhCN" :date-locale="dateZhCN">
+  <NConfigProvider :locale="zhCN" :date-locale="dateZhCN" :component-props="componentProps">
     <NLoadingBarProvider>
       <NDialogProvider>
         <NNotificationProvider>

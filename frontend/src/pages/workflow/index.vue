@@ -503,7 +503,7 @@ onMounted(loadWorkflows)
                 我的工作流
               </NButton>
             </div>
-            <NInput v-model:value="keyword" clearable size="small" placeholder="搜索名称 / 描述 / ID" class="w-full sm:!w-56" />
+            <NInput v-model:value="keyword" :maxlength="128" clearable size="small" placeholder="搜索名称 / 描述 / ID" class="w-full sm:!w-56" />
             <NButton quaternary size="small" @click="loadWorkflows">
               刷新
             </NButton>
@@ -625,8 +625,8 @@ onMounted(loadWorkflows)
               : '我的工作流只归当前账号所有，可直接继续编辑和发布。' }}
           </div>
         </div>
-        <NInput v-model:value="form.name" placeholder="例如：医疗转写纠错模板" />
-        <NInput v-model:value="form.description" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述这条工作流的用途、目标场景和关键节点。" />
+        <NInput v-model:value="form.name" :maxlength="128" placeholder="例如：医疗转写纠错模板" />
+        <NInput v-model:value="form.description" :maxlength="512" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="描述这条工作流的用途、目标场景和关键节点。" />
         <div class="rounded-3 border border-black/6 bg-[#fbfdff] p-3">
           <div class="text-xs font-600 text-ink">
             选择工作流场景

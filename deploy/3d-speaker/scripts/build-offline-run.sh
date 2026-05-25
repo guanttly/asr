@@ -5,12 +5,14 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 DEPLOY_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_SH="$DEPLOY_DIR/build.sh"
 
-IMAGE_NAME=${SA_IMAGE_NAME:-speaker-analysis-service}
+IMAGE_NAME=${SA_IMAGE_NAME:-jusha-asr-speaker}
 IMAGE_REF=""
 IMAGE_REF_EXPLICIT=0
 VERSION=${SA_RELEASE_VERSION:-}
+IMAGE_VERSION=${SA_IMAGE_VERSION:-}
+SOURCE_IMAGE_REF=${SA_SOURCE_IMAGE:-}
 OUTPUT_ROOT="$DEPLOY_DIR/dist"
-PACKAGE_ROOT_NAME=${SA_PACKAGE_ROOT_NAME:-speaker-analysis-service}
+PACKAGE_ROOT_NAME=${SA_PACKAGE_ROOT_NAME:-jusha-asr-speaker}
 MODEL_SOURCE_DIR="$DEPLOY_DIR/models"
 CONFIG_SOURCE_DIR="$DEPLOY_DIR/config"
 ALLOW_INCOMPLETE_NATIVE_CACHE=0
@@ -26,7 +28,7 @@ usage() {
   docker load 并用 docker compose 启动服务，全程不会主动拉取镜像、模型或 Python 包。
 
 选项:
-  --image <image:tag>          要导出的本地镜像，默认 speaker-analysis-service:<build.sh 中的 IMAGE_TAG>
+  --image <image:tag>          要导出的本地镜像，默认 jusha-asr-speaker:<build.sh 中的 IMAGE_TAG>
   --version <version>          发布版本号，默认读取 build.sh 中的 IMAGE_TAG
   --output-dir <dir>           输出目录，默认 deploy/3d-speaker/dist
   --models-dir <dir>           要打入安装包的模型目录，默认 deploy/3d-speaker/models
@@ -38,7 +40,7 @@ usage() {
 
 示例:
   ./scripts/build-offline-run.sh
-  ./scripts/build-offline-run.sh --image speaker-analysis-service:1.1.7
+  ./scripts/build-offline-run.sh --image jusha-asr-speaker:1.1.7
   ./scripts/build-offline-run.sh --models-dir /data/speaker-analysis/models
 EOF
 }
@@ -150,6 +152,7 @@ sha256_file() {
 create_self_extract_run() {
   RUN_PATH="$1"
   PAYLOAD_ARCHIVE="$2"
+  PACKAGE_ROOT_NAME_VALUE="$3"
   TMP_RUN=$(mktemp)
 
   cat > "$TMP_RUN" <<'EOF'
@@ -158,6 +161,7 @@ set -eu
 
 SELF="$0"
 TARGET_BASE=${SA_RUN_TARGET_DIR:-$PWD}
+PACKAGE_ROOT_NAME="__PACKAGE_ROOT_NAME__"
 PAYLOAD_LINE=$(awk '/^__SPEAKER_ANALYSIS_ARCHIVE_BELOW__$/ {print NR + 1; exit 0; }' "$SELF")
 
 if [ -z "${PAYLOAD_LINE:-}" ]; then
@@ -168,11 +172,13 @@ fi
 mkdir -p "$TARGET_BASE"
 tail -n +"$PAYLOAD_LINE" "$SELF" | tar -xzf - -C "$TARGET_BASE"
 
-cd "$TARGET_BASE/speaker-analysis-service"
+cd "$TARGET_BASE/$PACKAGE_ROOT_NAME"
 sh install.sh "$@"
 exit 0
 __SPEAKER_ANALYSIS_ARCHIVE_BELOW__
 EOF
+
+  sed -i "s|__PACKAGE_ROOT_NAME__|$PACKAGE_ROOT_NAME_VALUE|g" "$TMP_RUN"
 
   cat "$PAYLOAD_ARCHIVE" >> "$TMP_RUN"
   chmod +x "$TMP_RUN"
@@ -222,20 +228,40 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -z "$IMAGE_VERSION" ]; then
+  IMAGE_VERSION=$(read_build_version || true)
+fi
+
+if [ -z "$IMAGE_REF" ]; then
+  if [ -n "$IMAGE_VERSION" ]; then
+    IMAGE_REF="$IMAGE_NAME:$IMAGE_VERSION"
+  else
+    IMAGE_REF="$IMAGE_NAME:latest"
+  fi
+fi
+
 if [ -z "$VERSION" ]; then
   if [ "$IMAGE_REF_EXPLICIT" -eq 1 ]; then
     VERSION=$(image_tag_from_ref "$IMAGE_REF")
   fi
-  if [ -z "$VERSION" ]; then
-    VERSION=$(read_build_version || true)
+  if [ -z "$VERSION" ] && [ -n "$IMAGE_VERSION" ]; then
+    VERSION="$IMAGE_VERSION"
   fi
   if [ -z "$VERSION" ]; then
     VERSION=$(date +%Y%m%d%H%M%S)
   fi
 fi
 
-if [ -z "$IMAGE_REF" ]; then
-  IMAGE_REF="$IMAGE_NAME:$VERSION"
+if [ -z "$SOURCE_IMAGE_REF" ]; then
+  SOURCE_IMAGE_REF="$IMAGE_REF"
+  if [ "$IMAGE_REF_EXPLICIT" -eq 0 ] && ! docker image inspect "$SOURCE_IMAGE_REF" >/dev/null 2>&1; then
+    for CANDIDATE in "speaker-analysis-service:${IMAGE_VERSION:-latest}" "speaker-analysis-service:latest"; do
+      if docker image inspect "$CANDIDATE" >/dev/null 2>&1; then
+        SOURCE_IMAGE_REF="$CANDIDATE"
+        break
+      fi
+    done
+  fi
 fi
 
 MODEL_SOURCE_DIR=$(CDPATH= cd -- "$MODEL_SOURCE_DIR" && pwd)
@@ -252,17 +278,22 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
-  echo "本地不存在待导出的镜像: $IMAGE_REF" >&2
-  echo "请先在服务器上完成部署/构建，或用 --image 指定 docker images 中已有的镜像标签。" >&2
+if ! docker image inspect "$SOURCE_IMAGE_REF" >/dev/null 2>&1; then
+  echo "本地不存在待导出的镜像: $SOURCE_IMAGE_REF" >&2
+  echo "请先在服务器上完成部署/构建，或用 --image/SA_SOURCE_IMAGE 指定 docker images 中已有的镜像标签。" >&2
   exit 1
+fi
+
+if [ "$SOURCE_IMAGE_REF" != "$IMAGE_REF" ]; then
+  echo "复用本地旧镜像标签并重打为统一标签: $SOURCE_IMAGE_REF -> $IMAGE_REF"
+  docker tag "$SOURCE_IMAGE_REF" "$IMAGE_REF"
 fi
 
 PACKAGE_NAME="$PACKAGE_ROOT_NAME-$VERSION"
 STAGING_DIR="$OUTPUT_ROOT/$PACKAGE_ROOT_NAME"
 ARCHIVE_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.tar.gz"
 RUN_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.run"
-IMAGE_ARCHIVE_NAME="speaker-analysis-service-image.tar.gz"
+IMAGE_ARCHIVE_NAME="jusha-asr-speaker-image.tar.gz"
 IMAGE_ARCHIVE_PATH="$STAGING_DIR/image/$IMAGE_ARCHIVE_NAME"
 BUILD_DATE=${SA_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 
@@ -290,13 +321,13 @@ else
   cat > "$STAGING_DIR/.env" <<EOF
 SA_IMAGE=$IMAGE_REF
 SA_RELEASE_VERSION=$VERSION
-SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-speaker-analysis}
-SA_PORT=${SA_PORT:-10002}
-SA_GPU_ID=${SA_GPU_ID:-2}
+SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-jusha-asr-speaker}
+SA_PORT=${SA_PORT:-9852}
+SA_GPU_ID=${SA_GPU_ID:-0}
 SA_DEVICE=${SA_DEVICE:-cuda:0}
 WORKERS=${WORKERS:-1}
 ALLOW_INCOMPLETE_NATIVE_CACHE=${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}
-SA_DOCKER_NETWORK_NAME=${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}
+SA_DOCKER_NETWORK_NAME=${SA_DOCKER_NETWORK_NAME:-jusha-asr}
 SA_DOCKER_SUBNET=${SA_DOCKER_SUBNET:-AUTO}
 SA_DOCKER_GATEWAY=${SA_DOCKER_GATEWAY:-}
 EOF
@@ -304,9 +335,11 @@ fi
 
 update_env_value SA_IMAGE "$IMAGE_REF" "$STAGING_DIR/.env"
 update_env_value SA_RELEASE_VERSION "$VERSION" "$STAGING_DIR/.env"
-update_env_value SA_CONTAINER_NAME "${SA_CONTAINER_NAME:-speaker-analysis}" "$STAGING_DIR/.env"
+update_env_value SA_CONTAINER_NAME "${SA_CONTAINER_NAME:-jusha-asr-speaker}" "$STAGING_DIR/.env"
+update_env_value SA_PORT "${SA_PORT:-9852}" "$STAGING_DIR/.env"
+update_env_value SA_GPU_ID "${SA_GPU_ID:-0}" "$STAGING_DIR/.env"
 update_env_value ALLOW_INCOMPLETE_NATIVE_CACHE "${ALLOW_INCOMPLETE_NATIVE_CACHE:-0}" "$STAGING_DIR/.env"
-update_env_value SA_DOCKER_NETWORK_NAME "${SA_DOCKER_NETWORK_NAME:-speaker-analysis-net}" "$STAGING_DIR/.env"
+update_env_value SA_DOCKER_NETWORK_NAME "${SA_DOCKER_NETWORK_NAME:-jusha-asr}" "$STAGING_DIR/.env"
 update_env_value SA_DOCKER_SUBNET "${SA_DOCKER_SUBNET:-AUTO}" "$STAGING_DIR/.env"
 update_env_value SA_DOCKER_GATEWAY "${SA_DOCKER_GATEWAY:-}" "$STAGING_DIR/.env"
 cp "$STAGING_DIR/.env" "$STAGING_DIR/.env.example"
@@ -325,7 +358,7 @@ EOF
 
 rm -f "$ARCHIVE_PATH" "$RUN_PATH"
 tar -czf "$ARCHIVE_PATH" -C "$OUTPUT_ROOT" "$PACKAGE_ROOT_NAME"
-create_self_extract_run "$RUN_PATH" "$ARCHIVE_PATH"
+create_self_extract_run "$RUN_PATH" "$ARCHIVE_PATH" "$PACKAGE_ROOT_NAME"
 
 ARCHIVE_SIZE=$(du -h "$ARCHIVE_PATH" | awk '{print $1}')
 RUN_SIZE=$(du -h "$RUN_PATH" | awk '{print $1}')

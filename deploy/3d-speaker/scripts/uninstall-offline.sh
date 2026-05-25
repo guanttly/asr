@@ -74,8 +74,8 @@ if [ -f .release-manifest ]; then
   . ./.release-manifest
 fi
 
-SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-speaker-analysis}
-SA_IMAGE=${SA_IMAGE:-${RELEASE_IMAGE:-speaker-analysis-service:latest}}
+SA_CONTAINER_NAME=${SA_CONTAINER_NAME:-jusha-asr-speaker}
+SA_IMAGE=${SA_IMAGE:-${RELEASE_IMAGE:-jusha-asr-speaker:latest}}
 
 echo "停止并移除服务..."
 if [ -f docker-compose.yml ]; then

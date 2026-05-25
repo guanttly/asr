@@ -20,6 +20,7 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id uint64) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
 	GetDeviceIdentityByMachineCode(ctx context.Context, machineCode string) (*DeviceIdentity, error)
+	GetDeviceIdentityByMACAddresses(ctx context.Context, macAddresses []string) (*DeviceIdentity, error)
 	GetWorkflowBindings(ctx context.Context, userID uint64) (*WorkflowBindings, error)
 	UpsertDeviceIdentity(ctx context.Context, identity *DeviceIdentity) error
 	SaveWorkflowBindings(ctx context.Context, bindings *WorkflowBindings) error

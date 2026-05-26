@@ -96,3 +96,43 @@ func TestMeetingSummaryHandlerChunksLongInputBeforeFinalSummary(t *testing.T) {
 		t.Fatalf("expected chunk prompt in detail payload, got %q", prompt)
 	}
 }
+
+func TestMeetingSummaryHandlerUsesCustomChunkPrompt(t *testing.T) {
+	var prompts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Messages) == 0 {
+			t.Fatal("expected at least one message")
+		}
+		prompts = append(prompts, payload.Messages[0].Content)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"阶段摘要"}}],"model":"qwen3-4b","usage":{"prompt_tokens":100,"completion_tokens":50}}`))
+	}))
+	defer server.Close()
+
+	handler := NewMeetingSummaryHandler(nil)
+	inputText := strings.Repeat("这是一段需要分片处理的会议内容。", 400)
+	configBytes := []byte(`{
+		"endpoint":"` + server.URL + `",
+		"model":"qwen3-4b",
+		"chunk_prompt_template":"自定义分片模板：{{Text}}",
+		"prompt_template":"最终模板：{{TEXT}}",
+		"max_tokens":2048
+	}`)
+	if _, _, err := handler.Execute(context.Background(), configBytes, inputText, nil); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(prompts) < 2 {
+		t.Fatalf("expected chunk and final requests, got %d", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "自定义分片模板") || strings.Contains(prompts[0], "{{Text}}") {
+		t.Fatalf("expected custom chunk prompt with replaced placeholder, got %q", prompts[0])
+	}
+}

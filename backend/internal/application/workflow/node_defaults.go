@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/workflow"
+	wfengine "github.com/lgt/asr/internal/infrastructure/workflow"
 )
 
 const defaultLLMCorrectionPrompt = `你是一个专业的语音转写文本校对助手。请只修正语音识别造成的错别字、同音误识别、标点和明显语序问题，保持原意、语气、人名、数字和专业术语不变。
@@ -36,7 +37,7 @@ func builtinNodeDefaultConfig(nodeType domain.NodeType) map[string]any {
 	case domain.NodeSpeakerDiarize:
 		return map[string]any{"service_url": "", "enable_voiceprint_match": false, "fail_on_error": false}
 	case domain.NodeMeetingSummary:
-		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": "", "output_format": "markdown", "max_tokens": 100000}
+		return map[string]any{"endpoint": "", "model": "", "api_key": "", "prompt_template": wfengine.DefaultMeetingSummaryPrompt, "chunk_prompt_template": wfengine.DefaultMeetingSummaryChunkPrompt, "output_format": "markdown", "max_tokens": 100000}
 	case domain.NodeCustomRegex:
 		return map[string]any{"rules": []map[string]any{{"pattern": "", "replacement": "", "enabled": true}}}
 	default:
@@ -193,12 +194,23 @@ func (s *Service) resolveGlobalNodeDefault(ctx context.Context, nodeType domain.
 }
 
 func normalizeResolvedNodeDefault(nodeType domain.NodeType, config map[string]any) {
-	if nodeType != domain.NodeLLMCorrection {
+	if nodeType == domain.NodeLLMCorrection {
+		promptTemplate, _ := config["prompt_template"].(string)
+		if strings.TrimSpace(promptTemplate) == "" {
+			config["prompt_template"] = defaultLLMCorrectionPrompt
+		}
 		return
 	}
-	promptTemplate, _ := config["prompt_template"].(string)
-	if strings.TrimSpace(promptTemplate) == "" {
-		config["prompt_template"] = defaultLLMCorrectionPrompt
+
+	if nodeType == domain.NodeMeetingSummary {
+		promptTemplate, _ := config["prompt_template"].(string)
+		if strings.TrimSpace(promptTemplate) == "" {
+			config["prompt_template"] = wfengine.DefaultMeetingSummaryPrompt
+		}
+		chunkPromptTemplate, _ := config["chunk_prompt_template"].(string)
+		if strings.TrimSpace(chunkPromptTemplate) == "" {
+			config["chunk_prompt_template"] = wfengine.DefaultMeetingSummaryChunkPrompt
+		}
 	}
 }
 

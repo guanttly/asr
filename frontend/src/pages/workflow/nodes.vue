@@ -12,7 +12,7 @@ import { getNodeTypes, testNodeStream, updateNodeDefault } from '@/api/workflow'
 import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
 import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
-import { buildNodeConfigOverrides, fallbackNodeDefaultConfig, formatConfigText, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
+import { buildMeetingSummaryTokenBudget, buildNodeConfigOverrides, DEFAULT_MEETING_SUMMARY_CHUNK_PROMPT, DEFAULT_MEETING_SUMMARY_PROMPT, fallbackNodeDefaultConfig, formatConfigText, hasTextPlaceholder, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 
 interface DictOption {
   label: string
@@ -67,6 +67,13 @@ const selectedConfig = computed<Record<string, any>>(() => {
     return {}
   return normalizeNodeConfig(selectedNode.value.type, parseConfigSafe(defaultDraft.configText), fallbackNodeDefaultConfig(selectedNode.value.type))
 })
+const selectedMeetingSummaryTokenBudget = computed(() => {
+  if (selectedNode.value?.type !== 'meeting_summary')
+    return null
+  return buildMeetingSummaryTokenBudget(selectedConfig.value)
+})
+const meetingSummaryFinalPromptHasText = computed(() => hasTextPlaceholder(selectedConfig.value.prompt_template))
+const meetingSummaryChunkPromptHasText = computed(() => hasTextPlaceholder(selectedConfig.value.chunk_prompt_template))
 const selectedRegexRules = computed<RegexRule[]>(() => Array.isArray(selectedConfig.value.rules) ? selectedConfig.value.rules as RegexRule[] : [])
 const selectedNodeNeedsAudio = computed(() => ['batch_asr', 'realtime_asr', 'speaker_diarize'].includes(selectedNode.value?.type || ''))
 const selectedNodePreviewMode = computed<'diff' | 'plain' | 'markdown'>(() => {
@@ -198,6 +205,23 @@ function updateSelectedConfig(patch: Record<string, unknown>) {
   replaceSelectedConfig({
     ...selectedConfig.value,
     ...patch,
+  })
+}
+
+function restoreMeetingSummaryPrompt(field: 'prompt_template' | 'chunk_prompt_template') {
+  updateSelectedConfig({
+    [field]: field === 'prompt_template' ? DEFAULT_MEETING_SUMMARY_PROMPT : DEFAULT_MEETING_SUMMARY_CHUNK_PROMPT,
+  })
+}
+
+function appendMeetingSummaryTextPlaceholder(field: 'prompt_template' | 'chunk_prompt_template') {
+  const current = String(selectedConfig.value[field] || '').trimEnd()
+  if (hasTextPlaceholder(current)) {
+    message.info('当前模板已经包含正文占位符')
+    return
+  }
+  updateSelectedConfig({
+    [field]: current ? `${current}\n\n{{TEXT}}` : '{{TEXT}}',
   })
 }
 
@@ -887,24 +911,88 @@ onMounted(async () => {
                   </div>
                   <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                   <div class="grid gap-3 lg:grid-cols-2">
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
-                    <NSelect
-                      :value="selectedConfig.output_format || 'markdown'"
-                      :options="[
-                        { label: 'Markdown', value: 'markdown' },
-                        { label: 'Plain Text', value: 'text' },
-                      ]"
-                      @update:value="updateSelectedConfig({ output_format: $event || 'markdown' })"
-                    />
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        默认最大输出 Token
+                      </div>
+                      <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="1024" @update:value="updateSelectedConfig({ max_tokens: $event ?? 100000 })" />
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        默认输出格式
+                      </div>
+                      <NSelect
+                        :value="selectedConfig.output_format || 'markdown'"
+                        :options="[
+                          { label: 'Markdown', value: 'markdown' },
+                          { label: 'Plain Text', value: 'text' },
+                        ]"
+                        @update:value="updateSelectedConfig({ output_format: $event || 'markdown' })"
+                      />
+                    </div>
                   </div>
-                  <NInput
-                    :value="selectedConfig.prompt_template"
-                    :maxlength="20000"
-                    type="textarea"
-                    :autosize="{ minRows: 6, maxRows: 12 }"
-                    placeholder="默认会议纪要 Prompt 模板"
-                    @update:value="updateSelectedConfig({ prompt_template: $event })"
-                  />
+                  <div v-if="selectedMeetingSummaryTokenBudget" class="rounded-2 bg-white px-3 py-3 text-xs leading-6 text-slate/75">
+                    <div class="font-600 text-ink">
+                      提示词 Token 预算
+                    </div>
+                    <div>
+                      最终汇总模板约 {{ selectedMeetingSummaryTokenBudget.finalPromptTokens }} token，分片提炼模板约 {{ selectedMeetingSummaryTokenBudget.chunkPromptTokens }} token。
+                    </div>
+                    <div>
+                      系统最低输入预算约 {{ selectedMeetingSummaryTokenBudget.minimumInputTokens }} token；建议模型上下文 max token 不低于 {{ selectedMeetingSummaryTokenBudget.recommendedContextTokens }}。按当前最大输出 Token 满额预留时，需要约 {{ selectedMeetingSummaryTokenBudget.currentRequestContextTokens }} token。
+                    </div>
+                    <div v-if="selectedMeetingSummaryTokenBudget.currentOutputTokens < selectedMeetingSummaryTokenBudget.recommendedOutputTokens" class="text-amber-600">
+                      当前最大输出 Token 低于 {{ selectedMeetingSummaryTokenBudget.recommendedOutputTokens }}，长会议纪要可能被截断。
+                    </div>
+                  </div>
+                  <div>
+                    <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <span class="text-xs text-slate/70">默认最终汇总 Prompt</span>
+                      <span class="flex items-center gap-2">
+                        <NButton text size="tiny" @click="appendMeetingSummaryTextPlaceholder('prompt_template')">
+                          插入 &#123;&#123;TEXT&#125;&#125;
+                        </NButton>
+                        <NButton text size="tiny" @click="restoreMeetingSummaryPrompt('prompt_template')">
+                          恢复内置
+                        </NButton>
+                      </span>
+                    </div>
+                    <NInput
+                      :value="selectedConfig.prompt_template"
+                      :maxlength="20000"
+                      type="textarea"
+                      :autosize="{ minRows: 8, maxRows: 16 }"
+                      placeholder="默认最终汇总模板，使用 {{TEXT}} 或 {{Text}} 放置转写文本"
+                      @update:value="updateSelectedConfig({ prompt_template: $event })"
+                    />
+                    <div class="mt-1 text-[11px] leading-5" :class="meetingSummaryFinalPromptHasText ? 'text-slate/65' : 'text-amber-600'">
+                      {{ meetingSummaryFinalPromptHasText ? '已检测到正文占位符。' : '未检测到正文占位符，运行时会自动把正文追加到模板末尾。' }}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <span class="text-xs text-slate/70">默认分片提炼 Prompt</span>
+                      <span class="flex items-center gap-2">
+                        <NButton text size="tiny" @click="appendMeetingSummaryTextPlaceholder('chunk_prompt_template')">
+                          插入 &#123;&#123;TEXT&#125;&#125;
+                        </NButton>
+                        <NButton text size="tiny" @click="restoreMeetingSummaryPrompt('chunk_prompt_template')">
+                          恢复内置
+                        </NButton>
+                      </span>
+                    </div>
+                    <NInput
+                      :value="selectedConfig.chunk_prompt_template"
+                      :maxlength="20000"
+                      type="textarea"
+                      :autosize="{ minRows: 8, maxRows: 16 }"
+                      placeholder="默认分片提炼模板，使用 {{TEXT}} 或 {{Text}} 放置当前片段"
+                      @update:value="updateSelectedConfig({ chunk_prompt_template: $event })"
+                    />
+                    <div class="mt-1 text-[11px] leading-5" :class="meetingSummaryChunkPromptHasText ? 'text-slate/65' : 'text-amber-600'">
+                      {{ meetingSummaryChunkPromptHasText ? '已检测到正文占位符。' : '未检测到正文占位符，运行时会自动把当前片段追加到模板末尾。' }}
+                    </div>
+                  </div>
                 </div>
               </template>
 

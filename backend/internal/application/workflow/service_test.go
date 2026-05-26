@@ -436,6 +436,58 @@ func TestUpdateNodeDefaultReturnsEffectiveConfig(t *testing.T) {
 	}
 }
 
+func TestMeetingSummaryDefaultConfigExposesBuiltinPrompts(t *testing.T) {
+	defaultRepo := &nodeDefaultRepoStub{}
+	service := NewService(nil, nil, defaultRepo, nil, nil, nil)
+
+	defaultConfig, err := service.GetNodeDefaultConfig(context.Background(), domain.NodeMeetingSummary)
+	if err != nil {
+		t.Fatalf("GetNodeDefaultConfig returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(defaultConfig, &payload); err != nil {
+		t.Fatalf("unmarshal default config: %v", err)
+	}
+	promptTemplate, _ := payload["prompt_template"].(string)
+	if !strings.Contains(promptTemplate, "{{TEXT}}") || !strings.Contains(promptTemplate, "会议纪要") {
+		t.Fatalf("expected meeting summary final prompt to be exposed, got %q", promptTemplate)
+	}
+	chunkPromptTemplate, _ := payload["chunk_prompt_template"].(string)
+	if !strings.Contains(chunkPromptTemplate, "{{TEXT}}") || !strings.Contains(chunkPromptTemplate, "会议片段") {
+		t.Fatalf("expected meeting summary chunk prompt to be exposed, got %q", chunkPromptTemplate)
+	}
+}
+
+func TestMeetingSummaryDefaultConfigRestoresBlankStoredPrompts(t *testing.T) {
+	defaultRepo := &nodeDefaultRepoStub{items: map[domain.NodeType]domain.NodeDefault{
+		domain.NodeMeetingSummary: {
+			NodeType: domain.NodeMeetingSummary,
+			Config:   `{"prompt_template":"","chunk_prompt_template":"","max_tokens":2048}`,
+		},
+	}}
+	service := NewService(nil, nil, defaultRepo, nil, nil, nil)
+
+	defaultConfig, err := service.GetNodeDefaultConfig(context.Background(), domain.NodeMeetingSummary)
+	if err != nil {
+		t.Fatalf("GetNodeDefaultConfig returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(defaultConfig, &payload); err != nil {
+		t.Fatalf("unmarshal default config: %v", err)
+	}
+	if strings.TrimSpace(payload["prompt_template"].(string)) == "" {
+		t.Fatal("expected blank final prompt default to be restored")
+	}
+	if strings.TrimSpace(payload["chunk_prompt_template"].(string)) == "" {
+		t.Fatal("expected blank chunk prompt default to be restored")
+	}
+	if payload["max_tokens"] != float64(2048) {
+		t.Fatalf("expected stored max_tokens to be preserved, got %+v", payload["max_tokens"])
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }

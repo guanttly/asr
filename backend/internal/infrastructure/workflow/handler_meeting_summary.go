@@ -12,12 +12,13 @@ import (
 
 // MeetingSummaryConfig is the configuration for the meeting summary node.
 type MeetingSummaryConfig struct {
-	Endpoint       string `json:"endpoint,omitempty"`
-	Model          string `json:"model,omitempty"`
-	APIKey         string `json:"api_key,omitempty"`
-	PromptTemplate string `json:"prompt_template,omitempty"`
-	OutputFormat   string `json:"output_format,omitempty"`
-	MaxTokens      int    `json:"max_tokens,omitempty"`
+	Endpoint            string `json:"endpoint,omitempty"`
+	Model               string `json:"model,omitempty"`
+	APIKey              string `json:"api_key,omitempty"`
+	PromptTemplate      string `json:"prompt_template,omitempty"`
+	ChunkPromptTemplate string `json:"chunk_prompt_template,omitempty"`
+	OutputFormat        string `json:"output_format,omitempty"`
+	MaxTokens           int    `json:"max_tokens,omitempty"`
 }
 
 // MeetingSummaryHandler generates a meeting summary from text.
@@ -43,7 +44,7 @@ func NewMeetingSummaryHandler(summarizer *nlpengine.Summarizer) *MeetingSummaryH
 	}
 }
 
-const defaultSummaryPrompt = `# 角色
+const DefaultMeetingSummaryPrompt = `# 角色
 你是一位资深的会议纪要撰写专家。你的任务是将语音转写的原始文本整理为清晰、专业、可直接用于存档和分发的结构化会议纪要。
 
 # 输出格式要求
@@ -82,7 +83,7 @@ const defaultSummaryPrompt = `# 角色
 
 {{TEXT}}`
 
-const defaultChunkSummaryPrompt = `# 角色
+const DefaultMeetingSummaryChunkPrompt = `# 角色
 你是一位会议纪要助手，正在对一段较长会议的某个片段做关键信息提炼。
 
 # 要求
@@ -168,10 +169,8 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 		return h.Execute(ctx, config, inputText, nil)
 	}
 
-	finalPrompt := cfg.PromptTemplate
-	if finalPrompt == "" {
-		finalPrompt = defaultSummaryPrompt
-	}
+	finalPrompt := meetingSummaryFinalPrompt(cfg)
+	chunkPrompt := meetingSummaryChunkPrompt(cfg)
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = meetingSummaryDefaultMaxTokens
@@ -200,7 +199,7 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 				return inputText, nil, err
 			}
 		}
-		partial, _, err := h.executeSummaryPrompt(ctx, cfg, defaultChunkSummaryPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
 		if err != nil {
 			return inputText, nil, err
 		}
@@ -209,7 +208,7 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
 			Title:      fmt.Sprintf("片段 %d", index+1),
 			Output:     trimmedPartial,
-			Prompt:     strings.ReplaceAll(defaultChunkSummaryPrompt, "{{TEXT}}", chunk),
+			Prompt:     renderTextPrompt(chunkPrompt, chunk, "会议片段"),
 			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
 		})
 	}
@@ -249,10 +248,8 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 		return inputText, nil, fmt.Errorf("meeting summary input is empty")
 	}
 
-	finalPrompt := cfg.PromptTemplate
-	if finalPrompt == "" {
-		finalPrompt = defaultSummaryPrompt
-	}
+	finalPrompt := meetingSummaryFinalPrompt(cfg)
+	chunkPrompt := meetingSummaryChunkPrompt(cfg)
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = meetingSummaryDefaultMaxTokens
@@ -266,7 +263,7 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 	partialSummaries := make([]string, 0, len(chunks))
 	chunkOutputs := make([]meetingSummaryChunkDebug, 0, len(chunks))
 	for index, chunk := range chunks {
-		partial, _, err := h.executeSummaryPrompt(ctx, cfg, defaultChunkSummaryPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
 		if err != nil {
 			return inputText, nil, err
 		}
@@ -275,7 +272,7 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
 			Title:      fmt.Sprintf("片段 %d", index+1),
 			Output:     trimmedPartial,
-			Prompt:     strings.ReplaceAll(defaultChunkSummaryPrompt, "{{TEXT}}", chunk),
+			Prompt:     renderTextPrompt(chunkPrompt, chunk, "会议片段"),
 			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
 		})
 	}
@@ -462,4 +459,18 @@ func mergeChunkSummaries(items []string) string {
 		parts = append(parts, fmt.Sprintf("片段 %d 摘要：\n%s", index+1, trimmed))
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func meetingSummaryFinalPrompt(cfg MeetingSummaryConfig) string {
+	if strings.TrimSpace(cfg.PromptTemplate) == "" {
+		return DefaultMeetingSummaryPrompt
+	}
+	return cfg.PromptTemplate
+}
+
+func meetingSummaryChunkPrompt(cfg MeetingSummaryConfig) string {
+	if strings.TrimSpace(cfg.ChunkPromptTemplate) == "" {
+		return DefaultMeetingSummaryChunkPrompt
+	}
+	return cfg.ChunkPromptTemplate
 }

@@ -237,6 +237,78 @@ func TestLLMCorrectionHandlerSkipsEmptyInput(t *testing.T) {
 	}
 }
 
+func TestLLMCorrectionHandlerAppendsInputWhenTemplateHasNoPlaceholder(t *testing.T) {
+	var capturedPrompt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Messages) == 0 {
+			t.Fatal("expected at least one message")
+		}
+		capturedPrompt = payload.Messages[0].Content
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"整理后的文本"}}],"model":"qwen3-4b","usage":{"prompt_tokens":20,"completion_tokens":5}}`))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"prompt_template": "请整理会议内容",
+		"temperature": 0.3,
+		"max_tokens": 512
+	}`)
+
+	if _, _, err := handler.Execute(context.Background(), configBytes, "原始会议文本", nil); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(capturedPrompt, "原文：\n原始会议文本") {
+		t.Fatalf("expected prompt to include appended input text, got %q", capturedPrompt)
+	}
+}
+
+func TestLLMCorrectionHandlerAcceptsCaseInsensitiveTextPlaceholder(t *testing.T) {
+	var capturedPrompt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		capturedPrompt = payload.Messages[0].Content
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"整理后的文本"}}],"model":"qwen3-4b","usage":{"prompt_tokens":20,"completion_tokens":5}}`))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"prompt_template": "请整理：{{Text}}",
+		"temperature": 0.3,
+		"max_tokens": 512,
+		"allow_markdown": true
+	}`)
+
+	if _, _, err := handler.Execute(context.Background(), configBytes, "原始 $1 会议文本", nil); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if capturedPrompt != "请整理：原始 $1 会议文本" {
+		t.Fatalf("expected case-insensitive placeholder replacement, got %q", capturedPrompt)
+	}
+}
+
 func TestLLMCorrectionHandlerNormalizesMarkdownOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

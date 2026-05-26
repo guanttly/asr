@@ -42,6 +42,7 @@ type LLMCorrectionHandler struct {
 var maxContextLengthPattern = regexp.MustCompile(`maximum context length is (\d+) tokens`)
 var inputTokensPattern = regexp.MustCompile(`request has (\d+) input tokens`)
 var maxTokenRangePattern = regexp.MustCompile(`Range of max_tokens should be \[(\d+),\s*(\d+)\]`)
+var textPlaceholderPattern = regexp.MustCompile(`(?i)\{\{\s*text\s*\}\}`)
 var markdownHeadingPattern = regexp.MustCompile(`(?m)^\s{0,3}#{1,6}\s+\S`)
 var markdownListPattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]\s+\S|\d+\.\s+\S)`)
 var markdownFencePattern = regexp.MustCompile("(?m)^```.*$")
@@ -107,7 +108,7 @@ func (h *LLMCorrectionHandler) prepareRequest(config json.RawMessage, inputText 
 	if prompt == "" {
 		prompt = defaultLLMPrompt
 	}
-	prompt = strings.ReplaceAll(prompt, "{{TEXT}}", inputText)
+	prompt = renderTextPrompt(prompt, inputText, "原文")
 	if !cfg.AllowMarkdown {
 		prompt = enforcePlainTextOutput(prompt)
 	}
@@ -126,6 +127,28 @@ func (h *LLMCorrectionHandler) prepareRequest(config json.RawMessage, inputText 
 		return LLMCorrectionConfig{}, "", 0, 0, "", err
 	}
 	return cfg, prompt, temperature, maxTokens, endpoint, nil
+}
+
+func renderTextPrompt(template string, inputText string, fallbackLabel string) string {
+	if textPlaceholderPattern.MatchString(template) {
+		return textPlaceholderPattern.ReplaceAllStringFunc(template, func(string) string {
+			return inputText
+		})
+	}
+
+	trimmedPrompt := strings.TrimSpace(template)
+	trimmedInput := strings.TrimSpace(inputText)
+	if trimmedInput == "" {
+		return trimmedPrompt
+	}
+	if trimmedPrompt == "" {
+		return inputText
+	}
+	label := strings.TrimSpace(fallbackLabel)
+	if label == "" {
+		label = "原文"
+	}
+	return trimmedPrompt + "\n\n" + label + "：\n" + inputText
 }
 
 func emptyLLMCorrectionDetail(streamed bool) json.RawMessage {

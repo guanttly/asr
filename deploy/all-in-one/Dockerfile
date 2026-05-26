@@ -1,7 +1,9 @@
 FROM golang:1.25.4-bookworm AS backend-builder
 
-ENV GOPROXY=https://goproxy.cn,direct \
-    GOSUMDB=sum.golang.google.cn
+ARG GO_MODULE_PROXY=https://goproxy.cn|https://goproxy.io|https://mirrors.aliyun.com/goproxy/|direct
+ARG GO_MODULE_SUMDB=sum.golang.google.cn
+ENV GOPROXY=${GO_MODULE_PROXY} \
+    GOSUMDB=${GO_MODULE_SUMDB}
 
 WORKDIR /src/backend
 

@@ -1091,6 +1091,8 @@ if [ -z "$DESKTOP_VERSION" ]; then
 fi
 
 BUILD_DATE=${ASR_BUILD_DATE:-$(date +%Y-%m-%d)}
+GO_MODULE_PROXY="${ASR_RELEASE_GOPROXY:-https://goproxy.cn|https://goproxy.io|https://mirrors.aliyun.com/goproxy/|direct}"
+GO_MODULE_SUMDB="${ASR_RELEASE_GOSUMDB:-sum.golang.google.cn}"
 
 SERVER_HOST=$(normalize_server_host "$SERVER_HOST")
 validate_port "$HTTP_PORT" "HTTP 端口"
@@ -1239,7 +1241,14 @@ if [ "$SKIP_DOCKER" -eq 0 ]; then
   fi
 
   echo "构建 Docker 镜像: $IMAGE_TAG"
-  docker build --build-arg ASR_APP_VERSION="$VERSION" --build-arg ASR_BUILD_DATE="$BUILD_DATE" -f "$DEPLOY_DIR/Dockerfile" -t "$IMAGE_TAG" "$REPO_ROOT"
+  docker build \
+    --build-arg ASR_APP_VERSION="$VERSION" \
+    --build-arg ASR_BUILD_DATE="$BUILD_DATE" \
+    --build-arg GO_MODULE_PROXY="$GO_MODULE_PROXY" \
+    --build-arg GO_MODULE_SUMDB="$GO_MODULE_SUMDB" \
+    -f "$DEPLOY_DIR/Dockerfile" \
+    -t "$IMAGE_TAG" \
+    "$REPO_ROOT"
   docker tag "$IMAGE_TAG" jusha-asr-business:latest
 
   echo "导出离线镜像..."

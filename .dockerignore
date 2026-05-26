@@ -2,20 +2,33 @@
 .github
 .vscode
 
-# Docker image builds only need backend, frontend, scripts, docs/terms,
-# and deploy/all-in-one. Keep offline model and desktop artifacts out of
-# the build context; these can be tens of GB on packaging machines.
+# Docker image builds only need backend sources, frontend sources,
+# scripts/build-meta.ts, docs/terms, and a small whitelist from
+# deploy/all-in-one. Keep release bundles and runtime state out of the
+# build context so packaging hosts do not upload multi-GB history.
 deploy/*
-!deploy/all-in-one
-!deploy/all-in-one/**
+!deploy/all-in-one/
+deploy/all-in-one/*
+!deploy/all-in-one/Dockerfile
+!deploy/all-in-one/README.md
+!deploy/all-in-one/docker-compose.yml
+!deploy/all-in-one/docker-compose.bundle.yml
+!deploy/all-in-one/nginx.conf
+!deploy/all-in-one/supervisord.conf
+!deploy/all-in-one/scripts/
+!deploy/all-in-one/scripts/**
 desktop-electron
 dist
+runtime
 
 docs/*
 !docs/terms
 !docs/terms/**
+
 desktop
 
+backend/admin-api
+backend/runtime
 backend/uploads
 backend/configs/config.yaml
 backend/cmd/**/__debug_bin*
@@ -25,8 +38,7 @@ frontend/dist
 frontend/.vite
 frontend/.env
 frontend/.env.*
-
-deploy/all-in-one/dist
+frontend/test-results
 
 **/node_modules
 **/dist

@@ -1,10 +1,19 @@
 #!/bin/sh
 set -eu
 
+require_env() {
+  VAR_NAME="$1"
+  eval "VAR_VALUE=\${$VAR_NAME:-}"
+  if [ -z "$VAR_VALUE" ]; then
+    echo "[entrypoint] missing required environment variable: $VAR_NAME" >&2
+    exit 1
+  fi
+}
+
 export ASR_DATABASE_HOST="${ASR_DATABASE_HOST:-127.0.0.1}"
 export ASR_DATABASE_PORT="${ASR_DATABASE_PORT:-3306}"
 export ASR_DATABASE_USER="${ASR_DATABASE_USER:-root}"
-export ASR_DATABASE_PASSWORD="${ASR_DATABASE_PASSWORD:-${ASR_MYSQL_ROOT_PASSWORD}}"
+export ASR_DATABASE_PASSWORD="${ASR_DATABASE_PASSWORD:-${ASR_MYSQL_ROOT_PASSWORD:-}}"
 export ASR_DATABASE_DBNAME="${ASR_DATABASE_DBNAME:-${ASR_MYSQL_DATABASE}}"
 export ASR_DOWNLOAD_DIR="${ASR_DOWNLOAD_DIR:-/var/lib/asr/downloads}"
 export ASR_DOWNLOAD_PUBLIC_BASE_PATH="${ASR_DOWNLOAD_PUBLIC_BASE_PATH:-/downloads/files}"
@@ -22,6 +31,10 @@ export ASR_GATEWAY_ASR_API="${ASR_GATEWAY_ASR_API:-http://127.0.0.1:10011}"
 export ASR_GATEWAY_ADMIN_API="${ASR_GATEWAY_ADMIN_API:-http://127.0.0.1:10012}"
 export ASR_GATEWAY_NLP_API="${ASR_GATEWAY_NLP_API:-http://127.0.0.1:10013}"
 export ASR_SERVER_HOST="${ASR_SERVER_HOST:-0.0.0.0}"
+
+require_env ASR_MYSQL_ROOT_PASSWORD
+require_env ASR_BOOTSTRAP_ADMIN_PASSWORD
+require_env ASR_JWT_SECRET
 
 mkdir -p "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${ASR_TMP_DIR}" "${ASR_UPLOAD_DIR}" "${ASR_CATALOG_DIR}" /run/mysqld /var/log/supervisor /var/log/nginx
 chown -R mysql:mysql "${ASR_MYSQL_DATA_DIR}" /run/mysqld

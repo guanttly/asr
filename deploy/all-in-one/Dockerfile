@@ -74,9 +74,10 @@ COPY docs/terms /opt/asr/term-catalog-default
 RUN chmod +x /app/scripts/*.sh /app/bin/* \
  && mkdir -p /var/log/supervisor /var/log/nginx /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog
 
+# Runtime secrets are injected via compose/.env during install time; do not
+# bake placeholder passwords or secrets into image metadata.
 ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_MYSQL_DATABASE=asr \
-    ASR_MYSQL_ROOT_PASSWORD=change-me \
     ASR_DOWNLOAD_DIR=/var/lib/asr/downloads \
     ASR_DOWNLOAD_PUBLIC_BASE_PATH=/downloads/files \
     ASR_ENABLE_HTTPS=1 \
@@ -90,9 +91,7 @@ ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_CATALOG_DIR=/var/lib/asr/term-catalog \
     ASR_CATALOG_SEED_DIR=/opt/asr/term-catalog-default \
     ASR_BOOTSTRAP_ADMIN_USERNAME=admin \
-    ASR_BOOTSTRAP_ADMIN_PASSWORD=change-me-now \
     ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员 \
-    ASR_JWT_SECRET=replace-with-random-secret \
     ASR_SERVICES_SUMMARY_MODEL=qwen3-4b
 
 EXPOSE 80 443

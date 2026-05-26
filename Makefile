@@ -9,6 +9,7 @@
 # ============================================================
 # 语音转写系统 Monorepo Makefile
 # ============================================================
+
 # 常用命令：
 #   make build-backend                      # 编译全部后端服务到 bin/
 #   make build-frontend                     # 构建前端静态资源
@@ -19,40 +20,52 @@
 #   make dev-frontend                       # 启动前端开发服务器
 #   make lint                               # 执行前后端静态检查
 #   make docker-up                          # 启动 deploy/docker compose 环境
+#
+# Jusha ASR 发布示例：
 #   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist
 #   make release-jusha-business VERSION=0.8.6 OUTPUT_DIR=./dist DRY_RUN=1
-#   make release-jusha-models VERSION=0.8.6 OUTPUT_DIR=./dist
+#   make release-jusha-models VERSION=0.8.6 OUTPUT_DIR=./dist SPEAKER_ARGS="--allow-incomplete-native-cache"
 #   make release-all-in-one VERSION=0.3.9 OUTPUT_DIR=./dist DRY_RUN=1
 #
-# release-jusha-* 可选参数：
+# release-jusha-* 发布形态：
+#   business  产物为 jusha-asr-business-<version>.run
+#   models    产物为 jusha-asr-models-<version>.run，内部包含 jusha-asr-asr-<version>.run
+#             和 jusha-asr-speaker-<version>.run；speaker 不是顶层 mode，而是 models 内部组件包
+#   all       产物为 jusha-asr-all-<version>.run，内部包含 business + models
+#   如需单独构建 3D-Speaker 离线包，请使用 deploy/3d-speaker/scripts/build-offline-run.sh
+#
+# release-jusha-* 入口参数：
 #   VERSION             统一发布版本号
 #   OUTPUT_DIR          发布产物输出目录
-#   JUSHA_MODE          all|business|models，release-jusha-asr 使用，默认 all
-#   BUSINESS_ARGS       透传给 deploy/all-in-one/scripts/build-release.sh，例如 "--dry-run --server-host 192.168.40.221"；优先使用下面的具名参数
-#   SERVER_HOST         透传给业务服务包构建，用于客户端默认地址和 TLS 证书主机名
-#   HTTP_PORT / HTTPS_PORT 透传给业务服务包构建，用于客户端默认端口
-#   ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_DISPLAY_NAME 透传给业务服务包构建
-#   MYSQL_PASSWORD / JWT_SECRET 透传给业务服务包构建
-#   ASR_SERVICE_URL / SPEAKER_SERVICE_URL 透传给业务服务包构建
-#   DESKTOP_VERSION     业务服务包内桌面端安装包版本；不传则由发布脚本读取 desktop/package.json
-#   DESKTOP_INSTALLER   透传给业务服务包构建，直接复用现成 Tauri Win10/11 安装包
-#   DESKTOP_ELECTRON_INSTALLER 透传给业务服务包构建，直接复用现成 Win7 兼容版安装包
-#   SKIP_ELECTRON=1     透传给业务服务包构建，跳过 Win7 兼容版打包
-#   DRY_RUN=1           透传给业务服务包构建，跳过 Docker 镜像和桌面端自动构建
-#   SPEAKER_ARGS        透传给 deploy/3d-speaker/scripts/build-offline-run.sh，例如 "--allow-incomplete-native-cache"
+#   JUSHA_MODE          all|business|models，仅 release-jusha-asr 读取，默认 all
+#   BUSINESS_ARGS       额外透传给 deploy/all-in-one/scripts/build-release.sh；
+#                       优先使用下列具名参数，只有脚本暂未暴露的参数再走这里
+#   SPEAKER_ARGS        额外透传给 deploy/3d-speaker/scripts/build-offline-run.sh，例如 "--allow-incomplete-native-cache"
 #   KEEP_WORK=1         保留统一发布脚本临时目录
-#   JUSHA_ASR_PART_SIZE .run 分包大小，默认 500m；输出为 xxx.run + xxx.run.part001...
-#   JUSHA_ASR_KEEP_ARCHIVE=1 保留中间 .tar.gz，默认不保留大单文件
-#   SOURCE_DIR          Qwen3-ASR 源目录，默认仓库内 deploy/qwen3-asr
-#   CONTAINER           Qwen3-ASR 源容器名，默认 qwen3-asr-serve
-#   SOURCE_IMAGE        Qwen3-ASR 源镜像，默认 qwenllm/qwen3-asr:latest；源容器不存在时回退使用
-#   GPU_COUNT           Qwen3-ASR 默认 GPU 数量，默认 1
-#   GPU_DEVICE_IDS      Qwen3-ASR 指定 GPU ID，设置后优先于 GPU_COUNT
-#   SA_GPU_ID           3D-Speaker GPU ID，默认 0
-#   默认包/镜像/容器名：jusha-asr-business、jusha-asr-asr、jusha-asr-speaker
+#
+# release-jusha-* 常用具名参数：
+#   SERVER_HOST         业务服务包默认访问地址和 TLS 证书主机名
+#   HTTP_PORT / HTTPS_PORT
+#   ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_DISPLAY_NAME
+#   MYSQL_PASSWORD / JWT_SECRET
+#   ASR_SERVICE_URL / SPEAKER_SERVICE_URL
+#   DESKTOP_VERSION     业务服务包内桌面端安装包版本；不传则读取 desktop/package.json
+#   DESKTOP_INSTALLER   直接复用现成 Tauri Win10/11 安装包
+#   DESKTOP_ELECTRON_INSTALLER 直接复用现成 Win7 兼容版安装包
+#   SKIP_ELECTRON=1     跳过 Win7 兼容版打包
+#   DRY_RUN=1           跳过 Docker 镜像和桌面端自动构建
+#
+# release-jusha-* 常用环境变量：
+#   JUSHA_ASR_PART_SIZE       .run 分包大小，默认 500m；输出为 xxx.run + xxx.run.part001...
+#   JUSHA_ASR_KEEP_ARCHIVE=1  保留中间 .tar.gz，默认只保留 .run 和分包
+#   SOURCE_DIR / CONTAINER / SOURCE_IMAGE  Qwen3-ASR 来源
+#   GPU_COUNT / GPU_DEVICE_IDS             Qwen3-ASR GPU 配置
+#   SA_IMAGE_NAME / SA_CONTAINER_NAME      3D-Speaker 镜像名 / 容器名，默认 jusha-asr-speaker
+#   SA_GPU_ID                              3D-Speaker GPU ID，默认 0
 #   默认网络：jusha-asr；默认端口：业务 HTTP 9855 / HTTPS 9856，ASR 9851，3D-Speaker 9852
 #
-# release-all-in-one 可选参数：
+# release-all-in-one 是业务服务包旧入口，参数直接透传给 deploy/all-in-one/scripts/build-release.sh。
+# 可选参数：
 #   VERSION             发布版本号
 #   OUTPUT_DIR          发布产物输出目录
 #   SERVER_HOST         对外访问域名或 IP
@@ -98,64 +111,50 @@ append_speaker_args = $(foreach ARG,$(SPEAKER_ARGS),set -- "$$@" --speaker-arg $
 
 # --- Backend ---
 
-# 编译全部后端二进制到 bin/ 目录。
 build-backend:
 	cd backend && go build -o ../bin/gateway ./cmd/gateway
 	cd backend && go build -o ../bin/asr-api ./cmd/asr-api
 	cd backend && go build -o ../bin/admin-api ./cmd/admin-api
 	cd backend && go build -o ../bin/nlp-api ./cmd/nlp-api
 
-# 编译单个 gateway 服务。
 build-gateway:
 	cd backend && go build -o ../bin/gateway ./cmd/gateway
 
-# 编译单个 asr-api 服务。
 build-asr-api:
 	cd backend && go build -o ../bin/asr-api ./cmd/asr-api
 
-# 编译单个 admin-api 服务。
 build-admin-api:
 	cd backend && go build -o ../bin/admin-api ./cmd/admin-api
 
-# 编译单个 nlp-api 服务。
 build-nlp-api:
 	cd backend && go build -o ../bin/nlp-api ./cmd/nlp-api
 
-# 本地启动默认后端入口（gateway）。
 dev-backend: dev-gateway
 
-# 以 go run 方式本地启动 gateway。
 dev-gateway:
 	cd backend && go run ./cmd/gateway
 
-# 以 go run 方式本地启动 asr-api。
 dev-asr-api:
 	cd backend && go run ./cmd/asr-api
 
-# 以 go run 方式本地启动 admin-api。
 dev-admin-api:
 	cd backend && go run ./cmd/admin-api
 
-# 以 go run 方式本地启动 nlp-api。
 dev-nlp-api:
 	cd backend && go run ./cmd/nlp-api
 
 # --- Frontend ---
-# 启动前端开发服务器。
 dev-frontend:
 	cd frontend && pnpm dev
 
-# 构建前端静态资源。
 build-frontend:
 	cd frontend && pnpm build
 
 # --- Quality ---
-# 运行前端 ESLint 与后端 golangci-lint。
 lint:
 	cd frontend && pnpm lint
 	cd backend && golangci-lint run ./...
 
-# 运行后端 Go 单元测试。
 test-backend:
 	cd backend && go test ./...
 
@@ -171,31 +170,25 @@ test-openapi-real:
 	$(call append_flag,--keep-apps,OPENAPI_KEEP_APPS) \
 	cd backend && go run ./cmd/openapi-real-test "$$@"
 
-# 运行前端 Vitest 单元测试。
 test-frontend-unit:
 	cd frontend && pnpm test:unit
 
-# 运行前端 Playwright 业务流程测试。
 test-frontend-e2e:
 	cd frontend && pnpm test:e2e
 
-# 运行项目测试：后端单测、前端单测与前端业务流程测试。
 test: test-backend test-frontend-unit test-frontend-e2e
 
 # --- Docker ---
-# 启动 deploy 目录下的容器环境。
 docker-up:
 	cd deploy && docker compose up -d
 
-# 停止并清理 deploy 目录下的容器环境。
 docker-down:
 	cd deploy && docker compose down
 
-# 构建 deploy 目录下的镜像。
 docker-build:
 	cd deploy && docker compose build
 
-# 生成一体化发布包，参数透传给 deploy/all-in-one/scripts/build-release.sh。
+# 业务服务包旧入口。
 release-all-in-one:
 	@set --; \
 	$(call append_arg,--version,VERSION) \
@@ -252,7 +245,7 @@ release-jusha-all:
 release-jusha-business:
 	$(MAKE) release-jusha-asr JUSHA_MODE=business
 
-# 只生成模型服务组合包：ASR + 3D-Speaker。
+# 只生成模型服务组合包；顶层产物名为 models，内部包含 ASR 与 3D-Speaker 两个安装包。
 release-jusha-models:
 	$(MAKE) release-jusha-asr JUSHA_MODE=models
 

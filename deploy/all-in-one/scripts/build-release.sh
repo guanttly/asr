@@ -37,6 +37,8 @@ DESKTOP_ELECTRON_PACKAGE_OWNER=""
 OUTPUT_OWNER=""
 PART_SIZE="${ASR_RELEASE_PART_SIZE:-${JUSHA_ASR_PART_SIZE:-500m}}"
 KEEP_ARCHIVE="${ASR_RELEASE_KEEP_ARCHIVE:-${JUSHA_ASR_KEEP_ARCHIVE:-0}}"
+AUTO_INSTALL_RUST="${ASR_RELEASE_AUTO_INSTALL_RUST:-1}"
+RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -79,6 +81,93 @@ bootstrap_node_path() {
       append_path_if_dir "$SUDO_HOME/.cargo/bin"
       append_latest_nvm_bin "$SUDO_HOME"
     fi
+  fi
+}
+
+bootstrap_rust_path() {
+  append_path_if_dir "$HOME/.cargo/bin"
+  if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck disable=SC1090
+    . "$HOME/.cargo/env"
+  fi
+
+  if [ -n "${SUDO_USER:-}" ]; then
+    SUDO_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+    if [ -n "$SUDO_HOME" ] && [ "$SUDO_HOME" != "$HOME" ]; then
+      append_path_if_dir "$SUDO_HOME/.cargo/bin"
+      if [ -f "$SUDO_HOME/.cargo/env" ]; then
+        # shellcheck disable=SC1090
+        . "$SUDO_HOME/.cargo/env"
+      fi
+    fi
+  fi
+}
+
+install_rustup_noninteractive() {
+  if command -v rustup >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$AUTO_INSTALL_RUST" = "0" ]; then
+    echo "未找到 rustup，且 ASR_RELEASE_AUTO_INSTALL_RUST=0，跳过自动安装 Rust 工具链。" >&2
+    return 1
+  fi
+
+  echo "未找到 rustup，正在自动安装 Rust 工具链（profile=minimal）..." >&2
+  RUSTUP_INSTALLER=$(mktemp)
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl --proto '=https' --tlsv1.2 -sSf "$RUSTUP_INIT_URL" -o "$RUSTUP_INSTALLER"; then
+      rm -f "$RUSTUP_INSTALLER"
+      echo "下载 rustup 安装脚本失败: $RUSTUP_INIT_URL" >&2
+      return 1
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if ! wget -qO "$RUSTUP_INSTALLER" "$RUSTUP_INIT_URL"; then
+      rm -f "$RUSTUP_INSTALLER"
+      echo "下载 rustup 安装脚本失败: $RUSTUP_INIT_URL" >&2
+      return 1
+    fi
+  else
+    rm -f "$RUSTUP_INSTALLER"
+    echo "缺少 curl/wget，无法自动下载 rustup。" >&2
+    return 1
+  fi
+
+  if ! sh "$RUSTUP_INSTALLER" -y --profile minimal; then
+    rm -f "$RUSTUP_INSTALLER"
+    echo "rustup 安装失败。" >&2
+    return 1
+  fi
+  rm -f "$RUSTUP_INSTALLER"
+}
+
+ensure_desktop_rust_toolchain_ready() {
+  bootstrap_rust_path
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    install_rustup_noninteractive || return 1
+    bootstrap_rust_path
+  fi
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Rust 工具链安装后仍未找到 cargo。" >&2
+    echo "当前 PATH: $PATH" >&2
+    return 1
+  fi
+
+  if ! command -v cargo-xwin >/dev/null 2>&1; then
+    if [ "$AUTO_INSTALL_RUST" = "0" ]; then
+      echo "未找到 cargo-xwin，且 ASR_RELEASE_AUTO_INSTALL_RUST=0，跳过自动安装 cargo-xwin。" >&2
+      return 1
+    fi
+    echo "未找到 cargo-xwin，正在自动安装 cargo-xwin..." >&2
+    cargo install cargo-xwin --locked || return 1
+    bootstrap_rust_path
+  fi
+
+  if ! command -v cargo-xwin >/dev/null 2>&1; then
+    echo "cargo-xwin 安装后仍未找到。" >&2
+    echo "当前 PATH: $PATH" >&2
+    return 1
   fi
 }
 
@@ -172,6 +261,9 @@ usage() {
 环境变量:
   ASR_RELEASE_PART_SIZE=500m         .run 分包大小，默认 500m
   ASR_RELEASE_KEEP_ARCHIVE=1         保留中间 .tar.gz，默认只保留 .run 与 .run.partNNN
+  ASR_RELEASE_AUTO_INSTALL_RUST=0    禁止自动安装 Rust/cargo-xwin，默认自动尝试安装
+  RUSTUP_INIT_URL=https://sh.rustup.rs
+                                     rustup 安装脚本地址，可按网络环境替换为镜像地址
 EOF
 }
 
@@ -493,16 +585,9 @@ build_desktop_installer() {
     echo "构建桌面端安装包（Tauri Win10/11），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
     ensure_pnpm_project_ready "$DESKTOP_DIR" "桌面端（Tauri Win10/11）" "node_modules/.bin/tauri" || exit 1
 
-    if ! command -v cargo >/dev/null 2>&1; then
-      reuse_existing_desktop_installer_for_version "未找到 cargo，无法自动构建 Tauri Win10/11 安装包" && return 0
-      echo "未找到 cargo，无法自动构建 Tauri Win10/11 安装包，且没有现成的同版本桌面端安装包可复用。" >&2
-      echo "当前 PATH: $PATH" >&2
-      exit 1
-    fi
-    if ! command -v cargo-xwin >/dev/null 2>&1; then
-      reuse_existing_desktop_installer_for_version "未找到 cargo-xwin，无法自动构建 Tauri Win10/11 安装包" && return 0
-      echo "未找到 cargo-xwin，无法自动构建 Tauri Win10/11 安装包，且没有现成的同版本桌面端安装包可复用。" >&2
-      echo "当前 PATH: $PATH" >&2
+    if ! ensure_desktop_rust_toolchain_ready; then
+      reuse_existing_desktop_installer_for_version "无法自动准备 Rust/cargo-xwin 工具链，不能构建 Tauri Win10/11 安装包" && return 0
+      echo "无法自动准备 Rust/cargo-xwin 工具链，且没有现成的同版本桌面端安装包可复用。" >&2
       exit 1
     fi
 

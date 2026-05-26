@@ -38,7 +38,11 @@ OUTPUT_OWNER=""
 PART_SIZE="${ASR_RELEASE_PART_SIZE:-${JUSHA_ASR_PART_SIZE:-500m}}"
 KEEP_ARCHIVE="${ASR_RELEASE_KEEP_ARCHIVE:-${JUSHA_ASR_KEEP_ARCHIVE:-0}}"
 AUTO_INSTALL_RUST="${ASR_RELEASE_AUTO_INSTALL_RUST:-1}"
-RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-https://sh.rustup.rs}"
+USE_RUST_MIRROR="${ASR_RELEASE_USE_RUST_MIRROR:-1}"
+RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-}"
+RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-}"
+RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-}"
+CARGO_MIRROR_REGISTRY="${ASR_RELEASE_CARGO_MIRROR_REGISTRY:-sparse+https://rsproxy.cn/index/}"
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -103,6 +107,32 @@ bootstrap_rust_path() {
   fi
 }
 
+configure_rust_mirror_env() {
+  if [ "$USE_RUST_MIRROR" = "0" ]; then
+    if [ -z "$RUSTUP_INIT_URL" ]; then
+      RUSTUP_INIT_URL="https://sh.rustup.rs"
+    fi
+    export RUSTUP_INIT_URL
+    return 0
+  fi
+
+  if [ -z "$RUSTUP_INIT_URL" ]; then
+    RUSTUP_INIT_URL="https://rsproxy.cn/rustup-init.sh"
+  fi
+  if [ -z "$RUSTUP_DIST_SERVER" ]; then
+    RUSTUP_DIST_SERVER="https://rsproxy.cn"
+  fi
+  if [ -z "$RUSTUP_UPDATE_ROOT" ]; then
+    RUSTUP_UPDATE_ROOT="https://rsproxy.cn/rustup"
+  fi
+
+  export RUSTUP_INIT_URL
+  export RUSTUP_DIST_SERVER
+  export RUSTUP_UPDATE_ROOT
+  export CARGO_SOURCE_CRATES_IO_REPLACE_WITH="${CARGO_SOURCE_CRATES_IO_REPLACE_WITH:-asr-mirror}"
+  export CARGO_SOURCE_ASR_MIRROR_REGISTRY="${CARGO_SOURCE_ASR_MIRROR_REGISTRY:-$CARGO_MIRROR_REGISTRY}"
+}
+
 install_rustup_noninteractive() {
   if command -v rustup >/dev/null 2>&1; then
     return 0
@@ -142,6 +172,7 @@ install_rustup_noninteractive() {
 
 ensure_desktop_rust_toolchain_ready() {
   bootstrap_rust_path
+  configure_rust_mirror_env
 
   if ! command -v cargo >/dev/null 2>&1; then
     install_rustup_noninteractive || return 1
@@ -160,7 +191,11 @@ ensure_desktop_rust_toolchain_ready() {
       return 1
     fi
     echo "未找到 cargo-xwin，正在自动安装 cargo-xwin..." >&2
-    cargo install cargo-xwin --locked || return 1
+    if [ "$USE_RUST_MIRROR" = "0" ]; then
+      cargo install cargo-xwin --locked || return 1
+    else
+      cargo install cargo-xwin --locked --index "$CARGO_MIRROR_REGISTRY" || return 1
+    fi
     bootstrap_rust_path
   fi
 
@@ -218,6 +253,7 @@ ensure_pnpm_project_ready() {
 }
 
 bootstrap_node_path
+configure_rust_mirror_env
 
 usage() {
   cat <<EOF
@@ -262,8 +298,13 @@ usage() {
   ASR_RELEASE_PART_SIZE=500m         .run 分包大小，默认 500m
   ASR_RELEASE_KEEP_ARCHIVE=1         保留中间 .tar.gz，默认只保留 .run 与 .run.partNNN
   ASR_RELEASE_AUTO_INSTALL_RUST=0    禁止自动安装 Rust/cargo-xwin，默认自动尝试安装
-  RUSTUP_INIT_URL=https://sh.rustup.rs
-                                     rustup 安装脚本地址，可按网络环境替换为镜像地址
+  ASR_RELEASE_USE_RUST_MIRROR=0      禁止自动配置 Rust/Cargo 国内镜像，默认启用 rsproxy
+  ASR_RELEASE_CARGO_MIRROR_REGISTRY=sparse+https://rsproxy.cn/index/
+                                     cargo install/build 使用的 crates.io 镜像 sparse index
+  RUSTUP_INIT_URL=https://rsproxy.cn/rustup-init.sh
+  RUSTUP_DIST_SERVER=https://rsproxy.cn
+  RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+                                     rustup 安装和工具链下载地址，可按网络环境替换
 EOF
 }
 

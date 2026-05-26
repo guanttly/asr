@@ -13,6 +13,7 @@ CURRENT_USER=$(id -un)
 CURRENT_GROUP=$(id -gn)
 
 VERSION=""
+DESKTOP_VERSION=""
 OUTPUT_ROOT="$DEPLOY_DIR/dist"
 SKIP_DOCKER=0
 SERVER_HOST="localhost"
@@ -158,6 +159,8 @@ usage() {
                                      统一的人声服务地址，默认 http://jusha-asr-speaker:8100
   --desktop-installer <path> | desktop-installer <path>
                                      直接使用现成桌面端（Tauri Win10/11）安装包，不自动构建
+  --desktop-version <version> | desktop-version <version>
+                                     桌面端安装包版本，默认与发布版本号一致
   --desktop-electron-installer <path> | desktop-electron-installer <path>
                                      直接使用现成 Win7 兼容版（Electron）安装包，不自动构建
   --skip-electron | skip-electron   跳过 Win7 兼容版 Electron 安装包的构建与打包
@@ -246,8 +249,9 @@ build_tls_alt_names() {
 }
 
 find_desktop_installer_for_version() {
-  if [ -n "$VERSION" ] && ls "$DESKTOP_INSTALLER_DIR"/*"$VERSION"*setup.exe >/dev/null 2>&1; then
-    ls -t "$DESKTOP_INSTALLER_DIR"/*"$VERSION"*setup.exe | head -n 1
+  TARGET_VERSION="${1:-$VERSION}"
+  if [ -n "$TARGET_VERSION" ] && ls "$DESKTOP_INSTALLER_DIR"/*"$TARGET_VERSION"*setup.exe >/dev/null 2>&1; then
+    ls -t "$DESKTOP_INSTALLER_DIR"/*"$TARGET_VERSION"*setup.exe | head -n 1
     return 0
   fi
   return 1
@@ -262,12 +266,13 @@ find_latest_desktop_installer() {
 }
 
 find_desktop_installer() {
-  find_desktop_installer_for_version || find_latest_desktop_installer
+  find_desktop_installer_for_version "$DESKTOP_VERSION" || find_latest_desktop_installer
 }
 
 find_desktop_electron_installer_for_version() {
-  if [ -n "$VERSION" ] && ls "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$VERSION"*win7*setup.exe >/dev/null 2>&1; then
-    ls -t "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$VERSION"*win7*setup.exe | head -n 1
+  TARGET_VERSION="${1:-$VERSION}"
+  if [ -n "$TARGET_VERSION" ] && ls "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$TARGET_VERSION"*win7*setup.exe >/dev/null 2>&1; then
+    ls -t "$DESKTOP_ELECTRON_INSTALLER_DIR"/*"$TARGET_VERSION"*win7*setup.exe | head -n 1
     return 0
   fi
   return 1
@@ -282,7 +287,7 @@ find_latest_desktop_electron_installer() {
 }
 
 find_desktop_electron_installer() {
-  find_desktop_electron_installer_for_version || find_latest_desktop_electron_installer
+  find_desktop_electron_installer_for_version "$DESKTOP_VERSION" || find_latest_desktop_electron_installer
 }
 
 maybe_restore_owner() {
@@ -475,7 +480,7 @@ build_desktop_installer() {
   if run_pnpm --version >/dev/null 2>&1; then
     echo "构建桌面端安装包（Tauri Win10/11），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
     ensure_pnpm_project_ready "$DESKTOP_DIR" "桌面端（Tauri Win10/11）" "node_modules/.bin/tauri" || exit 1
-    prepare_desktop_version_files "$VERSION"
+    prepare_desktop_version_files "$DESKTOP_VERSION"
     if ! (
       cd "$DESKTOP_DIR"
       ASR_DESKTOP_IGNORE_CERT_ERRORS=1 \
@@ -489,16 +494,16 @@ build_desktop_installer() {
       exit 1
     fi
     restore_desktop_version_files
-    find_desktop_installer_for_version || {
-      echo "桌面端构建完成，但未找到当前版本 $VERSION 的 NSIS 安装包输出" >&2
+    find_desktop_installer_for_version "$DESKTOP_VERSION" || {
+      echo "桌面端构建完成，但未找到当前桌面端版本 $DESKTOP_VERSION 的 NSIS 安装包输出" >&2
       exit 1
     }
     return 0
   fi
 
-  if find_desktop_installer_for_version >/dev/null 2>&1; then
-    echo "警告: 未找到 pnpm，回退为使用已存在的同版本桌面端安装包: $VERSION" >&2
-    find_desktop_installer_for_version
+  if find_desktop_installer_for_version "$DESKTOP_VERSION" >/dev/null 2>&1; then
+    echo "警告: 未找到 pnpm，回退为使用已存在的同版本桌面端安装包: $DESKTOP_VERSION" >&2
+    find_desktop_installer_for_version "$DESKTOP_VERSION"
     return 0
   fi
 
@@ -537,7 +542,7 @@ build_desktop_electron_installer() {
   if run_pnpm --version >/dev/null 2>&1; then
     echo "构建 Win7 兼容版安装包（Electron 22），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
     ensure_pnpm_project_ready "$DESKTOP_ELECTRON_DIR" "Win7 兼容版（Electron 22）" "node_modules/.bin/vite" || return 1
-    prepare_desktop_electron_version_file "$VERSION" || return 1
+    prepare_desktop_electron_version_file "$DESKTOP_VERSION" || return 1
     if ! (
       cd "$DESKTOP_ELECTRON_DIR"
       ASR_BUILD_DATE="$BUILD_DATE" \
@@ -550,16 +555,16 @@ build_desktop_electron_installer() {
       return 1
     fi
     restore_desktop_electron_version_file
-    find_desktop_electron_installer_for_version || {
-      echo "Win7 兼容版构建完成，但未找到 $VERSION 的安装包输出" >&2
+    find_desktop_electron_installer_for_version "$DESKTOP_VERSION" || {
+      echo "Win7 兼容版构建完成，但未找到当前桌面端版本 $DESKTOP_VERSION 的安装包输出" >&2
       return 1
     }
     return 0
   fi
 
-  if find_desktop_electron_installer_for_version >/dev/null 2>&1; then
-    echo "警告: 未找到 pnpm，回退为使用已存在的同版本 Win7 兼容版安装包: $VERSION" >&2
-    find_desktop_electron_installer_for_version
+  if find_desktop_electron_installer_for_version "$DESKTOP_VERSION" >/dev/null 2>&1; then
+    echo "警告: 未找到 pnpm，回退为使用已存在的同版本 Win7 兼容版安装包: $DESKTOP_VERSION" >&2
+    find_desktop_electron_installer_for_version "$DESKTOP_VERSION"
     return 0
   fi
 
@@ -837,6 +842,10 @@ while [ "$#" -gt 0 ]; do
       DESKTOP_INSTALLER_OVERRIDE="$2"
       shift 2
       ;;
+    --desktop-version|desktop-version)
+      DESKTOP_VERSION="$2"
+      shift 2
+      ;;
     --desktop-electron-installer|desktop-electron-installer)
       DESKTOP_ELECTRON_INSTALLER_OVERRIDE="$2"
       shift 2
@@ -866,6 +875,9 @@ if [ -z "$VERSION" ]; then
   else
     VERSION=$(date +%Y%m%d%H%M%S)
   fi
+fi
+if [ -z "$DESKTOP_VERSION" ]; then
+  DESKTOP_VERSION="$VERSION"
 fi
 
 BUILD_DATE=${ASR_BUILD_DATE:-$(date +%Y-%m-%d)}

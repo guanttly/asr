@@ -14,7 +14,7 @@
 #   make lint                               # 执行前后端静态检查
 #   make docker-up                          # 启动 deploy/docker compose 环境
 #   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist
-#   make release-jusha-business VERSION=0.8.6 OUTPUT_DIR=./dist BUSINESS_ARGS="--dry-run"
+#   make release-jusha-business VERSION=0.8.6 OUTPUT_DIR=./dist DRY_RUN=1
 #   make release-jusha-models VERSION=0.8.6 OUTPUT_DIR=./dist
 #   make release-all-in-one VERSION=0.3.9 OUTPUT_DIR=./dist DRY_RUN=1
 #
@@ -23,6 +23,11 @@
 #   OUTPUT_DIR          发布产物输出目录
 #   JUSHA_MODE          all|business|models，release-jusha-asr 使用，默认 all
 #   BUSINESS_ARGS       透传给 deploy/all-in-one/scripts/build-release.sh，例如 "--dry-run --server-host 192.168.40.221"
+#   DESKTOP_VERSION     业务服务包内桌面端安装包版本，默认读取 desktop/package.json
+#   DESKTOP_INSTALLER   透传给业务服务包构建，直接复用现成 Tauri Win10/11 安装包
+#   DESKTOP_ELECTRON_INSTALLER 透传给业务服务包构建，直接复用现成 Win7 兼容版安装包
+#   SKIP_ELECTRON=1     透传给业务服务包构建，跳过 Win7 兼容版打包
+#   DRY_RUN=1           透传给业务服务包构建，跳过 Docker 镜像和桌面端自动构建
 #   SPEAKER_ARGS        透传给 deploy/3d-speaker/scripts/build-offline-run.sh，例如 "--allow-incomplete-native-cache"
 #   KEEP_WORK=1         保留统一发布脚本临时目录
 #   JUSHA_ASR_PART_SIZE .run 分包大小，默认 500m；输出为 xxx.run + xxx.run.part001...
@@ -49,12 +54,19 @@
 #   JWT_SECRET          JWT 签名密钥
 #   ASR_SERVICE_URL     外部 ASR 服务地址
 #   SPEAKER_SERVICE_URL 说话人服务地址
+#   DESKTOP_VERSION            桌面端安装包版本，默认与发布版本号一致
 #   DESKTOP_INSTALLER          桌面端（Tauri Win10/11）安装包路径
 #   DESKTOP_ELECTRON_INSTALLER Win7 兼容版（Electron 22）安装包路径
 #   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
 #   DRY_RUN=1                  仅演练命令，不真正产出发布包
 #   示例：make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.8.6
 #         make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
+
+JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)
+JUSHA_DESKTOP_VERSION = $(or $(DESKTOP_VERSION),$(shell node -p "require('./desktop/package.json').version" 2>/dev/null))
+JUSHA_BUSINESS_ARG_FLAGS = $(if $(filter models,$(JUSHA_MODE_VALUE)),,$(foreach ARG,$(BUSINESS_ARGS),--business-arg $(ARG)) $(if $(JUSHA_DESKTOP_VERSION),--business-arg --desktop-version --business-arg $(JUSHA_DESKTOP_VERSION),) $(if $(DESKTOP_INSTALLER),--business-arg --desktop-installer --business-arg $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--business-arg --desktop-electron-installer --business-arg $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--business-arg --skip-electron,) $(if $(DRY_RUN),--business-arg --dry-run,))
+JUSHA_SPEAKER_ARG_FLAGS = $(foreach ARG,$(SPEAKER_ARGS),--speaker-arg $(ARG))
+
 # --- Backend ---
 .PHONY: build-gateway build-asr-api build-admin-api build-nlp-api
 
@@ -146,11 +158,17 @@ docker-build:
 
 # 生成一体化发布包，参数透传给 deploy/all-in-one/scripts/build-release.sh。
 release-all-in-one:
-	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
+	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_VERSION),--desktop-version $(DESKTOP_VERSION),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
 
 # 统一 Jusha ASR 发布入口，支持 all / business / models 三种发布形态。
 release-jusha-asr:
-	bash deploy/jusha-asr/build-release.sh --mode $(or $(JUSHA_MODE),all) $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(foreach ARG,$(BUSINESS_ARGS),--business-arg $(ARG)) $(foreach ARG,$(SPEAKER_ARGS),--speaker-arg $(ARG)) $(if $(KEEP_WORK),--keep-work,)
+	bash deploy/jusha-asr/build-release.sh \
+		--mode $(JUSHA_MODE_VALUE) \
+		$(if $(VERSION),--version $(VERSION),) \
+		$(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) \
+		$(JUSHA_BUSINESS_ARG_FLAGS) \
+		$(JUSHA_SPEAKER_ARG_FLAGS) \
+		$(if $(KEEP_WORK),--keep-work,)
 
 # 生成大包：业务服务 + ASR + 3D-Speaker。
 release-jusha-all:

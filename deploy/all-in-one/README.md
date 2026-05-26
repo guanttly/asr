@@ -56,7 +56,7 @@
 - install.sh 会等待容器健康检查通过；如果升级后服务未通过健康检查，脚本会尝试回滚到上一版镜像。
 - install.sh 完成后会输出当前证书的 SAN、推荐访问地址，以及 Windows Chrome/Edge 与 Firefox 的自签证书导入提示。
 - 首次安装时，admin-api 会按 `.env` 中的 `ASR_BOOTSTRAP_ADMIN_USERNAME`、`ASR_BOOTSTRAP_ADMIN_PASSWORD`、`ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME` 自动创建管理员账号；如果同名管理员已存在，则不会覆盖旧密码。
-- 打包时如果传入 `--server-host` 和端口参数，桌面客户端会以内置 HTTPS 默认地址重新构建，并自动放到 `runtime/downloads`。
+- 打包时如果传入 `--server-host` 和端口参数，桌面客户端会以内置 HTTPS 默认地址重新构建，并自动放到 `runtime/downloads`。如果发布包版本和桌面端版本不同，可传 `--desktop-version <version>` 指定要构建或查找的桌面端安装包版本。
 - Win10/11 推荐版由 `desktop/`（Tauri）打包，Win7 兼容版由 `desktop-electron/`（Electron 22）打包；发布脚本会同时启动两者并按文件名中的 `_win10_` / `_win7_` 标识让公共下载页分组展示。
 - 如果仅需发 Win10/11 主推荐版，可传 `--skip-electron` 跳过 Win7 包构建；如果手边已有提前打好的安装包，可用 `--desktop-installer <path>` 和 `--desktop-electron-installer <path>` 直接复用。
 - Tauri 在 Windows 上使用系统 WebView2（Win10 1803+ 后预装）；Win7 用户请下载 Win7 兼容版。

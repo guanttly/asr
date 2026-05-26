@@ -12,10 +12,10 @@
     "build:helper": "node scripts/build-helper.mjs",
     "build:renderer": "vite build",
     "build:main": "node scripts/build-main.mjs",
-    "build": "pnpm build:renderer && pnpm build:main",
-    "build:win": "node ../desktop/scripts/sync-version.mjs && pnpm build && node scripts/build-win.mjs",
-    "build:win:docker": "node ../desktop/scripts/sync-version.mjs && pnpm build && ASR_ELECTRON_WIN_BUILD_MODE=docker node scripts/build-win.mjs",
-    "build:win:host": "node ../desktop/scripts/sync-version.mjs && pnpm build && ASR_ELECTRON_WIN_BUILD_MODE=host node scripts/build-win.mjs"
+    "build": "npm run build:renderer && npm run build:main",
+    "build:win": "node ../desktop/scripts/sync-version.mjs && npm run build && node scripts/build-win.mjs",
+    "build:win:docker": "node ../desktop/scripts/sync-version.mjs && npm run build && ASR_ELECTRON_WIN_BUILD_MODE=docker node scripts/build-win.mjs",
+    "build:win:host": "node ../desktop/scripts/sync-version.mjs && npm run build && ASR_ELECTRON_WIN_BUILD_MODE=host node scripts/build-win.mjs"
   },
   "dependencies": {},
   "devDependencies": {

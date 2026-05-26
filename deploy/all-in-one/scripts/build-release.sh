@@ -68,6 +68,7 @@ append_latest_nvm_bin() {
 bootstrap_node_path() {
   append_path_if_dir "$HOME/.local/share/pnpm"
   append_path_if_dir "$HOME/.local/bin"
+  append_path_if_dir "$HOME/.cargo/bin"
   append_latest_nvm_bin "$HOME"
 
   if [ -n "${SUDO_USER:-}" ]; then
@@ -75,6 +76,7 @@ bootstrap_node_path() {
     if [ -n "$SUDO_HOME" ] && [ "$SUDO_HOME" != "$HOME" ]; then
       append_path_if_dir "$SUDO_HOME/.local/share/pnpm"
       append_path_if_dir "$SUDO_HOME/.local/bin"
+      append_path_if_dir "$SUDO_HOME/.cargo/bin"
       append_latest_nvm_bin "$SUDO_HOME"
     fi
   fi
@@ -160,7 +162,7 @@ usage() {
   --desktop-installer <path> | desktop-installer <path>
                                      直接使用现成桌面端（Tauri Win10/11）安装包，不自动构建
   --desktop-version <version> | desktop-version <version>
-                                     桌面端安装包版本，默认与发布版本号一致
+                                     桌面端安装包版本，默认读取 desktop/package.json，无法读取时使用发布版本号
   --desktop-electron-installer <path> | desktop-electron-installer <path>
                                      直接使用现成 Win7 兼容版（Electron）安装包，不自动构建
   --skip-electron | skip-electron   跳过 Win7 兼容版 Electron 安装包的构建与打包
@@ -267,6 +269,16 @@ find_latest_desktop_installer() {
 
 find_desktop_installer() {
   find_desktop_installer_for_version "$DESKTOP_VERSION" || find_latest_desktop_installer
+}
+
+reuse_existing_desktop_installer_for_version() {
+  REASON="$1"
+  if find_desktop_installer_for_version "$DESKTOP_VERSION" >/dev/null 2>&1; then
+    echo "警告: $REASON，回退为使用已存在的同版本桌面端安装包: $DESKTOP_VERSION" >&2
+    find_desktop_installer_for_version "$DESKTOP_VERSION"
+    return 0
+  fi
+  return 1
 }
 
 find_desktop_electron_installer_for_version() {
@@ -480,6 +492,20 @@ build_desktop_installer() {
   if run_pnpm --version >/dev/null 2>&1; then
     echo "构建桌面端安装包（Tauri Win10/11），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
     ensure_pnpm_project_ready "$DESKTOP_DIR" "桌面端（Tauri Win10/11）" "node_modules/.bin/tauri" || exit 1
+
+    if ! command -v cargo >/dev/null 2>&1; then
+      reuse_existing_desktop_installer_for_version "未找到 cargo，无法自动构建 Tauri Win10/11 安装包" && return 0
+      echo "未找到 cargo，无法自动构建 Tauri Win10/11 安装包，且没有现成的同版本桌面端安装包可复用。" >&2
+      echo "当前 PATH: $PATH" >&2
+      exit 1
+    fi
+    if ! command -v cargo-xwin >/dev/null 2>&1; then
+      reuse_existing_desktop_installer_for_version "未找到 cargo-xwin，无法自动构建 Tauri Win10/11 安装包" && return 0
+      echo "未找到 cargo-xwin，无法自动构建 Tauri Win10/11 安装包，且没有现成的同版本桌面端安装包可复用。" >&2
+      echo "当前 PATH: $PATH" >&2
+      exit 1
+    fi
+
     prepare_desktop_version_files "$DESKTOP_VERSION"
     if ! (
       cd "$DESKTOP_DIR"
@@ -501,11 +527,7 @@ build_desktop_installer() {
     return 0
   fi
 
-  if find_desktop_installer_for_version "$DESKTOP_VERSION" >/dev/null 2>&1; then
-    echo "警告: 未找到 pnpm，回退为使用已存在的同版本桌面端安装包: $DESKTOP_VERSION" >&2
-    find_desktop_installer_for_version "$DESKTOP_VERSION"
-    return 0
-  fi
+  reuse_existing_desktop_installer_for_version "未找到 pnpm/corepack" && return 0
 
   echo "未找到 pnpm/corepack，且没有现成的同版本桌面端安装包可复用，已拒绝继续打包以避免混入旧客户端。" >&2
   echo "当前 PATH: $PATH" >&2
@@ -877,7 +899,11 @@ if [ -z "$VERSION" ]; then
   fi
 fi
 if [ -z "$DESKTOP_VERSION" ]; then
-  DESKTOP_VERSION="$VERSION"
+  if command -v node >/dev/null 2>&1; then
+    DESKTOP_VERSION=$(node -p "require('$REPO_ROOT/desktop/package.json').version")
+  else
+    DESKTOP_VERSION="$VERSION"
+  fi
 fi
 
 BUILD_DATE=${ASR_BUILD_DATE:-$(date +%Y-%m-%d)}

@@ -1,4 +1,10 @@
-.PHONY: all build-backend build-frontend dev-backend dev-frontend lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e clean release-all-in-one release-jusha-asr release-jusha-all release-jusha-business release-jusha-models generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
+.PHONY: all clean
+.PHONY: build-backend build-gateway build-asr-api build-admin-api build-nlp-api build-frontend
+.PHONY: dev-backend dev-gateway dev-asr-api dev-admin-api dev-nlp-api dev-frontend
+.PHONY: lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e
+.PHONY: docker-up docker-down docker-build
+.PHONY: release-all-in-one release-jusha-asr release-jusha-all release-jusha-business release-jusha-models
+.PHONY: generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
 # 语音转写系统 Monorepo Makefile
@@ -22,8 +28,13 @@
 #   VERSION             统一发布版本号
 #   OUTPUT_DIR          发布产物输出目录
 #   JUSHA_MODE          all|business|models，release-jusha-asr 使用，默认 all
-#   BUSINESS_ARGS       透传给 deploy/all-in-one/scripts/build-release.sh，例如 "--dry-run --server-host 192.168.40.221"
-#   DESKTOP_VERSION     业务服务包内桌面端安装包版本，默认读取 desktop/package.json
+#   BUSINESS_ARGS       透传给 deploy/all-in-one/scripts/build-release.sh，例如 "--dry-run --server-host 192.168.40.221"；优先使用下面的具名参数
+#   SERVER_HOST         透传给业务服务包构建，用于客户端默认地址和 TLS 证书主机名
+#   HTTP_PORT / HTTPS_PORT 透传给业务服务包构建，用于客户端默认端口
+#   ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_DISPLAY_NAME 透传给业务服务包构建
+#   MYSQL_PASSWORD / JWT_SECRET 透传给业务服务包构建
+#   ASR_SERVICE_URL / SPEAKER_SERVICE_URL 透传给业务服务包构建
+#   DESKTOP_VERSION     业务服务包内桌面端安装包版本；不传则由发布脚本读取 desktop/package.json
 #   DESKTOP_INSTALLER   透传给业务服务包构建，直接复用现成 Tauri Win10/11 安装包
 #   DESKTOP_ELECTRON_INSTALLER 透传给业务服务包构建，直接复用现成 Win7 兼容版安装包
 #   SKIP_ELECTRON=1     透传给业务服务包构建，跳过 Win7 兼容版打包
@@ -54,7 +65,7 @@
 #   JWT_SECRET          JWT 签名密钥
 #   ASR_SERVICE_URL     外部 ASR 服务地址
 #   SPEAKER_SERVICE_URL 说话人服务地址
-#   DESKTOP_VERSION            桌面端安装包版本，默认与发布版本号一致
+#   DESKTOP_VERSION            桌面端安装包版本；不传则由发布脚本读取 desktop/package.json
 #   DESKTOP_INSTALLER          桌面端（Tauri Win10/11）安装包路径
 #   DESKTOP_ELECTRON_INSTALLER Win7 兼容版（Electron 22）安装包路径
 #   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
@@ -63,12 +74,29 @@
 #         make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)
-JUSHA_DESKTOP_VERSION = $(or $(DESKTOP_VERSION),$(shell node -p "require('./desktop/package.json').version" 2>/dev/null))
-JUSHA_BUSINESS_ARG_FLAGS = $(if $(filter models,$(JUSHA_MODE_VALUE)),,$(foreach ARG,$(BUSINESS_ARGS),--business-arg $(ARG)) $(if $(JUSHA_DESKTOP_VERSION),--business-arg --desktop-version --business-arg $(JUSHA_DESKTOP_VERSION),) $(if $(DESKTOP_INSTALLER),--business-arg --desktop-installer --business-arg $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--business-arg --desktop-electron-installer --business-arg $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--business-arg --skip-electron,) $(if $(DRY_RUN),--business-arg --dry-run,))
-JUSHA_SPEAKER_ARG_FLAGS = $(foreach ARG,$(SPEAKER_ARGS),--speaker-arg $(ARG))
+
+sh_quote = '$(subst ','\'',$(1))'
+
+define append_arg
+if [ -n $(call sh_quote,$($(2))) ]; then set -- "$$@" $(1) $(call sh_quote,$($(2))); fi;
+endef
+
+define append_flag
+if [ -n $(call sh_quote,$($(2))) ]; then set -- "$$@" $(1); fi;
+endef
+
+define append_business_arg
+if [ -n $(call sh_quote,$($(2))) ]; then set -- "$$@" --business-arg $(1) --business-arg $(call sh_quote,$($(2))); fi;
+endef
+
+define append_business_flag
+if [ -n $(call sh_quote,$($(2))) ]; then set -- "$$@" --business-arg $(1); fi;
+endef
+
+append_business_args = $(foreach ARG,$(BUSINESS_ARGS),set -- "$$@" --business-arg $(call sh_quote,$(ARG));)
+append_speaker_args = $(foreach ARG,$(SPEAKER_ARGS),set -- "$$@" --speaker-arg $(call sh_quote,$(ARG));)
 
 # --- Backend ---
-.PHONY: build-gateway build-asr-api build-admin-api build-nlp-api
 
 # 编译全部后端二进制到 bin/ 目录。
 build-backend:
@@ -92,6 +120,9 @@ build-admin-api:
 # 编译单个 nlp-api 服务。
 build-nlp-api:
 	cd backend && go build -o ../bin/nlp-api ./cmd/nlp-api
+
+# 本地启动默认后端入口（gateway）。
+dev-backend: dev-gateway
 
 # 以 go run 方式本地启动 gateway。
 dev-gateway:
@@ -130,7 +161,15 @@ test-backend:
 
 # 针对运行中的网关执行 OpenAPI 真实可用性测试。
 test-openapi-real:
-	cd backend && go run ./cmd/openapi-real-test $(if $(OPENAPI_BASE_URL),--base-url $(OPENAPI_BASE_URL),) $(if $(OPENAPI_ADMIN_USERNAME),--admin-username $(OPENAPI_ADMIN_USERNAME),) $(if $(OPENAPI_ADMIN_PASSWORD),--admin-password $(OPENAPI_ADMIN_PASSWORD),) $(if $(OPENAPI_AUDIO_FILE),--audio-file $(OPENAPI_AUDIO_FILE),) $(if $(OPENAPI_SKIP_ASR_AUDIO),--skip-asr-audio,) $(if $(OPENAPI_FULL_STREAM),--full-stream,) $(if $(OPENAPI_KEEP_APPS),--keep-apps,)
+	@set --; \
+	$(call append_arg,--base-url,OPENAPI_BASE_URL) \
+	$(call append_arg,--admin-username,OPENAPI_ADMIN_USERNAME) \
+	$(call append_arg,--admin-password,OPENAPI_ADMIN_PASSWORD) \
+	$(call append_arg,--audio-file,OPENAPI_AUDIO_FILE) \
+	$(call append_flag,--skip-asr-audio,OPENAPI_SKIP_ASR_AUDIO) \
+	$(call append_flag,--full-stream,OPENAPI_FULL_STREAM) \
+	$(call append_flag,--keep-apps,OPENAPI_KEEP_APPS) \
+	cd backend && go run ./cmd/openapi-real-test "$$@"
 
 # 运行前端 Vitest 单元测试。
 test-frontend-unit:
@@ -158,17 +197,52 @@ docker-build:
 
 # 生成一体化发布包，参数透传给 deploy/all-in-one/scripts/build-release.sh。
 release-all-in-one:
-	sh deploy/all-in-one/scripts/build-release.sh $(if $(VERSION),--version $(VERSION),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(SERVER_HOST),--server-host $(SERVER_HOST),) $(if $(HTTP_PORT),--http-port $(HTTP_PORT),) $(if $(HTTPS_PORT),--https-port $(HTTPS_PORT),) $(if $(ADMIN_USERNAME),--admin-username $(ADMIN_USERNAME),) $(if $(ADMIN_PASSWORD),--admin-password $(ADMIN_PASSWORD),) $(if $(ADMIN_DISPLAY_NAME),--admin-display-name $(ADMIN_DISPLAY_NAME),) $(if $(MYSQL_PASSWORD),--mysql-password $(MYSQL_PASSWORD),) $(if $(JWT_SECRET),--jwt-secret $(JWT_SECRET),) $(if $(ASR_SERVICE_URL),--asr-service-url $(ASR_SERVICE_URL),) $(if $(SPEAKER_SERVICE_URL),--speaker-service-url $(SPEAKER_SERVICE_URL),) $(if $(DESKTOP_VERSION),--desktop-version $(DESKTOP_VERSION),) $(if $(DESKTOP_INSTALLER),--desktop-installer $(DESKTOP_INSTALLER),) $(if $(DESKTOP_ELECTRON_INSTALLER),--desktop-electron-installer $(DESKTOP_ELECTRON_INSTALLER),) $(if $(SKIP_ELECTRON),--skip-electron,) $(if $(DRY_RUN),--dry-run,)
+	@set --; \
+	$(call append_arg,--version,VERSION) \
+	$(call append_arg,--output-dir,OUTPUT_DIR) \
+	$(call append_arg,--server-host,SERVER_HOST) \
+	$(call append_arg,--http-port,HTTP_PORT) \
+	$(call append_arg,--https-port,HTTPS_PORT) \
+	$(call append_arg,--admin-username,ADMIN_USERNAME) \
+	$(call append_arg,--admin-password,ADMIN_PASSWORD) \
+	$(call append_arg,--admin-display-name,ADMIN_DISPLAY_NAME) \
+	$(call append_arg,--mysql-password,MYSQL_PASSWORD) \
+	$(call append_arg,--jwt-secret,JWT_SECRET) \
+	$(call append_arg,--asr-service-url,ASR_SERVICE_URL) \
+	$(call append_arg,--speaker-service-url,SPEAKER_SERVICE_URL) \
+	$(call append_arg,--desktop-version,DESKTOP_VERSION) \
+	$(call append_arg,--desktop-installer,DESKTOP_INSTALLER) \
+	$(call append_arg,--desktop-electron-installer,DESKTOP_ELECTRON_INSTALLER) \
+	$(call append_flag,--skip-electron,SKIP_ELECTRON) \
+	$(call append_flag,--dry-run,DRY_RUN) \
+	sh deploy/all-in-one/scripts/build-release.sh "$$@"
 
 # 统一 Jusha ASR 发布入口，支持 all / business / models 三种发布形态。
 release-jusha-asr:
-	bash deploy/jusha-asr/build-release.sh \
-		--mode $(JUSHA_MODE_VALUE) \
-		$(if $(VERSION),--version $(VERSION),) \
-		$(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) \
-		$(JUSHA_BUSINESS_ARG_FLAGS) \
-		$(JUSHA_SPEAKER_ARG_FLAGS) \
-		$(if $(KEEP_WORK),--keep-work,)
+	@set -- --mode $(call sh_quote,$(JUSHA_MODE_VALUE)); \
+	$(call append_arg,--version,VERSION) \
+	$(call append_arg,--output-dir,OUTPUT_DIR) \
+	if [ $(call sh_quote,$(JUSHA_MODE_VALUE)) != 'models' ]; then \
+		$(append_business_args) \
+		$(call append_business_arg,--server-host,SERVER_HOST) \
+		$(call append_business_arg,--http-port,HTTP_PORT) \
+		$(call append_business_arg,--https-port,HTTPS_PORT) \
+		$(call append_business_arg,--admin-username,ADMIN_USERNAME) \
+		$(call append_business_arg,--admin-password,ADMIN_PASSWORD) \
+		$(call append_business_arg,--admin-display-name,ADMIN_DISPLAY_NAME) \
+		$(call append_business_arg,--mysql-password,MYSQL_PASSWORD) \
+		$(call append_business_arg,--jwt-secret,JWT_SECRET) \
+		$(call append_business_arg,--asr-service-url,ASR_SERVICE_URL) \
+		$(call append_business_arg,--speaker-service-url,SPEAKER_SERVICE_URL) \
+		$(call append_business_arg,--desktop-version,DESKTOP_VERSION) \
+		$(call append_business_arg,--desktop-installer,DESKTOP_INSTALLER) \
+		$(call append_business_arg,--desktop-electron-installer,DESKTOP_ELECTRON_INSTALLER) \
+		$(call append_business_flag,--skip-electron,SKIP_ELECTRON) \
+		$(call append_business_flag,--dry-run,DRY_RUN) \
+	fi; \
+	$(append_speaker_args) \
+	$(call append_flag,--keep-work,KEEP_WORK) \
+	bash deploy/jusha-asr/build-release.sh "$$@"
 
 # 生成大包：业务服务 + ASR + 3D-Speaker。
 release-jusha-all:

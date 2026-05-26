@@ -43,6 +43,7 @@ RUSTUP_INIT_URL="${RUSTUP_INIT_URL:-}"
 RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-}"
 RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-}"
 CARGO_MIRROR_REGISTRY="${ASR_RELEASE_CARGO_MIRROR_REGISTRY:-sparse+https://rsproxy.cn/index/}"
+DESKTOP_RUST_TARGET="${ASR_RELEASE_DESKTOP_RUST_TARGET:-x86_64-pc-windows-msvc}"
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -170,6 +171,34 @@ install_rustup_noninteractive() {
   rm -f "$RUSTUP_INSTALLER"
 }
 
+ensure_rustup_available() {
+  if command -v rustup >/dev/null 2>&1; then
+    return 0
+  fi
+  install_rustup_noninteractive || return 1
+  bootstrap_rust_path
+  command -v rustup >/dev/null 2>&1
+}
+
+ensure_desktop_rust_target_installed() {
+  ensure_rustup_available || {
+    echo "未找到 rustup，无法检查或安装 Rust 目标平台: $DESKTOP_RUST_TARGET" >&2
+    return 1
+  }
+
+  if rustup target list --installed | grep -Fxq "$DESKTOP_RUST_TARGET"; then
+    return 0
+  fi
+
+  if [ "$AUTO_INSTALL_RUST" = "0" ]; then
+    echo "未安装 Rust 目标平台 $DESKTOP_RUST_TARGET，且 ASR_RELEASE_AUTO_INSTALL_RUST=0，跳过自动安装。" >&2
+    return 1
+  fi
+
+  echo "未安装 Rust 目标平台 $DESKTOP_RUST_TARGET，正在自动安装..." >&2
+  rustup target add "$DESKTOP_RUST_TARGET" || return 1
+}
+
 ensure_desktop_rust_toolchain_ready() {
   bootstrap_rust_path
   configure_rust_mirror_env
@@ -184,6 +213,8 @@ ensure_desktop_rust_toolchain_ready() {
     echo "当前 PATH: $PATH" >&2
     return 1
   fi
+
+  ensure_desktop_rust_target_installed || return 1
 
   if ! command -v cargo-xwin >/dev/null 2>&1; then
     if [ "$AUTO_INSTALL_RUST" = "0" ]; then
@@ -301,6 +332,8 @@ usage() {
   ASR_RELEASE_USE_RUST_MIRROR=0      禁止自动配置 Rust/Cargo 国内镜像，默认启用 rsproxy
   ASR_RELEASE_CARGO_MIRROR_REGISTRY=sparse+https://rsproxy.cn/index/
                                      cargo install/build 使用的 crates.io 镜像 sparse index
+  ASR_RELEASE_DESKTOP_RUST_TARGET=x86_64-pc-windows-msvc
+                                     Tauri Win10/11 桌面端 Rust 目标平台
   RUSTUP_INIT_URL=https://rsproxy.cn/rustup-init.sh
   RUSTUP_DIST_SERVER=https://rsproxy.cn
   RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup

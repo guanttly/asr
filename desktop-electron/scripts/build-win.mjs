@@ -20,6 +20,8 @@ const dockerWinePrefixDir = '/tmp/electron-wine-prefix'
 const xvfbServerArgs = '-screen 0 1024x768x24 -nolisten tcp -ac'
 const winebootTimeoutSeconds = readTimeoutSeconds('ASR_ELECTRON_WIN_WINEBOOT_TIMEOUT', 180)
 const builderTimeoutSeconds = readTimeoutSeconds('ASR_ELECTRON_WIN_BUILDER_TIMEOUT', 3600)
+const electronMirror = process.env.ELECTRON_MIRROR ?? 'https://npmmirror.com/mirrors/electron/'
+const electronBuilderBinariesMirror = process.env.ELECTRON_BUILDER_BINARIES_MIRROR ?? 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 const builderShellCommand = `./node_modules/.bin/electron-builder ${builderArgs.map(arg => JSON.stringify(arg)).join(' ')}`
 const buildMode = normalizeBuildMode(process.env.ASR_ELECTRON_WIN_BUILD_MODE)
 
@@ -215,11 +217,15 @@ function buildWithDocker() {
     shellSegments.push('mkdir -p /tmp/runtime-builder', 'chmod 700 /tmp/runtime-builder', 'export XDG_RUNTIME_DIR=/tmp/runtime-builder')
   }
 
-  shellSegments.push(
-    useVirtualDisplay
-      ? `xvfb-run -a -s ${shellQuote(xvfbServerArgs)} /bin/bash -lc ${shellQuote(wineBuildCommandWithCleanup)}`
-      : wineBuildCommandWithCleanup,
-  )
+  const virtualDisplayCommand = [
+    `Xvfb :99 ${xvfbServerArgs} >/tmp/xvfb.log 2>&1 & xvfb_pid=$!`,
+    `trap ${shellQuote('kill "$xvfb_pid" >/dev/null 2>&1 || true')} EXIT`,
+    'sleep 1',
+    'if ! kill -0 "$xvfb_pid" 2>/dev/null; then cat /tmp/xvfb.log >&2 || true; exit 1; fi',
+    `DISPLAY=:99 /bin/bash -lc ${shellQuote(wineBuildCommandWithCleanup)}`,
+  ].join('; ')
+
+  shellSegments.push(useVirtualDisplay ? virtualDisplayCommand : wineBuildCommandWithCleanup)
 
   const dockerCommand = [
     'run',
@@ -231,6 +237,10 @@ function buildWithDocker() {
     '--env', 'HOME=/tmp/electron-home',
   ]
 
+  appendDockerEnv(dockerCommand, {
+    ELECTRON_MIRROR: electronMirror,
+    ELECTRON_BUILDER_BINARIES_MIRROR: electronBuilderBinariesMirror,
+  })
   appendDockerEnv(dockerCommand, createWineEnv(dockerWinePrefixDir))
 
   dockerCommand.push(

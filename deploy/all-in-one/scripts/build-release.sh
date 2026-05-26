@@ -13,7 +13,9 @@ CURRENT_USER=$(id -un)
 CURRENT_GROUP=$(id -gn)
 
 VERSION=""
+VERSION_EXPLICIT=0
 DESKTOP_VERSION=""
+DESKTOP_VERSION_EXPLICIT=0
 OUTPUT_ROOT="$DEPLOY_DIR/dist"
 SKIP_DOCKER=0
 SERVER_HOST="localhost"
@@ -44,6 +46,7 @@ RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-}"
 RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-}"
 CARGO_MIRROR_REGISTRY="${ASR_RELEASE_CARGO_MIRROR_REGISTRY:-sparse+https://rsproxy.cn/index/}"
 DESKTOP_RUST_TARGET="${ASR_RELEASE_DESKTOP_RUST_TARGET:-x86_64-pc-windows-msvc}"
+DESKTOP_ELECTRON_BUILD_MODE="${ASR_RELEASE_ELECTRON_WIN_BUILD_MODE:-${ASR_ELECTRON_WIN_BUILD_MODE:-}}"
 
 append_path_if_dir() {
   DIR_PATH="$1"
@@ -132,6 +135,20 @@ configure_rust_mirror_env() {
   export RUSTUP_UPDATE_ROOT
   export CARGO_SOURCE_CRATES_IO_REPLACE_WITH="${CARGO_SOURCE_CRATES_IO_REPLACE_WITH:-asr-mirror}"
   export CARGO_SOURCE_ASR_MIRROR_REGISTRY="${CARGO_SOURCE_ASR_MIRROR_REGISTRY:-$CARGO_MIRROR_REGISTRY}"
+}
+
+default_desktop_electron_build_mode() {
+  if [ -n "$DESKTOP_ELECTRON_BUILD_MODE" ]; then
+    printf '%s' "$DESKTOP_ELECTRON_BUILD_MODE"
+    return 0
+  fi
+
+  if [ "$(uname -s 2>/dev/null || true)" = "Linux" ]; then
+    printf 'docker'
+    return 0
+  fi
+
+  printf 'auto'
 }
 
 install_rustup_noninteractive() {
@@ -334,6 +351,8 @@ usage() {
                                      cargo install/build 使用的 crates.io 镜像 sparse index
   ASR_RELEASE_DESKTOP_RUST_TARGET=x86_64-pc-windows-msvc
                                      Tauri Win10/11 桌面端 Rust 目标平台
+  ASR_RELEASE_ELECTRON_WIN_BUILD_MODE=docker|auto|host
+                                     Win7 兼容版 Electron 构建模式；Linux 默认 docker+xvfb，无需桌面 UI
   RUSTUP_INIT_URL=https://rsproxy.cn/rustup-init.sh
   RUSTUP_DIST_SERVER=https://rsproxy.cn
   RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
@@ -724,9 +743,11 @@ build_desktop_electron_installer() {
     echo "构建 Win7 兼容版安装包（Electron 22），默认服务地址: $DEFAULT_CLIENT_URL；回退地址: $FALLBACK_CLIENT_URL" >&2
     ensure_pnpm_project_ready "$DESKTOP_ELECTRON_DIR" "Win7 兼容版（Electron 22）" "node_modules/.bin/vite" || return 1
     prepare_desktop_electron_version_file "$DESKTOP_VERSION" || return 1
+    ELECTRON_BUILD_MODE=$(default_desktop_electron_build_mode)
     if ! (
       cd "$DESKTOP_ELECTRON_DIR"
       ASR_BUILD_DATE="$BUILD_DATE" \
+      ASR_ELECTRON_WIN_BUILD_MODE="$ELECTRON_BUILD_MODE" \
       VITE_DEFAULT_SERVER_URL="$DEFAULT_CLIENT_URL" \
       VITE_FALLBACK_SERVER_URL="$FALLBACK_CLIENT_URL" \
       run_pnpm build:win
@@ -964,6 +985,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --version|version)
       VERSION="$2"
+      VERSION_EXPLICIT=1
       shift 2
       ;;
     --output-dir|output-dir)
@@ -1025,6 +1047,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --desktop-version|desktop-version)
       DESKTOP_VERSION="$2"
+      DESKTOP_VERSION_EXPLICIT=1
       shift 2
       ;;
     --desktop-electron-installer|desktop-electron-installer)
@@ -1058,7 +1081,9 @@ if [ -z "$VERSION" ]; then
   fi
 fi
 if [ -z "$DESKTOP_VERSION" ]; then
-  if command -v node >/dev/null 2>&1; then
+  if [ "$VERSION_EXPLICIT" -eq 1 ] && [ "$DESKTOP_VERSION_EXPLICIT" -eq 0 ]; then
+    DESKTOP_VERSION="$VERSION"
+  elif command -v node >/dev/null 2>&1; then
     DESKTOP_VERSION=$(node -p "require('$REPO_ROOT/desktop/package.json').version")
   else
     DESKTOP_VERSION="$VERSION"

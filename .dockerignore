@@ -2,6 +2,15 @@
 .github
 .vscode
 
+# Docker image builds only need backend, frontend, scripts, docs/terms,
+# and deploy/all-in-one. Keep offline model and desktop artifacts out of
+# the build context; these can be tens of GB on packaging machines.
+deploy/*
+!deploy/all-in-one
+!deploy/all-in-one/**
+desktop-electron
+dist
+
 docs/*
 !docs/terms
 !docs/terms/**

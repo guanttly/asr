@@ -182,6 +182,7 @@ make release-all-in-one \
 - 当前发布脚本不再单独暴露 `DIARIZATION_SERVICE_URL` 和 `SPEAKER_ANALYSIS_SERVICE_URL` 参数；发布包会把后端内部这两个地址统一写成同一个 `SPEAKER_SERVICE_URL`
 - 发布包版本和桌面端版本默认分开：发布包使用 `VERSION`，桌面端安装包版本默认读取 `desktop/package.json`；也可传 `DESKTOP_VERSION=0.9.1` 显式指定
 - 自动构建 Tauri 桌面端时，如果缺少 Rust、Windows MSVC target 或 cargo-xwin，发布脚本会默认尝试自动安装，并默认使用 rsproxy Rust/Cargo 国内镜像；如需禁用自动安装可设置 `ASR_RELEASE_AUTO_INSTALL_RUST=0`，如需禁用镜像可设置 `ASR_RELEASE_USE_RUST_MIRROR=0`
+- 自动构建 Win7 兼容版时，Linux 服务器默认使用 Docker Wine + xvfb，无需桌面 UI；如需改用宿主机 Wine，可设置 `ASR_RELEASE_ELECTRON_WIN_BUILD_MODE=host`
 - 如果你已经提前构建好了桌面安装包，也可以传 `DESKTOP_INSTALLER=/path/to/setup.exe` 直接复用主推荐版（Tauri Win10/11）；如果同时提前构建好了 Win7 兼容版，可传 `DESKTOP_ELECTRON_INSTALLER=/path/to/win7-setup.exe`；仅需主版本时可传 `SKIP_ELECTRON=1` 跳过 Win7 包构建
 
 生成物在：

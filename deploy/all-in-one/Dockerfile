@@ -1,5 +1,7 @@
 FROM golang:1.25.4-bookworm AS backend-builder
 
+ENV GOPROXY=https://goproxy.cn,direct
+
 WORKDIR /src/backend
 
 COPY backend/go.mod backend/go.sum* ./
@@ -20,6 +22,7 @@ ARG ASR_APP_VERSION
 ARG ASR_BUILD_DATE
 ENV ASR_APP_VERSION=${ASR_APP_VERSION}
 ENV ASR_BUILD_DATE=${ASR_BUILD_DATE}
+ENV NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 
 WORKDIR /src/frontend
 
@@ -34,7 +37,11 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+RUN sed -i \
+      -e 's#http://archive.ubuntu.com/ubuntu/#https://mirrors.aliyun.com/ubuntu/#g' \
+      -e 's#http://security.ubuntu.com/ubuntu/#https://mirrors.aliyun.com/ubuntu/#g' \
+      /etc/apt/sources.list.d/ubuntu.sources \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

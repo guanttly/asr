@@ -24,6 +24,7 @@ const (
 	maxUsernameLength    = 64
 	maxPasswordLength    = 128
 	maxDisplayNameLength = 128
+	deviceUsernamePrefix = "device_"
 )
 
 type ValidationError struct {
@@ -457,7 +458,13 @@ func canAccessWorkflow(user *domain.User, workflow *wfdomain.Workflow) bool {
 }
 
 func buildDeviceUsername(machineCode string) string {
-	return "device_" + machineCode
+	username := deviceUsernamePrefix + machineCode
+	if runeCount(username) <= maxUsernameLength {
+		return username
+	}
+
+	sum := sha256.Sum256([]byte(machineCode))
+	return deviceUsernamePrefix + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func defaultDisplayName(displayName, hostname, machineCode string) string {

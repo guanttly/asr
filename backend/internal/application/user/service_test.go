@@ -195,6 +195,40 @@ func TestAuthenticateAnonymouslyReusesDeviceIdentityByMAC(t *testing.T) {
 	}
 }
 
+func TestAuthenticateAnonymouslyKeepsLongMachineCodeOutOfUsername(t *testing.T) {
+	userRepo := &userRepoStub{}
+	service := NewService(userRepo, &workflowRepoStub{})
+	machineCode := strings.Repeat("A", 128)
+	normalizedMachineCode := strings.ToLower(machineCode)
+
+	result, err := service.AuthenticateAnonymously(context.Background(), &AnonymousLoginRequest{
+		MachineCode: machineCode,
+		Hostname:    "DESKTOP-LONG",
+		Platform:    "windows-amd64",
+	})
+	if err != nil {
+		t.Fatalf("AuthenticateAnonymously returned error: %v", err)
+	}
+	if result == nil || userRepo.created == nil {
+		t.Fatalf("expected anonymous user to be created, got result=%#v created=%#v", result, userRepo.created)
+	}
+	if got := runeCount(userRepo.created.Username); got > maxUsernameLength {
+		t.Fatalf("expected generated username to fit %d chars, got %d: %q", maxUsernameLength, got, userRepo.created.Username)
+	}
+	if userRepo.created.Username == deviceUsernamePrefix+normalizedMachineCode {
+		t.Fatalf("expected long machine code to be hashed in username, got %q", userRepo.created.Username)
+	}
+	if !strings.HasPrefix(userRepo.created.Username, deviceUsernamePrefix) {
+		t.Fatalf("expected generated username to keep device prefix, got %q", userRepo.created.Username)
+	}
+	if userRepo.upserted == nil {
+		t.Fatal("expected device identity to be upserted")
+	}
+	if userRepo.upserted.MachineCode != normalizedMachineCode {
+		t.Fatalf("expected full normalized machine code to be preserved, got %q", userRepo.upserted.MachineCode)
+	}
+}
+
 func TestUpdateWorkflowBindingsPersistsValidatedBindings(t *testing.T) {
 	userRepo := &userRepoStub{
 		user: &userdomain.User{ID: 7, Role: userdomain.RoleUser},

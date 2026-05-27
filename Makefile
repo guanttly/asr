@@ -3,7 +3,7 @@
 .PHONY: dev-backend dev-gateway dev-asr-api dev-admin-api dev-nlp-api dev-frontend
 .PHONY: lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e
 .PHONY: docker-up docker-down docker-build
-.PHONY: release-all-in-one release-jusha-asr release-jusha-all release-jusha-business release-jusha-models
+.PHONY: release-jusha-asr release-jusha-all release-jusha-business release-jusha-models
 .PHONY: generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
@@ -25,7 +25,7 @@
 #   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist
 #   make release-jusha-business VERSION=0.8.6 OUTPUT_DIR=./dist DRY_RUN=1
 #   make release-jusha-models VERSION=0.8.6 OUTPUT_DIR=./dist SPEAKER_ARGS="--allow-incomplete-native-cache"
-#   make release-all-in-one VERSION=0.3.9 OUTPUT_DIR=./dist DRY_RUN=1
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=./dist JUSHA_ASR_PART_SIZE=2g
 #
 # release-jusha-* 发布形态：
 #   business  产物为 jusha-asr-business-<version>.run
@@ -38,7 +38,7 @@
 #   VERSION             统一发布版本号
 #   OUTPUT_DIR          发布产物输出目录
 #   JUSHA_MODE          all|business|models，仅 release-jusha-asr 读取，默认 all
-#   BUSINESS_ARGS       额外透传给 deploy/all-in-one/scripts/build-release.sh；
+#   BUSINESS_ARGS       额外透传给业务服务打包脚本；
 #                       优先使用下列具名参数，只有脚本暂未暴露的参数再走这里
 #   SPEAKER_ARGS        额外透传给 deploy/3d-speaker/scripts/build-offline-run.sh，例如 "--allow-incomplete-native-cache"
 #   KEEP_WORK=1         保留统一发布脚本临时目录
@@ -56,7 +56,8 @@
 #   DRY_RUN=1           跳过 Docker 镜像和桌面端自动构建
 #
 # release-jusha-* 常用环境变量：
-#   JUSHA_ASR_PART_SIZE       .run 分包大小，默认 500m；输出为 xxx.run + xxx.run.part001...
+#   JUSHA_ASR_PART_SIZE       传给 split -b 的分包大小；支持纯字节数或 k/m/g 后缀，
+#                             例如 524288000、500m、2g；默认 500m
 #   JUSHA_ASR_KEEP_ARCHIVE=1  保留中间 .tar.gz，默认只保留 .run 和分包
 #   SOURCE_DIR / CONTAINER / SOURCE_IMAGE  Qwen3-ASR 来源
 #   GPU_COUNT / GPU_DEVICE_IDS             Qwen3-ASR GPU 配置
@@ -64,28 +65,11 @@
 #   SA_GPU_ID                              3D-Speaker GPU ID，默认 0
 #   默认网络：jusha-asr；默认端口：业务 HTTP 9855 / HTTPS 9856，ASR 9851，3D-Speaker 9852
 #
-# release-all-in-one 是业务服务包旧入口，参数直接透传给 deploy/all-in-one/scripts/build-release.sh。
-# 可选参数：
-#   VERSION             发布版本号
-#   OUTPUT_DIR          发布产物输出目录
-#   SERVER_HOST         对外访问域名或 IP
-#   HTTP_PORT           HTTP 监听端口
-#   HTTPS_PORT          HTTPS 监听端口
-#   ADMIN_USERNAME      初始化管理员用户名
-#   ADMIN_PASSWORD      初始化管理员密码
-#   ADMIN_DISPLAY_NAME  初始化管理员显示名
-#   MYSQL_PASSWORD      MySQL 密码
-#   JWT_SECRET          JWT 签名密钥
-#   ASR_SERVICE_URL     外部 ASR 服务地址
-#   SPEAKER_SERVICE_URL 说话人服务地址
-#   DESKTOP_VERSION            桌面端安装包版本；不传则由发布脚本读取 desktop/package.json
-#   DESKTOP_INSTALLER          桌面端（Tauri Win10/11）安装包路径
-#   DESKTOP_ELECTRON_INSTALLER Win7 兼容版（Electron 22）安装包路径
-#   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
-#   DRY_RUN=1                  仅演练命令，不真正产出发布包
-#   示例  make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.8.6
-#         make release-jusha-business HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
-#         make release-jusha-models JUSHA_ASR_PART_SIZE=2G VERSION=0.9.3 OUTPUT_DIR=../ SERVER_HOST=192.168.40.221
+# release-jusha-* 组合示例：
+#   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist SERVER_HOST=192.168.40.221
+#   make release-jusha-business VERSION=0.9.4 JUSHA_ASR_PART_SIZE=2g OUTPUT_DIR=../ SERVER_HOST=192.168.40.221 DRY_RUN=1
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../ JUSHA_ASR_PART_SIZE=2g
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../ JUSHA_ASR_PART_SIZE=524288000
 
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)
@@ -189,28 +173,6 @@ docker-down:
 
 docker-build:
 	cd deploy && docker compose build
-
-# 业务服务包旧入口。
-release-all-in-one:
-	@set --; \
-	$(call append_arg,--version,VERSION) \
-	$(call append_arg,--output-dir,OUTPUT_DIR) \
-	$(call append_arg,--server-host,SERVER_HOST) \
-	$(call append_arg,--http-port,HTTP_PORT) \
-	$(call append_arg,--https-port,HTTPS_PORT) \
-	$(call append_arg,--admin-username,ADMIN_USERNAME) \
-	$(call append_arg,--admin-password,ADMIN_PASSWORD) \
-	$(call append_arg,--admin-display-name,ADMIN_DISPLAY_NAME) \
-	$(call append_arg,--mysql-password,MYSQL_PASSWORD) \
-	$(call append_arg,--jwt-secret,JWT_SECRET) \
-	$(call append_arg,--asr-service-url,ASR_SERVICE_URL) \
-	$(call append_arg,--speaker-service-url,SPEAKER_SERVICE_URL) \
-	$(call append_arg,--desktop-version,DESKTOP_VERSION) \
-	$(call append_arg,--desktop-installer,DESKTOP_INSTALLER) \
-	$(call append_arg,--desktop-electron-installer,DESKTOP_ELECTRON_INSTALLER) \
-	$(call append_flag,--skip-electron,SKIP_ELECTRON) \
-	$(call append_flag,--dry-run,DRY_RUN) \
-	sh deploy/all-in-one/scripts/build-release.sh "$$@"
 
 # 统一 Jusha ASR 发布入口，支持 all / business / models 三种发布形态。
 release-jusha-asr:

@@ -24,7 +24,7 @@ usage() {
       all                       构建大包 jusha-asr-all-<version>.run，内含业务包和模型服务组合包
   --version <version>           统一版本号，默认当前时间戳
   --output-dir <dir>            输出目录，默认 deploy/jusha-asr/dist
-  --business-arg <arg>          透传给 deploy/all-in-one/scripts/build-release.sh，可重复
+  --business-arg <arg>          透传给业务服务打包脚本，可重复
   --speaker-arg <arg>           透传给 deploy/3d-speaker/scripts/build-offline-run.sh，可重复
   --keep-work                   保留临时工作目录，便于排查
   -h, --help                    显示帮助
@@ -36,18 +36,36 @@ usage() {
   GPU_COUNT=1 / GPU_DEVICE_IDS=0           Qwen3-ASR GPU 配置
   SA_IMAGE_NAME=jusha-asr-speaker          3D-Speaker 镜像名
   SA_GPU_ID=0                              3D-Speaker GPU ID
-  JUSHA_ASR_PART_SIZE=500m                 .run 分包大小，默认 500m
+  JUSHA_ASR_PART_SIZE=500m                 传给 split -b 的分包大小，支持 500m/2g/524288000
   JUSHA_ASR_KEEP_ARCHIVE=1                 保留中间 .tar.gz，默认只保留 .run 与 .run.partNNN
 
 示例:
   ./build-release.sh --mode all --version 1.2.0
   ./build-release.sh --mode business --version 1.2.0 --business-arg --dry-run
+  JUSHA_ASR_PART_SIZE=2g ./build-release.sh --mode models --version 1.2.0
   ./build-release.sh --mode models --version 1.2.0 --speaker-arg --allow-incomplete-native-cache
 EOF
 }
 
 info() { printf '[INFO] %s\n' "$*" >&2; }
 die() { printf '[ERR ] %s\n' "$*" >&2; exit 1; }
+
+normalize_split_size() {
+  local size="$1"
+
+  # GNU split rejects lowercase power suffixes like 2g, but our public examples use them.
+  if [[ "$size" =~ ^([0-9]+)([kmgtepzyrq])$ ]]; then
+    printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]^^}"
+    return
+  fi
+
+  if [[ "$size" =~ ^([0-9]+)([kmgtepzyrq])([bB])$ ]]; then
+    printf '%s%sB' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]^^}"
+    return
+  fi
+
+  printf '%s' "$size"
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -109,16 +127,18 @@ find_latest_run() {
 split_payload_archive() {
   local payload_archive="$1"
   local run_path="$2"
+  local split_size
 
   if ! command -v split >/dev/null 2>&1; then
     die "缺少 split 命令，无法生成分包发布文件"
   fi
 
+  split_size="$(normalize_split_size "$PART_SIZE")"
   rm -f "$run_path".part[0-9][0-9][0-9]*
   if split --help 2>/dev/null | grep -q -- '--numeric-suffixes'; then
-    split -b "$PART_SIZE" -d -a 3 --numeric-suffixes=1 "$payload_archive" "$run_path.part"
+    split -b "$split_size" -d -a 3 --numeric-suffixes=1 "$payload_archive" "$run_path.part"
   else
-    split -b "$PART_SIZE" -d -a 3 "$payload_archive" "$run_path.part"
+    split -b "$split_size" -d -a 3 "$payload_archive" "$run_path.part"
   fi
 }
 

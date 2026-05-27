@@ -49,7 +49,6 @@ export interface HotkeyActionDefinition {
   id: HotkeyActionId
   title: string
   description: string
-  optional?: boolean
 }
 
 export interface HotkeyBackendBindingPayload {
@@ -83,7 +82,7 @@ export const HOTKEY_ACTION_DEFINITIONS: HotkeyActionDefinition[] = [
   {
     id: HOTKEY_ACTIONS.TOGGLE_SETTINGS_WINDOW,
     title: '显示或隐藏设置页',
-    description: '快速打开设置页处理登录、服务地址和调试信息。',
+    description: '快速打开设置页处理登录、服务地址和客户端配置。',
   },
   {
     id: HOTKEY_ACTIONS.TOGGLE_FLOATING_WINDOW,
@@ -108,14 +107,12 @@ export const HOTKEY_ACTION_DEFINITIONS: HotkeyActionDefinition[] = [
   {
     id: HOTKEY_ACTIONS.ACTIVATE_REPORT_MODE,
     title: '报告模式并激活',
-    description: '补充场景：直接切到报告模式，不再需要先循环场景。',
-    optional: true,
+    description: '直接切到报告模式，不再需要先循环场景。',
   },
   {
     id: HOTKEY_ACTIONS.ACTIVATE_MEETING_MODE,
     title: '会议模式并激活',
-    description: '补充场景：直接切到会议模式，适合一键进入会议纪要流。',
-    optional: true,
+    description: '直接切到会议模式，适合一键进入会议纪要流。',
   },
   {
     id: HOTKEY_ACTIONS.LOCK_INPUT_TARGET,

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { useDesktopHotkeys } from '@/composables/useDesktopHotkeys'
 import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useSettings } from '@/composables/useSettings'
@@ -9,7 +8,7 @@ import { useInputBridge, type InputBridgeStateView, type InputBridgeTargetView }
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
-import { appendRuntimeLog, debugLog, getRuntimeLogPath, readRuntimeLogTail } from '@/utils/debug'
+import { debugLog } from '@/utils/debug'
 import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
 import { DEFAULT_SERVER_URL, FALLBACK_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
@@ -20,8 +19,6 @@ const voiceControl = useVoiceControl()
 const desktopHotkeys = useDesktopHotkeys()
 const inputBridge = useInputBridge()
 const machineIdentity = ref<MachineIdentity | null>(null)
-const runtimeLogPath = ref('')
-const runtimeLogTail = ref('')
 const inputBridgeState = ref<InputBridgeStateView | null>(null)
 const inputBridgeLoading = ref(false)
 const hotkeyDefinitions = HOTKEY_ACTION_DEFINITIONS
@@ -96,9 +93,9 @@ const serverHint = FALLBACK_SERVER_URL
   : `打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：${DEFAULT_SERVER_URL}`
 const hotkeySectionHint = computed(() => {
   if (supportsMouseGlobalHotkeys.value)
-    return 'Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
+    return 'Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。还提供“直达报告模式 / 直达会议模式”热键，比循环切换更快。'
 
-  return '当前 Win7 兼容版仅支持键盘全局热键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。补充场景里提供“直达报告模式 / 直达会议模式”，比循环切换更快。'
+  return '当前 Win7 兼容版仅支持键盘全局热键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。还提供“直达报告模式 / 直达会议模式”热键，比循环切换更快。'
 })
 const lockedInputTarget = computed(() => inputBridgeState.value?.lockedTarget || null)
 const candidateInputTarget = computed(() => inputBridgeState.value?.candidateTarget || null)
@@ -470,39 +467,12 @@ async function requestMicrophonePermission() {
   }
 }
 
-async function refreshRuntimeLogs() {
-  runtimeLogPath.value = await getRuntimeLogPath().catch(() => '')
-  runtimeLogTail.value = await readRuntimeLogTail(120).catch(() => '')
-}
-
-async function copyRuntimeLogs() {
-  const content = runtimeLogTail.value.trim()
-  if (!content) {
-    setAuthMessage('info', '当前还没有可复制的调试日志')
-    return
-  }
-
-  await navigator.clipboard.writeText(content)
-  setAuthMessage('success', '最近调试日志已复制到剪贴板')
-}
-
-watch(() => appStore.debugLoggingEnabled, async (enabled) => {
-  if (enabled) {
-    await appendRuntimeLog('settings.debug', 'debug logging enabled from settings')
-    await refreshRuntimeLogs()
-  }
-  else {
-    await appendRuntimeLog('settings.debug', 'debug logging disabled from settings')
-  }
-})
-
 watch(() => serializeHotkeyBindings(appStore.hotkeys), () => {
   void syncHotkeysNow('settings-watch')
 }, { immediate: true })
 
 onMounted(() => {
   void syncIdentityAndLogin(false)
-  void refreshRuntimeLogs()
   void refreshInputBridgeState(true)
   void voiceControl.ensureLoaded()
   window.addEventListener('keydown', handleHotkeyCaptureKeydown, true)
@@ -649,7 +619,6 @@ onBeforeUnmount(() => {
             <div>
               <div class="hotkey-title-row">
                 <strong class="hotkey-title">{{ definition.title }}</strong>
-                <span v-if="definition.optional" class="hotkey-badge">补充场景</span>
               </div>
               <p class="hotkey-description">{{ definition.description }}</p>
             </div>
@@ -729,25 +698,6 @@ onBeforeUnmount(() => {
         <button class="action-btn" :disabled="authLoading" @click="refreshVoiceControl">刷新语音控制配置</button>
       </div>
       <p class="section-hint">实际唤醒词、同音词归一化和命令命中结果，均以后台执行当前绑定工作流返回的结果为准。这里仅展示全局运行状态和等待时长。</p>
-    </section>
-
-    <section class="settings-section">
-      <h4 class="section-title">调试</h4>
-      <p class="section-hint">打开后会把前端关键事件、录音、上传和窗口启动信息追加到本地日志文件，便于排查 Windows 打包运行问题。</p>
-      <div class="field row">
-        <label>启用详细调试日志</label>
-        <label class="toggle">
-          <input v-model="appStore.debugLoggingEnabled" type="checkbox">
-          <span class="toggle-slider" />
-        </label>
-      </div>
-      <div class="field action-row">
-        <button class="action-btn" @click="refreshRuntimeLogs">刷新日志</button>
-        <button class="action-btn" @click="copyRuntimeLogs">复制日志</button>
-        <button class="action-btn" @click="invoke('open_devtools').catch(() => undefined)">打开控制台</button>
-      </div>
-      <p class="section-hint">日志文件：{{ runtimeLogPath || '读取中...' }}</p>
-      <textarea class="debug-log" readonly :value="runtimeLogTail" placeholder="最近日志会显示在这里" />
     </section>
 
     <!-- VAD Parameters -->
@@ -1163,15 +1113,6 @@ onBeforeUnmount(() => {
   color: #1f2937;
 }
 
-.hotkey-badge {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
-  color: #92400e;
-  background: rgba(245, 158, 11, 0.14);
-  border: 1px solid rgba(245, 158, 11, 0.2);
-}
-
 .hotkey-description {
   margin-top: 6px;
   font-size: 11px;
@@ -1340,19 +1281,6 @@ onBeforeUnmount(() => {
 
 .reset-btn:hover {
   background: rgba(0, 0, 0, 0.06);
-}
-
-.debug-log {
-  width: 100%;
-  min-height: 180px;
-  padding: 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #16202c;
-  background: rgba(15, 23, 42, 0.04);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 10px;
-  resize: vertical;
 }
 
 /* Scene mode segmented control */

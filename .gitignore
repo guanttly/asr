@@ -50,10 +50,6 @@ backend/configs/config.yaml
 # Runtime data
 backend/uploads/
 
-# jusha-asr-business release artifacts
-deploy/jusha-asr-business/dist/
-deploy/jusha-asr-business/dist-fixed/
-
 speaker-diarization-offline.tar.gz
 
 **/**/__pycache__
@@ -65,6 +61,11 @@ tests
 **/**/dist
 **/**/.pytest_cache
 **/**/wheels
+
+# jusha-asr-business release artifacts
+deploy/jusha-asr-business/dist/
+deploy/jusha-asr-business/dist-fixed/
+
 deploy/3d-speaker/models
 deploy/qwen3-asr/models
 deploy/qwen3-asr/image

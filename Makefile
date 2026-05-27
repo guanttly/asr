@@ -84,8 +84,8 @@
 #   SKIP_ELECTRON=1            跳过 Win7 兼容版打包
 #   DRY_RUN=1                  仅演练命令，不真正产出发布包
 #   示例  make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=192.168.40.221 VERSION=0.8.6
-#         make release-all-in-one HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
-#         make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../ SERVER_HOST=192.168.40.221
+#         make release-jusha-business HTTP_PORT=9855 HTTPS_PORT=9856 ADMIN_PASSWORD=jusha1996 ASR_SERVICE_URL=http://host.docker.internal:9851 SPEAKER_SERVICE_URL=http://host.docker.internal:9852 SERVER_HOST=10.10.10.150 VERSION=0.8.6
+#         make release-jusha-models JUSHA_ASR_PART_SIZE=2G VERSION=0.9.3 OUTPUT_DIR=../ SERVER_HOST=192.168.40.221
 
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)

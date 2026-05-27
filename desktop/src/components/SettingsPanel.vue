@@ -661,7 +661,7 @@ onBeforeUnmount(() => {
           <span :class="appStore.voiceControl.enabled ? 'voice-on' : 'voice-off'">{{ appStore.voiceControl.enabled ? '已启用' : '已关闭' }}</span>
         </div>
       </div>
-      <div class="field action-row">
+      <div class="field action-row voice-actions">
         <button class="action-btn" :disabled="authLoading" @click="refreshVoiceControl">刷新语音控制配置</button>
       </div>
     </section>
@@ -1253,6 +1253,20 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.voice-actions {
+  margin-top: 8px;
+}
+
+.voice-actions .action-btn {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.voice-actions .action-btn:hover:not(:disabled) {
+  background: rgba(248, 250, 252, 0.92);
+  border-color: rgba(15, 118, 110, 0.22);
 }
 
 .voice-row {

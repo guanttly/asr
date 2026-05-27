@@ -16,7 +16,6 @@ const activeTab = ref<MainTab>('history')
 const isElectronDesktop = typeof window !== 'undefined' && Boolean((window as { __electronBridge__?: unknown }).__electronBridge__)
 
 const userLabel = computed(() => appStore.displayName || appStore.username || '未连接')
-const machineSnippet = computed(() => appStore.machineCode ? appStore.machineCode.slice(0, 12) : '未生成')
 const buildLabel = `版本 ${__APP_VERSION__}-${__APP_BUILD_CODE__}`
 const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
 </script>
@@ -28,7 +27,7 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
       <div class="hero-copy">
         <p class="hero-tag">Desktop Voice Dictation</p>
         <h1>巨鲨语音助手</h1>
-        <p class="hero-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
+        <p class="hero-subtitle">{{ userLabel }}</p>
         <p class="hero-version" :title="buildTitle">{{ buildLabel }}</p>
       </div>
       <div class="hero-actions">
@@ -53,7 +52,7 @@ const buildTitle = `构建日期 ${__APP_BUILD_DATE__}`
     <div v-else class="native-toolbar">
       <div class="native-copy">
         <p class="native-title">巨鲨语音助手</p>
-        <p class="native-subtitle">{{ userLabel }} · {{ machineSnippet }}</p>
+        <p class="native-subtitle">{{ userLabel }}</p>
       </div>
       <div class="native-actions">
         <p class="hero-version" :title="buildTitle">{{ buildLabel }}</p>

@@ -7,10 +7,10 @@ import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useInputBridge, type InputBridgeStateView, type InputBridgeTargetView } from '@/composables/useInputBridge'
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
-import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile, type MachineIdentity } from '@/utils/auth'
+import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
-import { DEFAULT_SERVER_URL, FALLBACK_SERVER_URL, normalizeServerUrl } from '@/utils/server'
+import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 const appStore = useAppStore()
 const { settings, reset } = useSettings()
@@ -18,7 +18,6 @@ const recorder = useAudioRecorder()
 const voiceControl = useVoiceControl()
 const desktopHotkeys = useDesktopHotkeys()
 const inputBridge = useInputBridge()
-const machineIdentity = ref<MachineIdentity | null>(null)
 const inputBridgeState = ref<InputBridgeStateView | null>(null)
 const inputBridgeLoading = ref(false)
 const hotkeyDefinitions = HOTKEY_ACTION_DEFINITIONS
@@ -71,12 +70,6 @@ const activeRecognitionPresetKey = computed(() => {
       && Math.abs(current.singleChunkPeakMultiplier - values.singleChunkPeakMultiplier) < 0.02
   })?.key || 'custom'
 })
-const recognitionEffectSummary = computed(() => {
-  const current = settings.value
-  const speed = current.endSilenceChunks <= 3 ? '出字更快，适合短句连续口述' : current.endSilenceChunks <= 5 ? '速度和完整性比较均衡' : '更少误切，适合长句和思考停顿'
-  const noise = current.noiseGateMultiplier >= 3.5 || current.minSpeechThreshold >= 0.028 ? '抗噪更强，但轻声可能更难触发' : '更容易捕捉轻声，但嘈杂环境可能误触发'
-  return `预计说完后等待 ${formatRecognitionSeconds(endSilenceSeconds.value)} 切句，之后叠加 ASR 与工作流耗时。${speed}；${noise}。`
-})
 
 const authLoading = ref(false)
 const authMessage = ref('')
@@ -88,15 +81,6 @@ const inputBridgeMessageType = ref<'success' | 'error' | 'info'>('info')
 const capturingHotkeyAction = ref<HotkeyActionId | null>(null)
 const isElectronDesktop = typeof window !== 'undefined' && Boolean((window as { __electronBridge__?: unknown }).__electronBridge__)
 const supportsMouseGlobalHotkeys = computed(() => !isElectronDesktop)
-const serverHint = FALLBACK_SERVER_URL
-  ? `打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：${DEFAULT_SERVER_URL}；连接失败时会自动回退到 ${FALLBACK_SERVER_URL}。`
-  : `打包时可通过环境变量 VITE_DEFAULT_SERVER_URL 覆盖默认服务器地址。当前默认地址：${DEFAULT_SERVER_URL}`
-const hotkeySectionHint = computed(() => {
-  if (supportsMouseGlobalHotkeys.value)
-    return 'Windows 下全局生效，支持键盘组合和鼠标侧键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。还提供“直达报告模式 / 直达会议模式”热键，比循环切换更快。'
-
-  return '当前 Win7 兼容版仅支持键盘全局热键。点击当前热键开始录制；Esc 取消，Backspace 或 Delete 清空。还提供“直达报告模式 / 直达会议模式”热键，比循环切换更快。'
-})
 const lockedInputTarget = computed(() => inputBridgeState.value?.lockedTarget || null)
 const candidateInputTarget = computed(() => inputBridgeState.value?.candidateTarget || null)
 const inputBridgeStateLabel = computed(() => {
@@ -395,7 +379,7 @@ async function syncIdentityAndLogin(forceLogin = false) {
   try {
     await debugLog('settings.auth', 'starting identity sync', { forceLogin, serverUrl: appStore.serverUrl })
     appStore.serverUrl = normalizeServerUrl(appStore.serverUrl)
-    machineIdentity.value = await getMachineIdentity()
+    await getMachineIdentity()
     if (forceLogin || !appStore.token.trim())
       await ensureAnonymousLogin(forceLogin)
     else
@@ -490,7 +474,6 @@ onBeforeUnmount(() => {
   <div class="settings-panel">
     <section class="settings-section">
       <h4 class="section-title">连接与身份</h4>
-      <p class="section-hint">{{ serverHint }}</p>
       <div class="field">
         <label>服务器地址</label>
         <input
@@ -523,15 +506,6 @@ onBeforeUnmount(() => {
           <span class="identity-label">当前账号</span>
           <strong>{{ appStore.displayName || appStore.username || '未登录' }}</strong>
         </div>
-        <div class="identity-card">
-          <span class="identity-label">机器码</span>
-          <strong class="machine-code">{{ appStore.machineCode || '读取中...' }}</strong>
-        </div>
-      </div>
-      <div v-if="machineIdentity" class="identity-meta">
-        <span>{{ machineIdentity.hostname || '未知主机' }}</span>
-        <span>{{ machineIdentity.platform }}</span>
-        <span>{{ machineIdentity.ip_addresses.join(' / ') || '无可用 IP' }}</span>
       </div>
       <p v-if="authMessage" class="auth-message" :class="authMessageType">
         {{ authMessage }}
@@ -540,11 +514,9 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">录入行为</h4>
-      <p class="section-hint">默认推荐使用 Ctrl+Shift+Space 开始和停止录音，这样更容易保持外部应用的输入焦点，自动注入也更稳定；也可以在下方全局热键里改成更顺手的组合。</p>
       <div class="field row permission-row">
         <div>
-          <label class="status-label">麦克风权限</label>
-          <p class="permission-hint">{{ appStore.microphonePermissionGranted ? '已可直接开始录音' : '可选：预先检测并初始化麦克风权限' }}</p>
+          <label class="status-label">麦克风权限：{{ appStore.microphonePermissionGranted ? '已授权' : '未检测' }}</label>
         </div>
         <button class="action-btn primary compact" :disabled="authLoading" @click="requestMicrophonePermission">
           {{ appStore.microphonePermissionGranted ? '重新检测' : '检测麦克风' }}
@@ -568,7 +540,6 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">语音写入目标</h4>
-      <p class="section-hint">先点击 RIS 报告输入框，再按“绑定语音写入目标”热键；识别文本会优先写入该绑定目标，历史目标可自动恢复。</p>
       <div class="bridge-status" :class="inputBridgeStatusClass">
         <div class="bridge-status-head">
           <span>当前状态</span>
@@ -606,7 +577,6 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">全局热键</h4>
-      <p class="section-hint">{{ hotkeySectionHint }}</p>
       <div class="hotkey-list">
         <article
           v-for="definition in hotkeyDefinitions"
@@ -620,7 +590,6 @@ onBeforeUnmount(() => {
               <div class="hotkey-title-row">
                 <strong class="hotkey-title">{{ definition.title }}</strong>
               </div>
-              <p class="hotkey-description">{{ definition.description }}</p>
             </div>
           </div>
           <div class="hotkey-actions">
@@ -657,7 +626,6 @@ onBeforeUnmount(() => {
 
     <section class="settings-section">
       <h4 class="section-title">使用场景</h4>
-      <p class="section-hint">{{ appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING) ? '报告模式：录音结束后保存为实时转写历史；会议模式：录音结束后自动创建会议纪要任务。终端语音控制可在录音中切换两种场景。' : '报告模式会在录音结束后保存实时转写历史。' }}</p>
       <div class="scene-segmented" role="tablist">
         <button
           type="button"
@@ -683,7 +651,6 @@ onBeforeUnmount(() => {
 
     <section v-if="appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL)" class="settings-section">
       <h4 class="section-title">终端语音控制</h4>
-      <p class="section-hint">桌面端会把每段转写文本发送给当前绑定的语音控制工作流，由后台统一执行 voice_wake 与 voice_intent 节点；命中后，小球会进入“等待指令”状态（蓝色）。</p>
       <div class="voice-card">
         <div class="voice-row">
           <span class="voice-label">等待时长</span>
@@ -697,13 +664,11 @@ onBeforeUnmount(() => {
       <div class="field action-row">
         <button class="action-btn" :disabled="authLoading" @click="refreshVoiceControl">刷新语音控制配置</button>
       </div>
-      <p class="section-hint">实际唤醒词、同音词归一化和命令命中结果，均以后台执行当前绑定工作流返回的结果为准。这里仅展示全局运行状态和等待时长。</p>
     </section>
 
     <!-- VAD Parameters -->
     <section class="settings-section">
       <h4 class="section-title">语音检测参数</h4>
-      <p class="section-hint">先按场景选择预设，再微调句尾等待。当前按 200ms 小块做本地分句，配置只影响后续录音。</p>
 
       <div class="preset-grid">
         <button
@@ -718,12 +683,8 @@ onBeforeUnmount(() => {
             <span class="preset-title">{{ preset.title }}</span>
             <span class="preset-time">{{ formatRecognitionSeconds((preset.values.endSilenceChunks * RECOGNITION_CHUNK_MS) / 1000) }}</span>
           </span>
-          <span class="preset-scene">{{ preset.scene }}</span>
-          <span class="preset-effect">{{ preset.effect }}</span>
         </button>
       </div>
-
-      <div class="recognition-summary">{{ recognitionEffectSummary }}</div>
 
       <div class="field">
         <label>句尾等待时间 ({{ formatRecognitionSeconds(endSilenceSeconds) }} / {{ settings.endSilenceChunks }} 块)</label>
@@ -797,14 +758,6 @@ onBeforeUnmount(() => {
   padding: 0 4px;
 }
 
-.section-hint {
-  padding: 0 4px;
-  margin-bottom: 8px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #64748b;
-}
-
 .field {
   margin-bottom: 8px;
   padding: 0 4px;
@@ -856,28 +809,10 @@ onBeforeUnmount(() => {
   font-size: 10px;
 }
 
-.preset-scene,
-.preset-effect {
-  font-size: 10px;
-  line-height: 1.45;
-  color: #64748b;
-}
-
-.recognition-summary {
-  margin: 0 4px 10px;
-  padding: 9px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 118, 110, 0.12);
-  background: rgba(15, 118, 110, 0.06);
-  color: #0f766e;
-  font-size: 11px;
-  line-height: 1.55;
-}
-
 .identity-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   padding: 0 4px;
 }
 
@@ -893,22 +828,6 @@ onBeforeUnmount(() => {
 
 .identity-label {
   font-size: 11px;
-  color: #64748b;
-}
-
-.machine-code {
-  font-size: 11px;
-  line-height: 1.5;
-  word-break: break-all;
-}
-
-.identity-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 4px 0;
-  font-size: 11px;
-  line-height: 1.5;
   color: #64748b;
 }
 
@@ -936,12 +855,6 @@ onBeforeUnmount(() => {
 
 .status-label {
   margin-bottom: 2px;
-}
-
-.permission-hint {
-  font-size: 11px;
-  line-height: 1.4;
-  color: #64748b;
 }
 
 .field input[type="text"],
@@ -1111,13 +1024,6 @@ onBeforeUnmount(() => {
 .hotkey-title {
   font-size: 12px;
   color: #1f2937;
-}
-
-.hotkey-description {
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #64748b;
 }
 
 .hotkey-actions {

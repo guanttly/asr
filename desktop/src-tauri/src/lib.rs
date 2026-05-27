@@ -174,10 +174,27 @@ fn log_runtime(message: &str) {
     }
 }
 
+fn silent_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    configure_silent_command(&mut command);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn configure_silent_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_silent_command(_command: &mut Command) {}
+
 fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
+        silent_command("explorer")
             .arg("/select,")
             .arg(path)
             .spawn()
@@ -187,7 +204,7 @@ fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        silent_command("open")
             .arg("-R")
             .arg(path)
             .spawn()
@@ -198,7 +215,7 @@ fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let target_dir = path.parent().unwrap_or(path);
-        std::process::Command::new("xdg-open")
+        silent_command("xdg-open")
             .arg(target_dir)
             .spawn()
             .map_err(|err| format!("failed to open file manager: {err}"))?;
@@ -289,7 +306,7 @@ fn normalize_machine_seed(value: &str) -> Option<String> {
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = silent_command(program).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -315,12 +332,24 @@ fn platform_machine_uuid() -> Option<String> {
         }
     }
 
-    if let Some(output) = command_output("reg", &["query", r"HKLM\SOFTWARE\Microsoft\Cryptography", "/v", "MachineGuid"]) {
+    if let Some(output) = command_output(
+        "reg",
+        &[
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Cryptography",
+            "/v",
+            "MachineGuid",
+        ],
+    ) {
         for line in output.lines() {
             if !line.contains("MachineGuid") {
                 continue;
             }
-            if let Some(value) = line.split_whitespace().last().and_then(normalize_machine_seed) {
+            if let Some(value) = line
+                .split_whitespace()
+                .last()
+                .and_then(normalize_machine_seed)
+            {
                 return Some(value);
             }
         }
@@ -363,12 +392,22 @@ fn platform_machine_uuid() -> Option<String> {
     None
 }
 
-fn build_machine_code(hostname: &str, platform: &str, ip_list: &[String], mac_list: &[String]) -> String {
+fn build_machine_code(
+    hostname: &str,
+    platform: &str,
+    ip_list: &[String],
+    mac_list: &[String],
+) -> String {
     use sha2::{Digest, Sha256};
 
     let stable_seed = platform_machine_uuid()
         .map(|value| format!("hardware:{value}"))
-        .or_else(|| mac_list.first().and_then(|value| normalize_machine_seed(value)).map(|value| format!("mac:{value}")));
+        .or_else(|| {
+            mac_list
+                .first()
+                .and_then(|value| normalize_machine_seed(value))
+                .map(|value| format!("mac:{value}"))
+        });
     let fingerprint = match stable_seed {
         Some(stable_id) => serde_json::json!({
             "version": 2,

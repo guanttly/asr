@@ -48,6 +48,20 @@ CARGO_MIRROR_REGISTRY="${ASR_RELEASE_CARGO_MIRROR_REGISTRY:-sparse+https://rspro
 DESKTOP_RUST_TARGET="${ASR_RELEASE_DESKTOP_RUST_TARGET:-x86_64-pc-windows-msvc}"
 DESKTOP_ELECTRON_BUILD_MODE="${ASR_RELEASE_ELECTRON_WIN_BUILD_MODE:-${ASR_ELECTRON_WIN_BUILD_MODE:-}}"
 
+normalize_split_size() {
+  printf '%s' "$1" | awk '
+    /^[0-9]+[kmgtepzyrq]$/ {
+      printf "%s%s", substr($0, 1, length($0) - 1), toupper(substr($0, length($0), 1))
+      next
+    }
+    /^[0-9]+[kmgtepzyrq][bB]$/ {
+      printf "%s%sB", substr($0, 1, length($0) - 2), toupper(substr($0, length($0) - 1, 1))
+      next
+    }
+    { printf "%s", $0 }
+  '
+}
+
 append_path_if_dir() {
   DIR_PATH="$1"
   if [ ! -d "$DIR_PATH" ]; then
@@ -311,7 +325,7 @@ usage() {
   --version <version> | version <version>
                                      发布版本号，默认读取 desktop/package.json
   --output-dir <dir> | output-dir <dir>
-                                     输出目录，默认 deploy/all-in-one/dist
+                                     输出目录，默认 deploy/jusha-asr-business/dist
   --server-host <host> | server-host <host>
                                      服务器 IP 或域名，用于客户端默认地址和 TLS 证书
   --http-port <port> | http-port <port>
@@ -777,6 +791,7 @@ build_desktop_electron_installer() {
 split_payload_archive() {
   PAYLOAD_ARCHIVE="$1"
   RUN_PATH_VALUE="$2"
+  PART_SIZE_VALUE=$(normalize_split_size "$PART_SIZE")
 
   if ! command -v split >/dev/null 2>&1; then
     echo "缺少 split 命令，无法生成分包发布文件" >&2
@@ -785,9 +800,9 @@ split_payload_archive() {
 
   rm -f "$RUN_PATH_VALUE".part[0-9][0-9][0-9]*
   if split --help 2>/dev/null | grep -q -- '--numeric-suffixes'; then
-    split -b "$PART_SIZE" -d -a 3 --numeric-suffixes=1 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
+    split -b "$PART_SIZE_VALUE" -d -a 3 --numeric-suffixes=1 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
   else
-    split -b "$PART_SIZE" -d -a 3 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
+    split -b "$PART_SIZE_VALUE" -d -a 3 "$PAYLOAD_ARCHIVE" "$RUN_PATH_VALUE.part"
   fi
 }
 

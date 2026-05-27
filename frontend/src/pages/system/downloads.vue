@@ -279,7 +279,7 @@ function handlePortalEntry() {
             </div>
 
             <div class="mt-4 rounded-3 border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-7 text-sky-800">
-              如果点击下载返回 404，通常表示服务器刚部署完成但还没有生成自签名证书。此时先完成一次 all-in-one 安装，再刷新当前页面即可。
+              如果点击下载返回 404，通常表示服务器刚部署完成但还没有生成自签名证书。此时先完成一次 jusha-asr-business 安装，再刷新当前页面即可。
             </div>
           </section>
 

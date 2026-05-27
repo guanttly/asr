@@ -63,9 +63,9 @@ COPY --from=frontend-builder /src/frontend/dist /srv/asr/frontend-dist
 RUN mkdir -p /app/backend/configs
 COPY backend/configs/config.example.yaml /app/backend/configs/config.yaml
 COPY backend/configs/config.example.yaml /app/backend/configs/config.example.yaml
-COPY deploy/all-in-one/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY deploy/all-in-one/nginx.conf /etc/nginx/conf.d/default.conf
-COPY deploy/all-in-one/scripts /app/scripts
+COPY deploy/jusha-asr-business/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY deploy/jusha-asr-business/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/jusha-asr-business/scripts /app/scripts
 
 # Ship the radiology term catalog markdown into the image as a *default*
 # snapshot. entrypoint.sh seeds /var/lib/asr/term-catalog from it on first

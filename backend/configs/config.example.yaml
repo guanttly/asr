@@ -52,7 +52,7 @@ download:
 
 # 放射术语库 markdown 目录。留空则使用 admin-api 二进制内嵌的出厂副本；
 # 设置为非空路径（容器内）后 admin-api 将从该目录加载，可被运维直接增删改。
-# all-in-one 镜像默认通过环境变量 ASR_CATALOG_DIR=/var/lib/asr/term-catalog 覆盖。
+# jusha-asr-business 镜像默认通过环境变量 ASR_CATALOG_DIR=/var/lib/asr/term-catalog 覆盖。
 catalog:
   dir: ""
 

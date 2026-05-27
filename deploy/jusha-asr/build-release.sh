@@ -346,7 +346,7 @@ build_business_package() {
   local output_dir="$1"
   mkdir -p "$output_dir"
   info "构建业务服务包"
-  if ! bash "$DEPLOY_DIR/all-in-one/scripts/build-release.sh" \
+  if ! bash "$DEPLOY_DIR/jusha-asr-business/scripts/build-release.sh" \
     --version "$VERSION" \
     --output-dir "$output_dir" \
     "${BUSINESS_ARGS[@]}" >&2; then

@@ -1,4 +1,4 @@
-# All-in-One Docker 发布包
+# jusha-asr-business Docker 发布包
 
 这个目录提供单镜像发布方案，镜像内包含以下进程：
 
@@ -45,7 +45,7 @@
 
 ## 离线发布包
 
-- 执行 deploy/all-in-one/scripts/build-release.sh 会输出完整离线发布目录、tar.gz 压缩包和 `.run` 一键安装包。
+- 执行 deploy/jusha-asr-business/scripts/build-release.sh 会输出完整离线发布目录、tar.gz 压缩包和 `.run` 一键安装包。
 - 发布包内包含 docker-compose.yml、install.sh、uninstall.sh、.env、.env.example、.release-manifest、runtime 目录和离线镜像包。
 - 发布包解压后的根目录固定为 jusha-asr-business，便于新版本直接覆盖到同一路径后执行升级。
 - 目标服务器解压后执行 install.sh 或 install.sh upgrade，即可自动 load 镜像并启动或原地升级服务。

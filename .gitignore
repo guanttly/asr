@@ -50,8 +50,9 @@ backend/configs/config.yaml
 # Runtime data
 backend/uploads/
 
-# All-in-one release artifacts
-deploy/all-in-one/dist/
+# jusha-asr-business release artifacts
+deploy/jusha-asr-business/dist/
+deploy/jusha-asr-business/dist-fixed/
 
 speaker-diarization-offline.tar.gz
 

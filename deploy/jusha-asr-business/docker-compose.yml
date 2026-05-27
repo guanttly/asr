@@ -4,7 +4,7 @@ services:
   asr-suite:
     build:
       context: ../..
-      dockerfile: deploy/all-in-one/Dockerfile
+      dockerfile: deploy/jusha-asr-business/Dockerfile
     image: jusha-asr-business:latest
     container_name: jusha-asr-business
     restart: unless-stopped

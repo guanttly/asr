@@ -1,6 +1,6 @@
 # ASR 项目说明
 
-这个仓库当前已经整理出一套适合内网部署的 all-in-one Docker 发布流程。
+这个仓库当前已经整理出一套适合内网部署的 jusha-asr-business Docker 发布流程。
 
 这份 README 只放最常用、最直接的命令，目标是：
 
@@ -14,34 +14,34 @@
 - 后端源码: [backend](backend)
 - 前端源码: [frontend](frontend)
 - 桌面端源码: [desktop](desktop)
-- 一体化发布目录: [deploy/all-in-one](deploy/all-in-one)
+- 一体化发布目录: [deploy/jusha-asr-business](deploy/jusha-asr-business)
 
 ## 一句话结论
 
 打包机执行：
 
 ```bash
-make release-all-in-one VERSION=0.3.10 SERVER_HOST=192.168.40.221 HTTP_PORT=11010 ADMIN_PASSWORD='jusha1996'
+make release-jusha-business VERSION=0.3.10 SERVER_HOST=192.168.40.221 HTTP_PORT=11010 ADMIN_PASSWORD='jusha1996'
 ```
 
 服务器执行：
 
 ```bash
-bash asr-all-in-one-0.2.7.run
+bash jusha-asr-business-0.2.7.run
 ```
 
 后续升级执行：
 
 ```bash
-tar -xzf asr-all-in-one-0.2.6.tar.gz
-cd asr-all-in-one
+tar -xzf jusha-asr-business-0.2.6.tar.gz
+cd jusha-asr-business
 sh install.sh upgrade
 ```
 
 卸载执行：
 
 ```bash
-cd asr-all-in-one
+cd jusha-asr-business
 sh uninstall.sh
 ```
 
@@ -75,14 +75,14 @@ docker-compose --version
 
 ```bash
 cd /home/lgt/asr
-sh deploy/all-in-one/scripts/build-release.sh
+sh deploy/jusha-asr-business/scripts/build-release.sh
 ```
 
 或者：
 
 ```bash
 cd /home/lgt/asr
-make release-all-in-one
+make release-jusha-business
 ```
 
 默认情况下，打包版本号来自 [desktop/package.json](desktop/package.json) 里的 `version`。
@@ -98,7 +98,7 @@ make release-all-in-one
 
 ```bash
 cd /home/lgt/asr
-make release-all-in-one \
+make release-jusha-business \
 	VERSION=0.2.7 \
 	SERVER_HOST=192.168.40.223 \
 	HTTP_PORT=11010 \
@@ -109,7 +109,7 @@ make release-all-in-one \
 
 ```bash
 cd /home/lgt/asr
-make release-all-in-one \
+make release-jusha-business \
 	VERSION=0.2.7 \
 	SERVER_HOST=192.168.40.223 \
 	HTTP_PORT=11010 \
@@ -132,27 +132,27 @@ make release-all-in-one \
 
 ```bash
 cd /home/lgt/asr
-sh deploy/all-in-one/scripts/build-release.sh --version 0.2.7
+sh deploy/jusha-asr-business/scripts/build-release.sh --version 0.2.7
 ```
 
 或者直接用 Make 参数：
 
 ```bash
 cd /home/lgt/asr
-make release-all-in-one VERSION=0.2.7
+make release-jusha-business VERSION=0.2.7
 ```
 
 也支持一起传输出目录和 dry-run：
 
 ```bash
 cd /home/lgt/asr
-make release-all-in-one VERSION=0.2.7 OUTPUT_DIR=/tmp/asr-release DRY_RUN=1
+make release-jusha-business VERSION=0.2.7 OUTPUT_DIR=/tmp/asr-release DRY_RUN=1
 ```
 
 常用参数：
 
 ```bash
-make release-all-in-one \
+make release-jusha-business \
 	VERSION=0.2.7 \
 	SERVER_HOST=192.168.40.223 \
 	HTTP_PORT=11010 \
@@ -172,9 +172,9 @@ make release-all-in-one \
 - 如果你没有显式传 `HTTPS_PORT`，脚本会自动取 `HTTP_PORT + 1`
 - `ADMIN_PASSWORD` 会直接写入发布包里的 `.env`
 - 如果不传 `MYSQL_PASSWORD` 和 `JWT_SECRET`，脚本会自动生成随机值
-- `ASR_SERVICE_URL` 和 `SPEAKER_SERVICE_URL` 都是“从 all-in-one 容器内部看出去”的地址
+- `ASR_SERVICE_URL` 和 `SPEAKER_SERVICE_URL` 都是“从 jusha-asr-business 容器内部看出去”的地址
 - `WEBVIEW2_FIXED_RUNTIME` 变量已废弃：Win7 发布包现在由 `desktop-electron` 下的 Electron 22 工程生成，不再依赖 WebView2 固定版运行时
-- 如果外部服务和 all-in-one 部署在同一台宿主机上，推荐填 `http://host.docker.internal:<端口>`；服务器 shell 里 `ping host.docker.internal` 不通是正常的
+- 如果外部服务和 jusha-asr-business 部署在同一台宿主机上，推荐填 `http://host.docker.internal:<端口>`；服务器 shell 里 `ping host.docker.internal` 不通是正常的
 - 一键安装时会自动检查宿主机 IPv4 路由和已有 Docker 网络，选择未占用的 Docker 内部网段，并把 `host.docker.internal` 指向该网段网关，避免客户内网与 Docker 默认 172 段冲突
 - 这里的 `<端口>` 必须写“宿主机实际暴露出来的端口”，不是外部容器自己的内部监听端口；例如外部 ASR 如果是 `-p 11001:8000`，那这里应填 `http://host.docker.internal:11001`
 - 如果外部服务部署在另一台机器上，就填那台机器的实际内网 IP 或域名
@@ -187,9 +187,9 @@ make release-all-in-one \
 
 生成物在：
 
-- 发布目录: [deploy/all-in-one/dist/asr-all-in-one](deploy/all-in-one/dist/asr-all-in-one)
-- 压缩包: [deploy/all-in-one/dist/asr-all-in-one-0.2.6.tar.gz](deploy/all-in-one/dist/asr-all-in-one-0.2.6.tar.gz)
-- 一键安装包: [deploy/all-in-one/dist/asr-all-in-one-0.2.6.run](deploy/all-in-one/dist/asr-all-in-one-0.2.6.run)
+- 发布目录: [deploy/jusha-asr-business/dist/jusha-asr-business](deploy/jusha-asr-business/dist/jusha-asr-business)
+- 压缩包: [deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.tar.gz](deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.tar.gz)
+- 一键安装包: [deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.run](deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.run)
 
 ## 为什么现在不会再把 9G 上下文塞进 Docker build
 
@@ -199,30 +199,30 @@ make release-all-in-one \
 - [backend/uploads](backend/uploads)
 - 前端 `node_modules`
 - 前端 `dist`
-- 发布目录 `deploy/all-in-one/dist`
+- 发布目录 `deploy/jusha-asr-business/dist`
 - Go 调试二进制
 
-所以 all-in-one 镜像不会再把桌面端 8G+ 构建产物、上传音频、前端依赖一起送进 Docker build context。
+所以 jusha-asr-business 镜像不会再把桌面端 8G+ 构建产物、上传音频、前端依赖一起送进 Docker build context。
 
-另外，all-in-one 镜像不会内置 ASR 服务和模型；这些是外部依赖，通过环境变量指向你另外打的服务包。
+另外，jusha-asr-business 镜像不会内置 ASR 服务和模型；这些是外部依赖，通过环境变量指向你另外打的服务包。
 
 ## 把压缩包拷到服务器
 
 例如：
 
 ```bash
-scp deploy/all-in-one/dist/asr-all-in-one-0.2.6.tar.gz user@your-server:/data/
+scp deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.tar.gz user@your-server:/data/
 ```
 
 如果你用的是一键安装包，也可以直接传：
 
 ```bash
-scp deploy/all-in-one/dist/asr-all-in-one-0.2.6.run user@your-server:/data/
+scp deploy/jusha-asr-business/dist/jusha-asr-business-0.2.6.run user@your-server:/data/
 ```
 
 如果是 Windows 跳板、SFTP 或其他传输方式也可以，重点只有一个：
 
-把 `asr-all-in-one-0.2.6.tar.gz` 传到服务器即可。
+把 `jusha-asr-business-0.2.6.tar.gz` 传到服务器即可。
 
 ## 服务器首次安装步骤
 
@@ -230,14 +230,14 @@ scp deploy/all-in-one/dist/asr-all-in-one-0.2.6.run user@your-server:/data/
 
 ```bash
 cd /data
-tar -xzf asr-all-in-one-0.2.6.tar.gz
-cd asr-all-in-one
+tar -xzf jusha-asr-business-0.2.6.tar.gz
+cd jusha-asr-business
 ```
 
 解压后的目录固定叫：
 
 ```bash
-asr-all-in-one
+jusha-asr-business
 ```
 
 这是为了后续升级时可以直接覆盖同一路径。
@@ -246,13 +246,13 @@ asr-all-in-one
 
 ```bash
 cd /data
-bash asr-all-in-one-0.2.6.run
+bash jusha-asr-business-0.2.6.run
 ```
 
 它会自动：
 
 - 解压到当前目录
-- 进入 `asr-all-in-one`
+- 进入 `jusha-asr-business`
 - 直接执行 `install.sh`
 - 使用打包时预生成好的 `.env`
 
@@ -297,14 +297,14 @@ admin 账号初始化说明：
 ASR_SERVICES_SPEAKER_SERVICE_URL=http://你的3D-Speaker地址
 ```
 
-如果说话人分离和声纹能力都由同一套 3D-Speaker 提供，例如它和 all-in-one 跑在同一台宿主机、对外端口是 `10002`，可填写：
+如果说话人分离和声纹能力都由同一套 3D-Speaker 提供，例如它和 jusha-asr-business 跑在同一台宿主机、对外端口是 `10002`，可填写：
 
 ```bash
 ASR_SERVICES_SPEAKER_SERVICE_URL=http://host.docker.internal:10002
 ```
 
 注意：`host.docker.internal` 是给容器内部访问宿主机用的别名，不要求服务器本机 shell 能直接解析；如果你的 3D-Speaker 部署在另一台服务器，就改成那台机器的实际 IP 或域名。
-安装脚本会自动把这个别名绑定到当前 all-in-one Docker 内部网络的网关；如果客户机器已有 172、10 或 192.168 路由占用，脚本会改用其它候选网段。
+安装脚本会自动把这个别名绑定到当前 jusha-asr-business Docker 内部网络的网关；如果客户机器已有 172、10 或 192.168 路由占用，脚本会改用其它候选网段。
 
 同理，如果你的 ASR 或 3D-Speaker 本身也是 Docker 容器，并且端口映射类似：
 
@@ -313,7 +313,7 @@ ASR_SERVICES_SPEAKER_SERVICE_URL=http://host.docker.internal:10002
 11002 -> 8100
 ```
 
-那么 all-in-one 里应填写：
+那么 jusha-asr-business 里应填写：
 
 ```bash
 ASR_SERVICES_ASR=http://host.docker.internal:11001
@@ -418,8 +418,8 @@ sh install.sh
 
 ```bash
 cd /data
-tar -xzf asr-all-in-one-0.2.6.tar.gz
-cd asr-all-in-one
+tar -xzf jusha-asr-business-0.2.6.tar.gz
+cd jusha-asr-business
 sh install.sh upgrade
 ```
 
@@ -443,7 +443,7 @@ sh install.sh upgrade
 适合临时下线、准备重装但不想删数据：
 
 ```bash
-cd /data/asr/asr-all-in-one
+cd /data/asr/jusha-asr-business
 sh uninstall.sh
 ```
 
@@ -468,7 +468,7 @@ sh install.sh
 适合第一次部署失败、没有要保留的数据，或者你确定要从零开始：
 
 ```bash
-cd /data/asr/asr-all-in-one
+cd /data/asr/jusha-asr-business
 sh uninstall.sh purge
 ```
 
@@ -493,8 +493,8 @@ sh uninstall.sh purge --remove-image
 
 ```bash
 cd /data/asr
-tar -xzf asr-all-in-one-0.2.6.tar.gz
-cd asr-all-in-one
+tar -xzf jusha-asr-business-0.2.6.tar.gz
+cd jusha-asr-business
 cp .env.example .env
 vi .env
 sh install.sh
@@ -503,7 +503,7 @@ sh install.sh
 如果只是因为数据库密码初始化错了，而当前还没有正式数据，更推荐：
 
 ```bash
-cd /data/asr/asr-all-in-one
+cd /data/asr/jusha-asr-business
 vi .env
 sh uninstall.sh purge
 sh install.sh
@@ -583,7 +583,7 @@ http://192.168.40.223:11010
 
 ### 2.1 Nginx 是根据什么转发的
 
-当前 all-in-one 对外暴露的是 Nginx 的入口，不区分“网页端地址”和“客户端地址”；它是按请求路径转发：
+当前 jusha-asr-business 对外暴露的是 Nginx 的入口，不区分“网页端地址”和“客户端地址”；它是按请求路径转发：
 
 - `/` -> 前端静态页面
 - `/healthz` -> 转发到内部 `127.0.0.1:10010/healthz`
@@ -700,7 +700,7 @@ http://127.0.0.1:10010
 
 ### 6. 推荐写法
 
-如果你的 all-in-one 对外还是标准 HTTPS 入口：
+如果你的 jusha-asr-business 对外还是标准 HTTPS 入口：
 
 ```text
 https://你的服务器IP
@@ -767,7 +767,7 @@ docker-compose -f docker-compose.yml ps
 ### 看日志
 
 ```bash
-docker logs -f asr-all-in-one
+docker logs -f jusha-asr-business
 ```
 
 ### 手动重启
@@ -821,7 +821,7 @@ ls runtime/downloads
 先看容器日志：
 
 ```bash
-docker logs asr-all-in-one --tail 200
+docker logs jusha-asr-business --tail 200
 ```
 
 再确认 `.env` 里的外部 ASR 地址是否能从服务器访问。
@@ -841,7 +841,7 @@ docker logs asr-all-in-one --tail 200
 如果当前还没有正式数据，最简单的处理方式是：
 
 ```bash
-cd /data/asr/asr-all-in-one
+cd /data/asr/jusha-asr-business
 vi .env
 sh uninstall.sh purge
 sh install.sh
@@ -867,7 +867,7 @@ sh install.sh upgrade
 ## 相关文件
 
 - 根目录打包入口: [Makefile](Makefile)
-- 发布脚本: [deploy/all-in-one/scripts/build-release.sh](deploy/all-in-one/scripts/build-release.sh)
-- 安装/升级脚本: [deploy/all-in-one/scripts/install.sh](deploy/all-in-one/scripts/install.sh)
-- 卸载脚本: [deploy/all-in-one/scripts/uninstall.sh](deploy/all-in-one/scripts/uninstall.sh)
-- 发布说明: [deploy/all-in-one/README.md](deploy/all-in-one/README.md)
+- 发布脚本: [deploy/jusha-asr-business/scripts/build-release.sh](deploy/jusha-asr-business/scripts/build-release.sh)
+- 安装/升级脚本: [deploy/jusha-asr-business/scripts/install.sh](deploy/jusha-asr-business/scripts/install.sh)
+- 卸载脚本: [deploy/jusha-asr-business/scripts/uninstall.sh](deploy/jusha-asr-business/scripts/uninstall.sh)
+- 发布说明: [deploy/jusha-asr-business/README.md](deploy/jusha-asr-business/README.md)

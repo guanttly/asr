@@ -72,7 +72,8 @@ is_reverse_prohibited_path() {
     .DS_Store|Thumbs.db) return 0 ;;
     .env|.env.local|.env.*.local|frontend/.env.development|backend/configs/config.yaml) return 0 ;;
     *.log|backend/uploads|backend/uploads/*) return 0 ;;
-    deploy/all-in-one/dist|deploy/all-in-one/dist/*) return 0 ;;
+    deploy/jusha-asr-business/dist|deploy/jusha-asr-business/dist/*) return 0 ;;
+    deploy/jusha-asr-business/dist-fixed|deploy/jusha-asr-business/dist-fixed/*) return 0 ;;
     speaker-diarization-offline.tar.gz) return 0 ;;
     __pycache__|__pycache__/*|*/__pycache__|*/__pycache__/*|*.pyc|*.pyo) return 0 ;;
     dist-*|dist-*/*|.cache|.cache/*|*/.cache|*/.cache/*|tmp|tmp/*) return 0 ;;

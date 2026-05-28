@@ -10,6 +10,7 @@ import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
+import { MAX_DEVICE_ALIAS_LENGTH, MAX_SERVER_URL_LENGTH, validateDeviceAlias, validateServerAddressInput } from '@/utils/settingsValidation'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
 const appStore = useAppStore()
@@ -74,6 +75,9 @@ const activeRecognitionPresetKey = computed(() => {
 const authLoading = ref(false)
 const authMessage = ref('')
 const authMessageType = ref<'success' | 'error' | 'info'>('info')
+const serverUrlInputRef = ref<HTMLInputElement | null>(null)
+const deviceAliasInputRef = ref<HTMLInputElement | null>(null)
+const savedDeviceAlias = ref(appStore.displayName || appStore.deviceAlias)
 const hotkeyMessage = ref('')
 const hotkeyMessageType = ref<'success' | 'error' | 'info'>('info')
 const inputBridgeMessage = ref('')
@@ -144,6 +148,18 @@ async function refreshVoiceControl() {
 function setAuthMessage(type: 'success' | 'error' | 'info', message: string) {
   authMessageType.value = type
   authMessage.value = message
+}
+
+function prepareServerUrlForAction() {
+  const validation = validateServerAddressInput(appStore.serverUrl)
+  if (!validation.valid) {
+    setAuthMessage('error', validation.message)
+    serverUrlInputRef.value?.focus()
+    return false
+  }
+  appStore.serverUrl = validation.value
+  appStore.persist()
+  return true
 }
 
 function setHotkeyMessage(type: 'success' | 'error' | 'info', message: string) {
@@ -377,8 +393,9 @@ function handleHotkeyCaptureMousedown(event: MouseEvent) {
 async function syncIdentityAndLogin(forceLogin = false) {
   authLoading.value = true
   try {
+    if (!prepareServerUrlForAction())
+      return
     await debugLog('settings.auth', 'starting identity sync', { forceLogin, serverUrl: appStore.serverUrl })
-    appStore.serverUrl = normalizeServerUrl(appStore.serverUrl)
     await getMachineIdentity()
     if (forceLogin || !appStore.token.trim())
       await ensureAnonymousLogin(forceLogin)
@@ -401,6 +418,8 @@ async function syncIdentityAndLogin(forceLogin = false) {
 async function verifyServer() {
   authLoading.value = true
   try {
+    if (!prepareServerUrlForAction())
+      return
     await pingServer()
     setAuthMessage('success', `服务可达，当前地址 ${normalizeServerUrl(appStore.serverUrl)}`)
     await debugLog('settings.server', 'server health check passed', { serverUrl: appStore.serverUrl })
@@ -416,17 +435,24 @@ async function verifyServer() {
 
 async function saveAlias() {
   authLoading.value = true
+  const previousAlias = savedDeviceAlias.value || appStore.displayName || ''
   try {
-    const alias = appStore.deviceAlias.trim()
-    if (!alias) {
-      setAuthMessage('error', '请先输入设备别名')
+    const validation = validateDeviceAlias(appStore.deviceAlias)
+    if (!validation.valid) {
+      setAuthMessage('error', validation.message)
+      deviceAliasInputRef.value?.focus()
       return
     }
+    const alias = validation.value
+    appStore.deviceAlias = alias
     await updateProfile(alias)
-    setAuthMessage('success', '设备别名已保存')
+    savedDeviceAlias.value = alias
+    setAuthMessage('success', '设置已保存')
     await debugLog('settings.profile', 'device alias updated', { alias })
   }
   catch (error) {
+    if (previousAlias)
+      appStore.deviceAlias = previousAlias
     setAuthMessage('error', error instanceof Error ? error.message : '保存别名失败')
     void debugLog('settings.error', 'device alias update failed', error instanceof Error ? { message: error.message, stack: error.stack } : error)
   }
@@ -455,6 +481,11 @@ watch(() => serializeHotkeyBindings(appStore.hotkeys), () => {
   void syncHotkeysNow('settings-watch')
 }, { immediate: true })
 
+watch(() => appStore.displayName, (value) => {
+  if (value.trim())
+    savedDeviceAlias.value = value.trim()
+}, { immediate: true })
+
 onMounted(() => {
   void syncIdentityAndLogin(false)
   void refreshInputBridgeState(true)
@@ -477,9 +508,10 @@ onBeforeUnmount(() => {
       <div class="field">
         <label>服务器地址</label>
         <input
+          ref="serverUrlInputRef"
           v-model="appStore.serverUrl"
           type="text"
-          maxlength="2048"
+          :maxlength="MAX_SERVER_URL_LENGTH"
           :placeholder="DEFAULT_SERVER_URL"
           spellcheck="false"
         >
@@ -487,9 +519,10 @@ onBeforeUnmount(() => {
       <div class="field">
         <label>设备别名</label>
         <input
+          ref="deviceAliasInputRef"
           v-model="appStore.deviceAlias"
           type="text"
-          maxlength="128"
+          :maxlength="MAX_DEVICE_ALIAS_LENGTH"
           placeholder="例如：张医生诊室电脑"
           spellcheck="false"
         >

@@ -7,7 +7,7 @@ const CHUNK_MS = 200
 
 type FloatBuffer = Float32Array<ArrayBufferLike>
 
-function mapRecorderError(error: unknown): Error {
+export function mapRecorderError(error: unknown): Error {
   if (error instanceof Error) {
     switch (error.name) {
       case 'NotAllowedError':

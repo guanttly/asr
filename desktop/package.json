@@ -9,6 +9,9 @@
     "dev": "vite",
     "prebuild": "node ./scripts/sync-version.mjs",
     "build": "vue-tsc -b && vite build",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "pretauri": "node ./scripts/sync-version.mjs",
     "tauri": "tauri",
     "build:win": "node ./scripts/sync-version.mjs && tauri build --target x86_64-pc-windows-msvc --runner cargo-xwin"
@@ -34,6 +37,7 @@
     "unocss": "^66.1.0",
     "unplugin-auto-import": "^19.1.1",
     "vite": "^6.2.5",
+    "vitest": "^3.2.4",
     "vue-tsc": "^2.2.8"
   }
 }

@@ -58,6 +58,8 @@ dist-*
 
 tmp
 tests
+!frontend/tests/
+!frontend/tests/**
 **/**/dist
 **/**/.pytest_cache
 **/**/wheels

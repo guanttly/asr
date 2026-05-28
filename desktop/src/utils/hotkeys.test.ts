@@ -5,6 +5,7 @@ import {
   createDefaultHotkeyBindings,
   findConflictingHotkeyAction,
   formatHotkeyBinding,
+  formatHotkeySyncFailureMessage,
   normalizeHotkeyBinding,
   toBackendHotkeyBindings,
 } from './hotkeys'
@@ -36,5 +37,11 @@ describe('desktop hotkey utilities', () => {
     const bindings = createDefaultHotkeyBindings()
     bindings[HOTKEY_ACTIONS.TOGGLE_RECORDING] = cleared
     expect(toBackendHotkeyBindings(bindings).map(item => item.action)).not.toContain(HOTKEY_ACTIONS.TOGGLE_RECORDING)
+  })
+
+  it('tells users local config is retained when sync fails', () => {
+    const message = formatHotkeySyncFailureMessage(new Error('原生热键注册失败'))
+    expect(message).toContain('已保留本地热键配置')
+    expect(message).toContain('重新同步')
   })
 })

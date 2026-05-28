@@ -190,6 +190,7 @@ export const useAppStore = defineStore('app', () => {
   const autoInject = ref(persisted.autoInject)
   const autoHideWindowOnRecordStart = ref(persisted.autoHideWindowOnRecordStart)
   const microphonePermissionGranted = ref(persisted.microphonePermissionGranted)
+  const microphoneDetected = ref(true)
   const debugLoggingEnabled = ref(persisted.debugLoggingEnabled)
   const recognitionSettings = reactive<RecognitionSettings>({ ...persisted.recognitionSettings })
   const sceneMode = ref<SceneMode>(persisted.sceneMode)
@@ -437,6 +438,7 @@ export const useAppStore = defineStore('app', () => {
     autoInject,
     autoHideWindowOnRecordStart,
     microphonePermissionGranted,
+    microphoneDetected,
     debugLoggingEnabled,
     recognitionSettings,
     sceneMode,

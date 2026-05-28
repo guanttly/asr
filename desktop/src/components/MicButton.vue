@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { SCENE_MODES } from '@/constants/product'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
@@ -18,9 +18,11 @@ let hideWindowAfterStart = false
 const isActive = computed(() => appStore.isRecording)
 const isCommandMode = computed(() => isActive.value && appStore.voiceCommandActive)
 const isCommandProcessing = computed(() => isActive.value && appStore.voiceCommandProcessing)
+const isMicMissing = computed(() => !appStore.microphoneDetected)
 
-type VisualState = 'idle' | 'command' | 'meeting' | 'report'
+type VisualState = 'idle' | 'command' | 'meeting' | 'report' | 'mic-missing'
 const visualState = computed<VisualState>(() => {
+  if (isMicMissing.value) return 'mic-missing'
   if (!isActive.value) return 'idle'
   if (isCommandMode.value) return 'command'
   return appStore.sceneMode === SCENE_MODES.MEETING ? SCENE_MODES.MEETING : SCENE_MODES.REPORT
@@ -30,6 +32,7 @@ const sceneLabel = computed(() => appStore.sceneMode === SCENE_MODES.MEETING ? '
 const sceneIcon = computed(() => appStore.sceneMode === SCENE_MODES.MEETING ? '会' : '报')
 
 const statusLabel = computed(() => {
+  if (isMicMissing.value) return '未检测到麦克风'
   if (!isActive.value) return `点击开始 · ${sceneLabel.value}`
   if (isCommandProcessing.value) return '理解指令中...'
   if (isCommandMode.value) {
@@ -48,6 +51,10 @@ const isCompact = computed(() => !appStore.expanded)
 
 const levelPercent = computed(() => {
   return Math.min(100, Math.round(transcribe.listeningLevel.value / 0.05 * 100))
+})
+
+onMounted(() => {
+  void recorder.refreshDeviceAvailability()
 })
 
 async function toggle() {
@@ -69,7 +76,14 @@ watch(() => appStore.isRecording, async (recording) => {
   if (recording) {
     try {
       transcribe.reset()
-      await recorder.start((chunk) => transcribe.handleChunk(chunk))
+      await recorder.start((chunk) => transcribe.handleChunk(chunk), {
+        onDeviceLost: () => {
+          transcribe.lastError.value = '麦克风已断开，等待重新接入'
+        },
+        onDeviceRestored: () => {
+          transcribe.lastError.value = ''
+        },
+      })
       void debugLog('recorder.state', 'audio recorder started successfully')
       if (appStore.pendingVoiceCommandActivation) {
         const entered = voiceControl.enterCommandMode()
@@ -119,11 +133,20 @@ watch(() => appStore.isRecording, async (recording) => {
 
     <button
       class="mic-btn"
-      :class="{ recording: isActive, error: !isActive && !!transcribe.lastError.value }"
+      :class="{ recording: isActive, error: isMicMissing || (!isActive && !!transcribe.lastError.value) }"
       :title="transcribe.lastError.value || statusLabel"
       @click="toggle"
     >
-      <svg v-if="!isActive" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg v-if="isMicMissing" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v4" />
+        <path d="M15 9.34V4a3 3 0 0 0-4.95-2.28" />
+        <path d="M19 10v2a7 7 0 0 1-1.2 3.92" />
+        <path d="M5 10v2a7 7 0 0 0 9.05 6.7" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8" y1="23" x2="16" y2="23" />
+        <line x1="3" y1="3" x2="21" y2="21" />
+      </svg>
+      <svg v-else-if="!isActive" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
         <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
         <line x1="12" y1="19" x2="12" y2="23" />
@@ -202,6 +225,12 @@ watch(() => appStore.isRecording, async (recording) => {
   --accent: #2563eb;
   --accent-soft: rgba(37, 99, 235, 0.35);
   --accent-strong: rgba(37, 99, 235, 0.65);
+}
+
+.mic-container[data-state="mic-missing"] {
+  --accent: #f97316;
+  --accent-soft: rgba(249, 115, 22, 0.24);
+  --accent-strong: rgba(249, 115, 22, 0.58);
 }
 
 .level-ring {
@@ -355,8 +384,10 @@ watch(() => appStore.isRecording, async (recording) => {
 }
 
 .mic-btn.error {
-  border-color: rgba(245, 158, 11, 0.8);
-  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16);
+  border-color: rgba(249, 115, 22, 0.85);
+  color: #c2410c;
+  background: linear-gradient(160deg, #fff7ed 0%, #fed7aa 100%);
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.16);
   animation: error-shake 0.5s ease;
 }
 

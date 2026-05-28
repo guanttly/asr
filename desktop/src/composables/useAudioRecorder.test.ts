@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { mapRecorderError } from './useAudioRecorder'
+import { isRecorderDeviceNotFound, mapRecorderError } from './useAudioRecorder'
 
 function namedError(name: string) {
   const error = new Error(name)
@@ -19,5 +19,11 @@ describe('audio recorder error mapping', () => {
     const original = namedError('OverconstrainedError')
     expect(mapRecorderError(original)).toBe(original)
     expect(mapRecorderError('boom').message).toBe('初始化录音失败')
+  })
+
+  it('detects browser no-device recorder errors', () => {
+    expect(isRecorderDeviceNotFound(namedError('NotFoundError'))).toBe(true)
+    expect(isRecorderDeviceNotFound(namedError('DevicesNotFoundError'))).toBe(true)
+    expect(isRecorderDeviceNotFound(namedError('NotAllowedError'))).toBe(false)
   })
 })

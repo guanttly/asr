@@ -136,3 +136,52 @@ func TestMeetingSummaryHandlerUsesCustomChunkPrompt(t *testing.T) {
 		t.Fatalf("expected custom chunk prompt with replaced placeholder, got %q", prompts[0])
 	}
 }
+
+func TestMeetingSummaryChunksRespectPromptAndSliceMaxTokens(t *testing.T) {
+	const maxTokens = 260
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(payload.Messages) == 0 {
+			t.Fatal("expected at least one message")
+		}
+		if got := len([]rune(strings.TrimSpace(payload.Messages[0].Content))); got > maxTokens {
+			t.Fatalf("expected rendered prompt <= %d estimated tokens, got %d", maxTokens, got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"阶段摘要"}}],"model":"qwen3-4b","usage":{"prompt_tokens":100,"completion_tokens":50}}`))
+	}))
+	defer server.Close()
+
+	handler := NewMeetingSummaryHandler(nil)
+	inputText := strings.Repeat("这是一段需要进入会议纪要分片的内容。", 120)
+	configBytes := []byte(`{
+		"endpoint":"` + server.URL + `",
+		"model":"qwen3-4b",
+		"chunk_prompt_template":"请提炼这段会议内容，保留决议和待办：{{TEXT}}",
+		"prompt_template":"请合并这些片段摘要：{{TEXT}}",
+		"max_tokens":260
+	}`)
+
+	if _, _, err := handler.Execute(context.Background(), configBytes, inputText, nil); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if requestCount.Load() < 2 {
+		t.Fatalf("expected multiple LLM requests, got %d", requestCount.Load())
+	}
+}
+
+func TestMeetingSummaryRejectsPromptThatExceedsMaxTokens(t *testing.T) {
+	_, err := splitMeetingSummaryChunksForPrompt("会议内容", strings.Repeat("提示", 200)+"{{TEXT}}", 100, meetingSummaryChunkInputLabel)
+	if err == nil {
+		t.Fatal("expected prompt budget error")
+	}
+}

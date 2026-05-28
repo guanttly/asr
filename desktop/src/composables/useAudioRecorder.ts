@@ -4,8 +4,21 @@ import { debugLog } from '@/utils/debug'
 
 const TARGET_SR = 16000
 const CHUNK_MS = 200
+const AUDIO_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  video: false,
+}
 
 type FloatBuffer = Float32Array<ArrayBufferLike>
+
+interface RecorderStartOptions {
+  onDeviceLost?: () => void
+  onDeviceRestored?: () => void
+}
+
+export function isRecorderDeviceNotFound(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError')
+}
 
 export function mapRecorderError(error: unknown): Error {
   if (error instanceof Error) {
@@ -69,74 +82,177 @@ export function useAudioRecorder() {
   let source: MediaStreamAudioSourceNode | null = null
   let buffer: FloatBuffer = new Float32Array(0)
   let onChunkCallback: ((chunk: ArrayBuffer) => void) | null = null
+  let onDeviceLostCallback: (() => void) | null = null
+  let onDeviceRestoredCallback: (() => void) | null = null
+  let stoppedByUser = false
+  let deviceLostDuringRecording = false
+  let restartingAfterDeviceChange = false
+  let listeningForDeviceChanges = false
 
-  const cleanup = () => {
+  const setMicrophoneDetected = (detected: boolean) => {
+    appStore.microphoneDetected = detected
+  }
+
+  const hasAudioInputDevice = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices)
+      return true
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      return devices.some(device => device.kind === 'audioinput')
+    }
+    catch {
+      return true
+    }
+  }
+
+  const releaseAudioPipeline = (stopTracks: boolean) => {
     processor?.disconnect()
     source?.disconnect()
     void audioCtx.value?.close()
-    mediaStream.value?.getTracks().forEach(t => t.stop())
+    mediaStream.value?.getTracks().forEach((track) => {
+      track.removeEventListener?.('ended', handleTrackEnded)
+      if (stopTracks)
+        track.stop()
+    })
     processor = null
     source = null
     audioCtx.value = null
     mediaStream.value = null
+  }
+
+  const addDeviceChangeListener = () => {
+    if (listeningForDeviceChanges || !navigator.mediaDevices?.addEventListener)
+      return
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange)
+    listeningForDeviceChanges = true
+  }
+
+  const removeDeviceChangeListener = () => {
+    if (!listeningForDeviceChanges || !navigator.mediaDevices?.removeEventListener)
+      return
+    navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+    listeningForDeviceChanges = false
+  }
+
+  async function handleDeviceChange() {
+    const detected = await hasAudioInputDevice()
+    setMicrophoneDetected(detected)
+    if (!detected) {
+      if (isRecording.value) {
+        deviceLostDuringRecording = true
+        isPaused.value = true
+        onDeviceLostCallback?.()
+      }
+      return
+    }
+
+    if (!deviceLostDuringRecording || !isRecording.value || restartingAfterDeviceChange || !onChunkCallback)
+      return
+
+    restartingAfterDeviceChange = true
+    try {
+      await openAudioPipeline()
+      deviceLostDuringRecording = false
+      onDeviceRestoredCallback?.()
+      await debugLog('audio', 'microphone stream restored after device change')
+    }
+    catch (error) {
+      setMicrophoneDetected(!isRecorderDeviceNotFound(error))
+      void debugLog('audio.error', 'failed to restore microphone stream', error instanceof Error ? { name: error.name, message: error.message } : error)
+    }
+    finally {
+      restartingAfterDeviceChange = false
+    }
+  }
+
+  function handleTrackEnded() {
+    if (stoppedByUser || !isRecording.value)
+      return
+    deviceLostDuringRecording = true
+    isPaused.value = true
+    setMicrophoneDetected(false)
+    releaseAudioPipeline(false)
+    onDeviceLostCallback?.()
+    void debugLog('audio.error', 'microphone track ended during recording')
+    void handleDeviceChange()
+  }
+
+  async function openAudioPipeline() {
+    releaseAudioPipeline(false)
+    mediaStream.value = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
+
+    setMicrophoneDetected(true)
+    appStore.microphonePermissionGranted = true
+    appStore.persist()
+
+    audioCtx.value = new AudioContext()
+    await audioCtx.value.resume().catch(() => undefined)
+    source = audioCtx.value.createMediaStreamSource(mediaStream.value)
+    processor = audioCtx.value.createScriptProcessor(4096, 1, 1)
+
+    mediaStream.value.getTracks().forEach(track => track.addEventListener?.('ended', handleTrackEnded))
+
+    await debugLog('audio', 'microphone stream initialized', {
+      trackCount: mediaStream.value.getTracks().length,
+      sampleRate: audioCtx.value.sampleRate,
+    })
+
+    const chunkSamples = Math.round(TARGET_SR * (CHUNK_MS / 1000))
+    let loggedFirstChunk = false
+
+    processor.onaudioprocess = (e) => {
+      if (!isRecording.value || isPaused.value) return
+      const input = e.inputBuffer.getChannelData(0)
+      const resampled = resampleLinear(new Float32Array(input), audioCtx.value!.sampleRate, TARGET_SR)
+      buffer = concatFloat32(buffer, resampled)
+
+      if (onChunkCallback) {
+        while (buffer.length >= chunkSamples) {
+          const chunk = buffer.slice(0, chunkSamples)
+          buffer = buffer.slice(chunkSamples)
+          if (!loggedFirstChunk) {
+            loggedFirstChunk = true
+            void debugLog('audio', 'captured first audio chunk', { chunkSamples })
+          }
+          onChunkCallback(float32ToInt16(chunk))
+        }
+      }
+    }
+
+    source.connect(processor)
+    processor.connect(audioCtx.value.destination)
+    isRecording.value = true
+    isPaused.value = false
+    addDeviceChangeListener()
+  }
+
+  const cleanup = () => {
+    releaseAudioPipeline(true)
+    removeDeviceChangeListener()
     onChunkCallback = null
+    onDeviceLostCallback = null
+    onDeviceRestoredCallback = null
     buffer = new Float32Array(0)
     isRecording.value = false
     isPaused.value = false
+    deviceLostDuringRecording = false
+    restartingAfterDeviceChange = false
   }
 
-  const start = async (onChunk?: (chunk: ArrayBuffer) => void) => {
+  const start = async (onChunk?: (chunk: ArrayBuffer) => void, options?: RecorderStartOptions) => {
+    stoppedByUser = false
     onChunkCallback = onChunk ?? null
+    onDeviceLostCallback = options?.onDeviceLost ?? null
+    onDeviceRestoredCallback = options?.onDeviceRestored ?? null
     buffer = new Float32Array(0)
-    let loggedFirstChunk = false
+    deviceLostDuringRecording = false
 
     try {
       await debugLog('audio', 'requesting microphone stream')
-      mediaStream.value = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      })
-
-      appStore.microphonePermissionGranted = true
-      appStore.persist()
-
-      audioCtx.value = new AudioContext()
-      await audioCtx.value.resume().catch(() => undefined)
-      source = audioCtx.value.createMediaStreamSource(mediaStream.value)
-      processor = audioCtx.value.createScriptProcessor(4096, 1, 1)
-
-      await debugLog('audio', 'microphone stream initialized', {
-        trackCount: mediaStream.value.getTracks().length,
-        sampleRate: audioCtx.value.sampleRate,
-      })
-
-      const chunkSamples = Math.round(TARGET_SR * (CHUNK_MS / 1000))
-
-      processor.onaudioprocess = (e) => {
-        if (!isRecording.value || isPaused.value) return
-        const input = e.inputBuffer.getChannelData(0)
-        const resampled = resampleLinear(new Float32Array(input), audioCtx.value!.sampleRate, TARGET_SR)
-        buffer = concatFloat32(buffer, resampled)
-
-        if (onChunkCallback) {
-          while (buffer.length >= chunkSamples) {
-            const chunk = buffer.slice(0, chunkSamples)
-            buffer = buffer.slice(chunkSamples)
-            if (!loggedFirstChunk) {
-              loggedFirstChunk = true
-              void debugLog('audio', 'captured first audio chunk', { chunkSamples })
-            }
-            onChunkCallback(float32ToInt16(chunk))
-          }
-        }
-      }
-
-      source.connect(processor)
-      processor.connect(audioCtx.value.destination)
-      isRecording.value = true
-      isPaused.value = false
+      await openAudioPipeline()
     }
     catch (error) {
+      setMicrophoneDetected(!isRecorderDeviceNotFound(error))
       appStore.microphonePermissionGranted = false
       appStore.persist()
       cleanup()
@@ -146,6 +262,7 @@ export function useAudioRecorder() {
   }
 
   const stop = () => {
+    stoppedByUser = true
     if (buffer.length > 0 && onChunkCallback) {
       onChunkCallback(float32ToInt16(buffer.slice()))
       buffer = new Float32Array(0)
@@ -160,17 +277,16 @@ export function useAudioRecorder() {
   const requestPermission = async () => {
     try {
       await debugLog('audio', 'checking microphone permission')
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      })
+      const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
       stream.getTracks().forEach(track => track.stop())
+      setMicrophoneDetected(true)
       appStore.microphonePermissionGranted = true
       appStore.persist()
       await debugLog('audio', 'microphone permission granted')
       return true
     }
     catch (error) {
+      setMicrophoneDetected(!isRecorderDeviceNotFound(error))
       appStore.microphonePermissionGranted = false
       appStore.persist()
       void debugLog('audio.error', 'microphone permission request failed', error instanceof Error ? { name: error.name, message: error.message } : error)
@@ -178,5 +294,11 @@ export function useAudioRecorder() {
     }
   }
 
-  return { isRecording, isPaused, start, stop, pause, resume, requestPermission }
+  const refreshDeviceAvailability = async () => {
+    const detected = await hasAudioInputDevice()
+    setMicrophoneDetected(detected)
+    return detected
+  }
+
+  return { isRecording, isPaused, start, stop, pause, resume, requestPermission, refreshDeviceAvailability }
 }

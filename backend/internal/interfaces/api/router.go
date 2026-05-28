@@ -15,6 +15,7 @@ func NewRouter(logger *zap.Logger) *gin.Engine {
 	router.Use(gin.LoggerWithWriter(gin.DefaultWriter))
 	router.Use(middleware.Recovery())
 	router.Use(middleware.CORS())
+	router.Use(middleware.RateLimit(middleware.DefaultRateLimitConfig()))
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

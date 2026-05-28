@@ -9,7 +9,7 @@ import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
 import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
-import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
+import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, formatHotkeySyncFailureMessage, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
 import { MAX_DEVICE_ALIAS_LENGTH, MAX_SERVER_URL_LENGTH, validateDeviceAlias, validateServerAddressInput } from '@/utils/settingsValidation'
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '@/utils/server'
 
@@ -109,6 +109,11 @@ const inputBridgeStatusClass = computed(() => {
   if (state === 'CandidateReady' || state === 'FallbackCurrentFocus' || state === 'Recovering')
     return 'warning'
   return 'idle'
+})
+const microphoneStatusLabel = computed(() => {
+  if (!appStore.microphoneDetected)
+    return '未检测到设备'
+  return appStore.microphonePermissionGranted ? '已授权' : '未检测'
 })
 
 const modifierOnlyCodes = new Set([
@@ -317,7 +322,7 @@ async function syncHotkeysNow(reason = 'settings') {
     setHotkeyMessage(result.supported ? 'success' : 'info', result.message)
   }
   catch (error) {
-    setHotkeyMessage('error', error instanceof Error ? error.message : '热键同步失败')
+    setHotkeyMessage('error', formatHotkeySyncFailureMessage(error))
   }
 }
 
@@ -549,7 +554,7 @@ onBeforeUnmount(() => {
       <h4 class="section-title">录入行为</h4>
       <div class="field row permission-row">
         <div>
-          <label class="status-label">麦克风权限：{{ appStore.microphonePermissionGranted ? '已授权' : '未检测' }}</label>
+          <label class="status-label">麦克风权限：{{ microphoneStatusLabel }}</label>
         </div>
         <button class="action-btn primary compact" :disabled="authLoading" @click="requestMicrophonePermission">
           {{ appStore.microphonePermissionGranted ? '重新检测' : '检测麦克风' }}

@@ -35,6 +35,8 @@ const (
 	meetingSummaryBuiltinSource    = "builtin_summarizer"
 	meetingSummaryChunkedLLMSource = "chunked_llm_summary"
 	meetingSummaryDirectLLMSource  = "llm_summary"
+	meetingSummaryFinalInputLabel  = "会议转写文本"
+	meetingSummaryChunkInputLabel  = "会议片段"
 )
 
 func NewMeetingSummaryHandler(summarizer *nlpengine.Summarizer) *MeetingSummaryHandler {
@@ -176,7 +178,7 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 		maxTokens = meetingSummaryDefaultMaxTokens
 	}
 
-	if utf8.RuneCountInString(trimmed) <= meetingSummaryChunkMaxRunes {
+	if utf8.RuneCountInString(trimmed) <= meetingSummaryChunkMaxRunes && renderedPromptWithinMaxTokens(finalPrompt, trimmed, meetingSummaryFinalInputLabel, maxTokens) {
 		if emit != nil {
 			if err := emit(&NodeStreamEvent{Type: NodeStreamEventStatus, Message: "正在生成会议纪要..."}); err != nil {
 				return inputText, nil, err
@@ -185,7 +187,11 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 		return h.executeSummaryPromptStream(ctx, cfg, finalPrompt, trimmed, maxTokens, meetingSummaryDirectLLMSource, 1, emit)
 	}
 
-	chunks := splitMeetingSummaryChunks(trimmed, meetingSummaryChunkMaxRunes)
+	chunks, err := splitMeetingSummaryChunksForPrompt(trimmed, chunkPrompt, maxTokens, meetingSummaryChunkInputLabel)
+	if err != nil {
+		return inputText, nil, err
+	}
+	chunkMaxTokens := meetingSummaryChunkCompletionMaxTokens(maxTokens)
 	partialSummaries := make([]string, 0, len(chunks))
 	chunkOutputs := make([]meetingSummaryChunkDebug, 0, len(chunks))
 	for index, chunk := range chunks {
@@ -199,7 +205,7 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 				return inputText, nil, err
 			}
 		}
-		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, chunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
 		if err != nil {
 			return inputText, nil, err
 		}
@@ -208,7 +214,7 @@ func (h *MeetingSummaryHandler) ExecuteStream(ctx context.Context, config json.R
 		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
 			Title:      fmt.Sprintf("片段 %d", index+1),
 			Output:     trimmedPartial,
-			Prompt:     renderTextPrompt(chunkPrompt, chunk, "会议片段"),
+			Prompt:     renderTextPrompt(chunkPrompt, chunk, meetingSummaryChunkInputLabel),
 			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
 		})
 	}
@@ -255,15 +261,19 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 		maxTokens = meetingSummaryDefaultMaxTokens
 	}
 
-	if utf8.RuneCountInString(trimmed) <= meetingSummaryChunkMaxRunes {
+	if utf8.RuneCountInString(trimmed) <= meetingSummaryChunkMaxRunes && renderedPromptWithinMaxTokens(finalPrompt, trimmed, meetingSummaryFinalInputLabel, maxTokens) {
 		return h.executeSummaryPrompt(ctx, cfg, finalPrompt, trimmed, maxTokens, meetingSummaryDirectLLMSource, 1)
 	}
 
-	chunks := splitMeetingSummaryChunks(trimmed, meetingSummaryChunkMaxRunes)
+	chunks, err := splitMeetingSummaryChunksForPrompt(trimmed, chunkPrompt, maxTokens, meetingSummaryChunkInputLabel)
+	if err != nil {
+		return inputText, nil, err
+	}
+	chunkMaxTokens := meetingSummaryChunkCompletionMaxTokens(maxTokens)
 	partialSummaries := make([]string, 0, len(chunks))
 	chunkOutputs := make([]meetingSummaryChunkDebug, 0, len(chunks))
 	for index, chunk := range chunks {
-		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, meetingSummaryChunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
+		partial, _, err := h.executeSummaryPrompt(ctx, cfg, chunkPrompt, chunk, chunkMaxTokens, meetingSummaryChunkedLLMSource, len(chunks))
 		if err != nil {
 			return inputText, nil, err
 		}
@@ -272,7 +282,7 @@ func (h *MeetingSummaryHandler) executeLLMSummary(ctx context.Context, cfg Meeti
 		chunkOutputs = append(chunkOutputs, meetingSummaryChunkDebug{
 			Title:      fmt.Sprintf("片段 %d", index+1),
 			Output:     trimmedPartial,
-			Prompt:     renderTextPrompt(chunkPrompt, chunk, "会议片段"),
+			Prompt:     renderTextPrompt(chunkPrompt, chunk, meetingSummaryChunkInputLabel),
 			InputRunes: utf8.RuneCountInString(strings.TrimSpace(chunk)),
 		})
 	}
@@ -447,6 +457,61 @@ func splitMeetingSummaryChunks(text string, maxRunes int) []string {
 		}
 	}
 	return chunks
+}
+
+func splitMeetingSummaryChunksForPrompt(text, prompt string, maxTokens int, fallbackLabel string) ([]string, error) {
+	chunkRunes, err := maxInputRunesForPrompt(prompt, fallbackLabel, maxTokens)
+	if err != nil {
+		return nil, err
+	}
+	chunks := splitMeetingSummaryChunks(text, chunkRunes)
+	for _, chunk := range chunks {
+		if !renderedPromptWithinMaxTokens(prompt, chunk, fallbackLabel, maxTokens) {
+			return nil, fmt.Errorf("meeting summary chunk exceeds max_tokens after prompt rendering")
+		}
+	}
+	return chunks, nil
+}
+
+func maxInputRunesForPrompt(prompt, fallbackLabel string, maxTokens int) (int, error) {
+	if maxTokens <= 0 {
+		maxTokens = meetingSummaryDefaultMaxTokens
+	}
+	low, high := 0, maxTokens
+	for low < high {
+		mid := (low + high + 1) / 2
+		inputText := strings.Repeat("字", mid)
+		if renderedPromptWithinMaxTokens(prompt, inputText, fallbackLabel, maxTokens) {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	if low <= 0 {
+		return 0, fmt.Errorf("meeting summary prompt exceeds max_tokens")
+	}
+	if low > meetingSummaryChunkMaxRunes {
+		return meetingSummaryChunkMaxRunes, nil
+	}
+	return low, nil
+}
+
+func renderedPromptWithinMaxTokens(prompt, inputText, fallbackLabel string, maxTokens int) bool {
+	if maxTokens <= 0 {
+		maxTokens = meetingSummaryDefaultMaxTokens
+	}
+	return estimatePromptTokens(renderTextPrompt(prompt, inputText, fallbackLabel)) <= maxTokens
+}
+
+func estimatePromptTokens(text string) int {
+	return utf8.RuneCountInString(strings.TrimSpace(text))
+}
+
+func meetingSummaryChunkCompletionMaxTokens(maxTokens int) int {
+	if maxTokens <= 0 || maxTokens > meetingSummaryChunkMaxTokens {
+		return meetingSummaryChunkMaxTokens
+	}
+	return maxTokens
 }
 
 func mergeChunkSummaries(items []string) string {

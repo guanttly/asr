@@ -291,6 +291,11 @@ export function findConflictingHotkeyAction(bindings: Partial<HotkeyBindings> | 
   return null
 }
 
+export function formatHotkeySyncFailureMessage(error: unknown) {
+  const reason = error instanceof Error && error.message.trim() ? error.message.trim() : '热键同步失败'
+  return `${reason}。已保留本地热键配置，请点击“重新同步”重试。`
+}
+
 export function isHotkeyActionId(value: string): value is HotkeyActionId {
   return Object.values(HOTKEY_ACTIONS).includes(value as HotkeyActionId)
 }

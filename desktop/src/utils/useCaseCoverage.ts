@@ -27,32 +27,32 @@ interface CoverageRule {
 
 const ISSUE_OVERRIDES: Record<string, Omit<DesktopUseCaseAssessment, 'id' | 'title'>> = {
   121310: {
-    kind: 'issue',
+    kind: 'unit',
     area: '麦克风热插拔',
-    marker: 'ISSUE',
-    conclusion: '源码已覆盖启动阶段的权限/无设备/占用错误，但未看到录音中 track ended/devicechange 后向用户提示“麦克风断开”的链路，需重点手测。',
-    sourceRefs: ['desktop/src/composables/useAudioRecorder.ts', 'desktop/src/components/MicButton.vue'],
+    marker: 'OK',
+    conclusion: '录音器已监听 MediaStreamTrack ended 和 mediaDevices devicechange；录音中断时悬浮球提示“麦克风已断开，等待重新接入”，并进入 MIC 未检测到状态；设备恢复后自动重建采集流继续录音，错误映射有单测。真实热插拔仍需桌面手测。',
+    sourceRefs: ['desktop/src/composables/useAudioRecorder.ts', 'desktop/src/components/MicButton.vue', 'desktop/src/stores/app.ts', 'desktop/src/composables/useAudioRecorder.test.ts'],
   },
   121311: {
-    kind: 'issue',
+    kind: 'unit',
     area: '麦克风热插拔',
-    marker: 'ISSUE',
-    conclusion: '源码未看到麦克风重新插入后的自动恢复监听，当前主要依赖下一次 start() 重新 getUserMedia，需重点手测。',
-    sourceRefs: ['desktop/src/composables/useAudioRecorder.ts'],
+    marker: 'OK',
+    conclusion: '录音中麦克风断开后保留录音会话和 chunk 回调，devicechange 检测到音频输入恢复时自动重新 getUserMedia 并恢复采集；悬浮球 MIC 未检测到状态已接入。真实设备热插拔仍需桌面手测。',
+    sourceRefs: ['desktop/src/composables/useAudioRecorder.ts', 'desktop/src/components/MicButton.vue', 'desktop/src/stores/app.ts', 'desktop/src/composables/useAudioRecorder.test.ts'],
   },
   121326: {
-    kind: 'issue',
+    kind: 'unit',
     area: '配置同步失败',
-    marker: 'ISSUE',
-    conclusion: '设置项当前以本地持久化和原生热键同步为主，未看到通用远端配置同步失败后的回滚/重试链路，需确认需求口径并重点手测。',
-    sourceRefs: ['desktop/src/stores/app.ts', 'desktop/src/components/SettingsPanel.vue'],
+    marker: 'OK',
+    conclusion: '当前客户端配置同步点为本地持久化和原生热键注册；原生同步失败时明确提示“已保留本地热键配置，请点击重新同步重试”，不会清空本地当前值，提示文案和 payload 行为有单测。',
+    sourceRefs: ['desktop/src/stores/app.ts', 'desktop/src/components/SettingsPanel.vue', 'desktop/src/utils/hotkeys.ts', 'desktop/src/utils/hotkeys.test.ts'],
   },
   121327: {
-    kind: 'issue',
+    kind: 'unit',
     area: '配置同步失败',
-    marker: 'ISSUE',
-    conclusion: '设置项当前以本地持久化和原生热键同步为主，未看到通用远端配置同步失败后的重试提示链路，需确认需求口径并重点手测。',
-    sourceRefs: ['desktop/src/stores/app.ts', 'desktop/src/components/SettingsPanel.vue'],
+    marker: 'OK',
+    conclusion: '当前客户端配置同步点为本地持久化和原生热键注册；原生同步失败时设置页提示保留本地配置并引导点击“重新同步”重试，提示文案有单测覆盖。',
+    sourceRefs: ['desktop/src/components/SettingsPanel.vue', 'desktop/src/composables/useDesktopHotkeys.ts', 'desktop/src/utils/hotkeys.ts', 'desktop/src/utils/hotkeys.test.ts'],
   },
 }
 

@@ -50,6 +50,7 @@ type TranscriptionTask struct {
 	SegmentTotal      int               `json:"segment_total"`
 	SegmentCompleted  int               `json:"segment_completed"`
 	ResultText        string            `json:"result_text"`
+	LatestFinalText   string            `json:"-"`
 	Duration          float64           `json:"duration"`    // audio duration in seconds
 	DictID            *uint64           `json:"dict_id"`     // optional terminology dict
 	WorkflowID        *uint64           `json:"workflow_id"` // optional workflow for post-processing

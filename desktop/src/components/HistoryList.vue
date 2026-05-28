@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import DictPickerDialog from './DictPickerDialog.vue'
 
@@ -10,22 +11,27 @@ import { debugLog } from '@/utils/debug'
 import {
   clearTranscriptionTasks,
   deleteTranscriptionTask,
-  getTranscriptionTaskExecutions,
   getTranscriptionTasks,
   type TranscriptionTaskItem,
-  type WorkflowExecutionItem,
 } from '@/utils/transcription'
 
 const { injectText } = useInjector()
 const { confirm } = useConfirm()
 
 const PAGE_SIZE = 10
+const VIRTUAL_ITEM_GAP = 10
+const VIRTUAL_OVERSCAN_PX = 420
+const ESTIMATED_ITEM_HEIGHT = 172
 
 interface HistoryRecord extends TranscriptionTaskItem {
   finalText: string
-  loadingFinalText: boolean
-  finalTextLoaded: boolean
   deleting: boolean
+}
+
+interface VirtualRow {
+  item: HistoryRecord
+  top: number
+  height: number
 }
 
 const listRef = ref<HTMLElement | null>(null)
@@ -34,6 +40,9 @@ const total = ref(0)
 const initialLoading = ref(false)
 const loadingMore = ref(false)
 const clearing = ref(false)
+const scrollTop = ref(0)
+const viewportHeight = ref(0)
+const itemHeights = ref<Record<number, number>>({})
 const feedbackText = ref('')
 const feedbackType = ref<'error' | 'info' | 'success'>('info')
 
@@ -41,7 +50,37 @@ const dialogVisible = ref(false)
 const dialogKind = ref<'term' | 'sensitive'>('term')
 const dialogText = ref('')
 
+const cardElements = new Map<number, HTMLElement>()
+let cardResizeObserver: ResizeObserver | null = null
+let scrollerResizeObserver: ResizeObserver | null = null
+
 const hasMore = computed(() => items.value.length < total.value)
+
+const virtualLayout = computed(() => {
+  const rows: VirtualRow[] = []
+  let cursor = 0
+  for (const item of items.value) {
+    const height = itemHeights.value[item.id] || ESTIMATED_ITEM_HEIGHT
+    rows.push({ item, top: cursor, height })
+    cursor += height + VIRTUAL_ITEM_GAP
+  }
+  return {
+    rows,
+    height: rows.length > 0 ? cursor - VIRTUAL_ITEM_GAP : 0,
+  }
+})
+
+const visibleRows = computed(() => {
+  const rows = virtualLayout.value.rows
+  if (rows.length === 0)
+    return []
+
+  const startBoundary = Math.max(0, scrollTop.value - VIRTUAL_OVERSCAN_PX)
+  const endBoundary = scrollTop.value + (viewportHeight.value || 600) + VIRTUAL_OVERSCAN_PX
+  const start = findFirstVisibleRow(rows, startBoundary)
+  const end = findFirstRowAfter(rows, endBoundary)
+  return rows.slice(start, end)
+})
 
 function setFeedback(type: 'error' | 'info' | 'success', text: string) {
   feedbackType.value = type
@@ -55,39 +94,115 @@ function normalizeText(value?: string) {
 function createHistoryRecord(task: TranscriptionTaskItem): HistoryRecord {
   return {
     ...task,
-    finalText: normalizeText(task.result_text),
-    loadingFinalText: Boolean(task.workflow_id),
-    finalTextLoaded: !task.workflow_id,
+    finalText: normalizeText(task.final_text) || normalizeText(task.result_text),
     deleting: false,
   }
 }
 
-async function loadFinalText(item: HistoryRecord) {
-  if (item.finalTextLoaded || !item.workflow_id)
+function findFirstVisibleRow(rows: VirtualRow[], boundary: number) {
+  let left = 0
+  let right = rows.length
+  while (left < right) {
+    const middle = Math.floor((left + right) / 2)
+    if (rows[middle].top + rows[middle].height < boundary)
+      left = middle + 1
+    else
+      right = middle
+  }
+  return left
+}
+
+function findFirstRowAfter(rows: VirtualRow[], boundary: number) {
+  let left = 0
+  let right = rows.length
+  while (left < right) {
+    const middle = Math.floor((left + right) / 2)
+    if (rows[middle].top <= boundary)
+      left = middle + 1
+    else
+      right = middle
+  }
+  return Math.min(rows.length, left + 1)
+}
+
+function updateViewportMetrics() {
+  const container = listRef.value
+  if (!container)
     return
-  try {
-    const executions: WorkflowExecutionItem[] = await getTranscriptionTaskExecutions(item.id)
-    const latest = executions[0]
-    const finalCandidate = normalizeText(latest?.final_text)
-    if (finalCandidate)
-      item.finalText = finalCandidate
-    item.finalTextLoaded = true
+  scrollTop.value = container.scrollTop
+  viewportHeight.value = container.clientHeight
+}
+
+function measuredHeight(entry: ResizeObserverEntry) {
+  const box = Array.isArray(entry.borderBoxSize) ? entry.borderBoxSize[0] : entry.borderBoxSize
+  return Math.ceil(box?.blockSize || entry.contentRect.height)
+}
+
+function ensureCardResizeObserver() {
+  if (cardResizeObserver)
+    return
+  cardResizeObserver = new ResizeObserver((entries) => {
+    const nextHeights = { ...itemHeights.value }
+    let changed = false
+    for (const entry of entries) {
+      const id = Number((entry.target as HTMLElement).dataset.historyId || 0)
+      const height = measuredHeight(entry)
+      if (!id || height <= 0 || nextHeights[id] === height)
+        continue
+      nextHeights[id] = height
+      changed = true
+    }
+    if (changed)
+      itemHeights.value = nextHeights
+  })
+}
+
+function setItemRef(id: number, element: Element | ComponentPublicInstance | null) {
+  const component = element as ComponentPublicInstance | null
+  const node = element instanceof HTMLElement
+    ? element
+    : component?.$el instanceof HTMLElement ? component.$el : null
+  const previous = cardElements.get(id)
+
+  if (!node) {
+    if (previous) {
+      cardResizeObserver?.unobserve(previous)
+      cardElements.delete(id)
+    }
+    return
   }
-  catch (error) {
-    item.finalTextLoaded = true
-    void debugLog('history.execution', 'failed to load final text', error instanceof Error ? {
-      taskId: item.id, message: error.message, stack: error.stack,
-    } : { taskId: item.id, error })
-  }
-  finally {
-    item.loadingFinalText = false
-  }
+
+  if (previous === node)
+    return
+
+  if (previous)
+    cardResizeObserver?.unobserve(previous)
+
+  node.dataset.historyId = String(id)
+  cardElements.set(id, node)
+  ensureCardResizeObserver()
+  cardResizeObserver?.observe(node)
+}
+
+function resetMeasurements() {
+  cardElements.forEach(element => cardResizeObserver?.unobserve(element))
+  cardElements.clear()
+  itemHeights.value = {}
+}
+
+function forgetMeasurement(id: number) {
+  const nextHeights = { ...itemHeights.value }
+  delete nextHeights[id]
+  itemHeights.value = nextHeights
 }
 
 function mergeTaskPage(nextItems: TranscriptionTaskItem[], reset: boolean) {
   if (reset) {
+    resetMeasurements()
     items.value = nextItems.map(createHistoryRecord)
-    items.value.forEach(item => void loadFinalText(item))
+    scrollTop.value = 0
+    if (listRef.value)
+      listRef.value.scrollTop = 0
     return
   }
 
@@ -96,7 +211,6 @@ function mergeTaskPage(nextItems: TranscriptionTaskItem[], reset: boolean) {
     .filter(item => !seen.has(item.id))
     .map(createHistoryRecord)
   items.value = items.value.concat(appended)
-  appended.forEach(item => void loadFinalText(item))
 }
 
 function formatDate(value?: string) {
@@ -140,6 +254,8 @@ async function loadTasks(reset = false) {
     })
     total.value = result.total || 0
     mergeTaskPage(result.items || [], reset)
+    await nextTick()
+    updateViewportMetrics()
     if (!items.value.length)
       setFeedback('info', '暂无转写记录')
     else if (reset)
@@ -221,6 +337,7 @@ async function removeRecord(item: HistoryRecord) {
   try {
     await deleteTranscriptionTask(item.id)
     items.value = items.value.filter(candidate => candidate.id !== item.id)
+    forgetMeasurement(item.id)
     total.value = Math.max(0, total.value - 1)
     setFeedback('success', '转写记录已删除')
   }
@@ -260,14 +377,27 @@ async function clearAll() {
 
 function handleScroll() {
   const container = listRef.value
+  updateViewportMetrics()
   if (!container || loadingMore.value || initialLoading.value || !hasMore.value)
     return
   if (container.scrollTop + container.clientHeight >= container.scrollHeight - 120)
     void loadTasks(false)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await nextTick()
+  updateViewportMetrics()
+  scrollerResizeObserver = new ResizeObserver(updateViewportMetrics)
+  if (listRef.value)
+    scrollerResizeObserver.observe(listRef.value)
+  window.addEventListener('resize', updateViewportMetrics)
   void loadTasks(true)
+})
+
+onBeforeUnmount(() => {
+  cardResizeObserver?.disconnect()
+  scrollerResizeObserver?.disconnect()
+  window.removeEventListener('resize', updateViewportMetrics)
 })
 </script>
 
@@ -300,42 +430,47 @@ onMounted(() => {
         暂无转写记录
       </div>
 
-      <article
-        v-for="item in items"
-        :key="item.id"
-        class="history-card"
+      <div
+        v-else
+        class="virtual-list"
+        :style="{ height: `${virtualLayout.height}px` }"
       >
-        <div class="card-meta">
-          <span>{{ formatDate(item.created_at) }}</span>
-          <span class="meta-sep">·</span>
-          <span>{{ formatDuration(item.duration) }}</span>
-        </div>
+        <article
+          v-for="row in visibleRows"
+          :key="row.item.id"
+          :ref="element => setItemRef(row.item.id, element)"
+          class="history-card virtual-history-card"
+          :style="{ transform: `translateY(${row.top}px)` }"
+        >
+          <div class="card-meta">
+            <span>{{ formatDate(row.item.created_at) }}</span>
+            <span class="meta-sep">·</span>
+            <span>{{ formatDuration(row.item.duration) }}</span>
+          </div>
 
-        <p v-if="item.loadingFinalText && !item.finalText" class="card-text placeholder">
-          正在生成最终输出...
-        </p>
-        <p v-else class="card-text">
-          {{ item.finalText || '（空）' }}
-        </p>
+          <p class="card-text">
+            {{ row.item.finalText || '（空）' }}
+          </p>
 
-        <div class="card-actions">
-          <button class="card-btn" :disabled="!item.finalText" @click="injectRecord(item)">
-            <span class="btn-icon">↳</span> 注入
-          </button>
-          <button class="card-btn" :disabled="!item.finalText" @click="copyRecord(item)">
-            <span class="btn-icon">⧉</span> 复制
-          </button>
-          <button class="card-btn" :disabled="!item.finalText" @click="openTermDialog(item)">
-            <span class="btn-icon">+</span> 收录术语
-          </button>
-          <button class="card-btn" :disabled="!item.finalText" @click="openSensitiveDialog(item)">
-            <span class="btn-icon">!</span> 加敏感词
-          </button>
-          <button class="card-btn danger" :disabled="item.deleting" @click="removeRecord(item)">
-            <span class="btn-icon">×</span> 删除
-          </button>
-        </div>
-      </article>
+          <div class="card-actions">
+            <button class="card-btn" :disabled="!row.item.finalText" @click="injectRecord(row.item)">
+              <span class="btn-icon">↳</span> 注入
+            </button>
+            <button class="card-btn" :disabled="!row.item.finalText" @click="copyRecord(row.item)">
+              <span class="btn-icon">⧉</span> 复制
+            </button>
+            <button class="card-btn" :disabled="!row.item.finalText" @click="openTermDialog(row.item)">
+              <span class="btn-icon">+</span> 收录术语
+            </button>
+            <button class="card-btn" :disabled="!row.item.finalText" @click="openSensitiveDialog(row.item)">
+              <span class="btn-icon">!</span> 加敏感词
+            </button>
+            <button class="card-btn danger" :disabled="row.item.deleting" @click="removeRecord(row.item)">
+              <span class="btn-icon">×</span> 删除
+            </button>
+          </div>
+        </article>
+      </div>
 
       <div v-if="loadingMore" class="load-state">
         正在加载更多记录...
@@ -462,10 +597,19 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   padding-right: 2px;
+}
+
+.virtual-list {
+  position: relative;
+}
+
+.virtual-history-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 2px;
+  will-change: transform;
 }
 
 .history-card {

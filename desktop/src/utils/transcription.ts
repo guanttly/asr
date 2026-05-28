@@ -11,6 +11,7 @@ export interface TranscriptionTaskItem {
   post_process_status: string
   post_process_error?: string
   result_text?: string
+  final_text?: string
   duration?: number
   workflow_id?: number | null
   created_at: string

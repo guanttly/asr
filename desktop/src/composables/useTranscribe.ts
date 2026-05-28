@@ -22,6 +22,13 @@ const AUTO_INJECT_TIMEOUT_MS = 2 * 1000
 const MIN_MEETING_DURATION_SECONDS = 5
 const MIN_REALTIME_DURATION_SECONDS = 1
 
+interface RealtimeSessionSegment {
+  file: File
+  rawText: string
+  duration: number
+  workflowId?: number
+}
+
 export function useTranscribe() {
   const appStore = useAppStore()
   const { injectText } = useInjector()
@@ -46,6 +53,7 @@ export function useTranscribe() {
   let saveSessionPromise: Promise<void> | null = null
   const sessionAudioChunks: ArrayBuffer[] = []
   const sessionRecognizedTexts: string[] = []
+  const sessionRealtimeSegments: RealtimeSessionSegment[] = []
 
   function computeRms(chunk: ArrayBuffer): number {
     const samples = new Int16Array(chunk)
@@ -280,7 +288,6 @@ export function useTranscribe() {
             }
             const rawText = normalizeText(json.data?.text)
             if (!rawText || !hasContent(rawText)) continue
-            sessionRecognizedTexts.push(rawText)
 
             // Voice control: detect wake word / classify command. When swallowed,
             // we skip workflow / inject / history append for this segment so the
@@ -291,11 +298,20 @@ export function useTranscribe() {
               continue
             }
 
+            sessionRecognizedTexts.push(rawText)
+
             const text = await applyRealtimeWorkflow(rawText)
             if (!text || !hasContent(text)) {
               await debugLog('transcribe.workflow', 'workflow produced empty segment text', { rawText })
               continue
             }
+
+            sessionRealtimeSegments.push({
+              file: item.file,
+              rawText,
+              duration: item.duration,
+              workflowId: realtimeWorkflowId ?? undefined,
+            })
 
             appStore.appendHistory(text)
             lastError.value = ''
@@ -327,6 +343,28 @@ export function useTranscribe() {
     })()
 
     return uploadPromise
+  }
+
+  async function persistRealtimeSegment(segment: RealtimeSessionSegment) {
+    try {
+      const formData = new FormData()
+      formData.append('file', segment.file)
+      formData.append('result_text', segment.rawText)
+      if (segment.workflowId != null)
+        formData.append('workflow_id', String(segment.workflowId))
+      await uploadRealtimeSessionTask(formData)
+    }
+    catch (error) {
+      await debugLog('transcribe.session', 'segment audio upload failed, fallback to text-only task', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error)
+      await createRealtimeTranscriptionTask({
+        result_text: segment.rawText,
+        duration: segment.duration,
+        workflow_id: segment.workflowId ?? undefined,
+      })
+    }
   }
 
   async function persistRealtimeSession() {
@@ -368,43 +406,50 @@ export function useTranscribe() {
         return
       }
 
-      const workflowId = await ensureRealtimeWorkflowBinding().catch(() => appStore.realtimeWorkflowId)
+      if (sessionRealtimeSegments.length === 0) {
+        await debugLog('transcribe.session', 'skip realtime persistence: no finalized segments', {
+          duration,
+          transcriptLength: transcript.length,
+        })
+        saveSessionPromise = null
+        return
+      }
 
       try {
-        if (sessionAudioChunks.length > 0) {
+        let savedCount = 0
+        let failedCount = 0
+
+        for (const [index, segment] of sessionRealtimeSegments.entries()) {
           try {
-            const formData = new FormData()
-            formData.append('file', createWav(sessionAudioChunks, `realtime-session-${Date.now()}.wav`))
-            formData.append('result_text', transcript)
-            if (workflowId != null)
-              formData.append('workflow_id', String(workflowId))
-            await uploadRealtimeSessionTask(formData)
+            await persistRealtimeSegment(segment)
+            savedCount += 1
           }
           catch (error) {
-            await debugLog('transcribe.session', 'session audio upload failed, fallback to text-only task', error instanceof Error ? {
+            failedCount += 1
+            lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
+            await debugLog('transcribe.session', 'failed to save realtime segment history', error instanceof Error ? {
+              index,
+              rawText: segment.rawText,
+              duration: segment.duration,
               message: error.message,
               stack: error.stack,
-            } : error)
-            await createRealtimeTranscriptionTask({
-              result_text: transcript,
-              duration,
-              workflow_id: workflowId ?? undefined,
+            } : {
+              index,
+              rawText: segment.rawText,
+              duration: segment.duration,
+              error,
             })
           }
         }
-        else {
-          await createRealtimeTranscriptionTask({
-            result_text: transcript,
-            duration,
-            workflow_id: workflowId ?? undefined,
-          })
-        }
 
-        await debugLog('transcribe.session', 'saved realtime transcription session', {
+        if (failedCount > 0 && savedCount > 0)
+          lastError.value = `已有 ${savedCount} 条断句保存，${failedCount} 条失败`
+
+        await debugLog('transcribe.session', 'saved realtime transcription segments', {
           duration,
-          workflowId,
-          hasAudio: sessionAudioChunks.length > 0,
-          segmentCount: sessionRecognizedTexts.length,
+          savedCount,
+          failedCount,
+          segmentCount: sessionRealtimeSegments.length,
         })
       }
       catch (error) {
@@ -520,6 +565,7 @@ export function useTranscribe() {
     leadInChunks.splice(0, leadInChunks.length)
     sessionAudioChunks.splice(0, sessionAudioChunks.length)
     sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
+    sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
     uploadQueue = []
     uploadPromise = null
     saveSessionPromise = null

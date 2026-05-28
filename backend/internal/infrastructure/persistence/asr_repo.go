@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	domain "github.com/lgt/asr/internal/domain/asr"
+	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -152,15 +154,72 @@ func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, taskType *doma
 	if taskType != nil {
 		q = q.Where("type = ?", string(*taskType))
 	}
-	q.Count(&total)
-	if err := q.Order("created_at DESC").Offset(offset).Limit(limit).Find(&models).Error; err != nil {
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := q.Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&models).Error; err != nil {
+		return nil, 0, err
+	}
+	latestFinalTexts, err := r.latestFinalTextsByTaskIDs(ctx, models)
+	if err != nil {
 		return nil, 0, err
 	}
 	tasks := make([]*domain.TranscriptionTask, len(models))
 	for i := range models {
 		tasks[i] = r.toDomain(&models[i])
+		if finalText, ok := latestFinalTexts[models[i].ID]; ok {
+			tasks[i].LatestFinalText = finalText
+		}
 	}
 	return tasks, total, nil
+}
+
+type latestExecutionTextRow struct {
+	TriggerID string         `gorm:"column:trigger_id"`
+	FinalText sql.NullString `gorm:"column:final_text"`
+}
+
+func (r *TaskRepo) latestFinalTextsByTaskIDs(ctx context.Context, models []TaskModel) (map[uint64]string, error) {
+	triggerIDs := make([]string, 0, len(models))
+	for _, model := range models {
+		if model.WorkflowID == nil {
+			continue
+		}
+		triggerIDs = append(triggerIDs, strconv.FormatUint(model.ID, 10))
+	}
+	if len(triggerIDs) == 0 {
+		return map[uint64]string{}, nil
+	}
+
+	var rows []latestExecutionTextRow
+	if err := r.db.WithContext(ctx).
+		Table("workflow_executions").
+		Select("trigger_id, final_text").
+		Where("trigger_type IN ?", []string{string(wfdomain.TriggerBatchTask), string(wfdomain.TriggerRealtime)}).
+		Where("trigger_id IN ?", triggerIDs).
+		Order("trigger_id ASC, created_at DESC, id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[uint64]string, len(triggerIDs))
+	for _, row := range rows {
+		if !row.FinalText.Valid {
+			continue
+		}
+		id, err := strconv.ParseUint(row.TriggerID, 10, 64)
+		if err != nil {
+			continue
+		}
+		if _, exists := result[id]; exists {
+			continue
+		}
+		result[id] = row.FinalText.String
+	}
+	return result, nil
 }
 
 func (r *TaskRepo) ListSyncCandidates(ctx context.Context, limit int) ([]*domain.TranscriptionTask, error) {

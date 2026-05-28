@@ -92,6 +92,7 @@ type TaskResponse struct {
 	LastSyncAt        *time.Time               `json:"last_sync_at,omitempty"`
 	NextSyncAt        *time.Time               `json:"next_sync_at,omitempty"`
 	ResultText        string                   `json:"result_text,omitempty"`
+	FinalText         string                   `json:"final_text,omitempty"`
 	Duration          float64                  `json:"duration"`
 	WorkflowID        *uint64                  `json:"workflow_id,omitempty"`
 	Language          string                   `json:"language,omitempty"`
@@ -212,6 +213,7 @@ func ToResponse(t *domain.TranscriptionTask) *TaskResponse {
 		LastSyncAt:        t.LastSyncAt,
 		NextSyncAt:        t.NextSyncAt,
 		ResultText:        resultText,
+		FinalText:         sanitizeTranscriptionText(t.LatestFinalText),
 		Duration:          t.Duration,
 		WorkflowID:        t.WorkflowID,
 		Language:          t.Language,

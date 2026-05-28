@@ -1,0 +1,5 @@
+confirmModulesPurge: false
+
+allowBuilds:
+  core-js: false
+  esbuild: true

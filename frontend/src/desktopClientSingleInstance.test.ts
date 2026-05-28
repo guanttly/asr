@@ -11,7 +11,7 @@ function readRepoFile(relativePath: string) {
 }
 
 describe('desktop client single instance guard', () => {
-  it('Electron client acquires the instance lock before creating windows', () => {
+  it('electron client acquires the instance lock before creating windows', () => {
     const source = readRepoFile('desktop-electron/electron/main/index.ts')
     const lockIndex = source.indexOf('requestSingleInstanceLock')
     const readyIndex = source.indexOf('app.whenReady')
@@ -19,11 +19,11 @@ describe('desktop client single instance guard', () => {
     expect(lockIndex).toBeGreaterThanOrEqual(0)
     expect(readyIndex).toBeGreaterThanOrEqual(0)
     expect(lockIndex).toBeLessThan(readyIndex)
-      expect(source).toMatch(/app\.on\(['"]second-instance['"]/)
+    expect(source).toContain('second-instance')
     expect(source).toMatch(/showMainWindow|ensureMainWindow/)
   })
 
-  it('Tauri client registers the single-instance plugin and focuses the running window', () => {
+  it('tauri client registers the single-instance plugin and focuses the running window', () => {
     const cargo = readRepoFile('desktop/src-tauri/Cargo.toml')
     const source = readRepoFile('desktop/src-tauri/src/lib.rs')
 

@@ -33,6 +33,10 @@ interface WindowShapeRect {
 const windows: ManagedWindows = {}
 let isQuitting = false
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock)
+  app.quit()
+
 function buildCircularWindowShape(width: number, height: number): WindowShapeRect[] {
   const centerX = (width - 1) / 2
   const centerY = (height - 1) / 2
@@ -213,6 +217,10 @@ function toggleSettingsWindow() {
   }
   void ensureSettingsWindow()
 }
+
+app.on('second-instance', () => {
+  showMainWindow()
+})
 
 bindWindowController({
   showMainWindow,

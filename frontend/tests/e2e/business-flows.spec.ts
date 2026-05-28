@@ -30,8 +30,8 @@ const protectedFlows = [
 async function expectBusinessFlow(page: Page, flow: typeof protectedFlows[number]) {
   const titleScope = flow.path === '/downloads' ? page.locator('body') : page.locator('header')
   const markerScope = flow.path === '/downloads' ? page.locator('body') : page.locator('main')
-  await expect(titleScope.getByText(flow.title, { exact: true }).first()).toBeVisible()
-  await expect(markerScope.getByText(flow.marker).first()).toBeVisible()
+  await expect(titleScope.getByText(flow.title, { exact: true }).filter({ visible: true }).first()).toBeVisible()
+  await expect(markerScope.getByText(flow.marker).filter({ visible: true }).first()).toBeVisible()
 }
 
 test.beforeEach(async ({ page }) => {
@@ -62,7 +62,7 @@ test('批量转写可提交 URL 任务并打开任务详情', async ({ page }) =
   await page.goto('/transcription')
 
   await page.getByText('提交音频 URL', { exact: true }).click()
-  await page.getByPlaceholder('https://example.com/audio/demo.wav').fill('https://example.com/audio/new.wav')
+  await page.locator('#batch-audio-url-input').fill('https://example.com/audio/new.wav')
   await page.getByRole('button', { name: '提交 URL 任务' }).click()
 
   await expect(page.getByText('患者肺部小结节，建议随访。').first()).toBeVisible()

@@ -661,6 +661,13 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Err(err) = show_main_window(app) {
+                log_runtime(&format!(
+                    "failed to focus main window for second instance: {err}"
+                ));
+            }
+        }))
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             inject_text,

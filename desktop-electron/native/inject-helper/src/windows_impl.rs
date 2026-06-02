@@ -445,7 +445,6 @@ pub fn paste_text(
             Ok(()) => {
                 let mut history = load_history();
                 update_history_runtime(&mut history, &target, true);
-                history.locked_target_id = Some(target.id.clone());
                 let _ = save_history(&history);
 
                 append_log(&format!(
@@ -505,7 +504,7 @@ pub fn read_clipboard_text() -> Result<String, String> {
 
 fn resolve_target() -> Result<(InputTarget, String), String> {
     let config = load_config();
-    let mut history = load_history();
+    let history = load_history();
 
     if let Some(locked_id) = history.locked_target_id.clone() {
         if let Some(item) = history
@@ -528,22 +527,6 @@ fn resolve_target() -> Result<(InputTarget, String), String> {
                     ));
                 }
             }
-        }
-    }
-
-    let mut items = history.targets.clone();
-    items.sort_by_key(|item| Reverse((item.priority, item.last_used_at, item.use_count)));
-    for item in items {
-        if let Ok(target) = resolve_history_item(&item) {
-            if is_blocked_target(&target, &config) {
-                continue;
-            }
-            history.locked_target_id = Some(target.id.clone());
-            update_history_runtime(&mut history, &target, false);
-            let _ = save_history(&history);
-            append_log(&format!("target_recovered target={}", target.id));
-            flash_overlay_for_target(&target, "已自动恢复最近绑定目标", OverlayKind::Bound, 1400);
-            return Ok((target, "Recovering".to_string()));
         }
     }
 
@@ -1276,7 +1259,7 @@ fn flash_overlay_for_target(
         bottom: 120,
     });
     let primary = label.to_string();
-    let secondary = target.display_name.clone();
+    let secondary = make_overlay_display_name(target);
     let default_total = match kind {
         OverlayKind::Bound => OVERLAY_DEFAULT_BOUND_MS,
         OverlayKind::Success => OVERLAY_DEFAULT_SUCCESS_MS,
@@ -1370,7 +1353,7 @@ fn animate_overlay(
         let label_text = if secondary.trim().is_empty() {
             primary.clone()
         } else {
-            format!("{}  ·  {}", primary, secondary)
+            format!("{} · {}", primary, secondary)
         };
 
         let font = create_overlay_font();
@@ -1872,7 +1855,6 @@ fn upsert_locked_target(history: &mut HistoryFile, target: InputTarget) {
 
 fn update_history_runtime(history: &mut HistoryFile, target: &InputTarget, mark_used: bool) {
     let now = now_ms();
-    let mut found = false;
     for item in &mut history.targets {
         if item.id == target.id {
             item.display_name = target.display_name.clone();
@@ -1882,12 +1864,8 @@ fn update_history_runtime(history: &mut HistoryFile, target: &InputTarget, mark_
                 item.last_used_at = now;
                 item.use_count = item.use_count.saturating_add(1);
             }
-            found = true;
             break;
         }
-    }
-    if !found {
-        upsert_locked_target(history, target.clone());
     }
     history
         .targets
@@ -1999,25 +1977,7 @@ fn make_display_name(
     uia_name: Option<&str>,
 ) -> String {
     let is_browser = is_real_chromium_browser(process_name);
-    let app = if is_browser {
-        "浏览器 RIS".to_string()
-    } else if process_name.eq_ignore_ascii_case("winword.exe") {
-        "Word".to_string()
-    } else if process_name.eq_ignore_ascii_case("excel.exe") {
-        "Excel".to_string()
-    } else if process_name.eq_ignore_ascii_case("powerpnt.exe") {
-        "PowerPoint".to_string()
-    } else if is_wechat_process_name(process_name) {
-        "微信".to_string()
-    } else if process_name.eq_ignore_ascii_case("dingtalk.exe") {
-        "钉钉".to_string()
-    } else if process_name.to_ascii_lowercase().contains("ris") {
-        "RIS".to_string()
-    } else if process_name.to_ascii_lowercase().contains("his") {
-        "HIS".to_string()
-    } else {
-        process_name.to_string()
-    };
+    let app = make_app_display_name(process_name);
     // 真正的 Chrome/Edge/Firefox 显示简洁形式 `<app> - <title>`：
     //   - 我们绑的就是整个浏览器窗口（UIA 拿不到 DOM 节点级粒度）
     //   - 去掉 "- Google Chrome" 后缀避免「浏览器 RIS - X - Google Chrome」重复
@@ -2034,15 +1994,70 @@ fn make_display_name(
         .unwrap_or("输入窗口");
     // 控件部分优先使用 UIA Name（如 textarea 的 label「影像所见」），
     // 这是用户在屏幕上看到的字面，比 HWND class 名「Chrome_RenderWidgetHostHWND」
-    // 友好得多；只有在 UIA 拿不到 Name 时才退回到类名。
-    let control_fallback = control_class
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("输入框");
+    // 友好得多；只有在 UIA 拿不到 Name 时才退回到归一化后的控件名。
     let control = uia_name
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .unwrap_or(control_fallback);
-    format!("{app} - {title} - {control}")
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| friendly_control_label(control_class));
+    if same_ci(title, &app) {
+        format!("{app} - {control}")
+    } else {
+        format!("{app} - {title} - {control}")
+    }
+}
+
+fn make_overlay_display_name(target: &InputTarget) -> String {
+    make_app_display_name(&target.signature.process_name)
+}
+
+fn make_app_display_name(process_name: &str) -> String {
+    if is_real_chromium_browser(process_name) {
+        "浏览器 RIS".to_string()
+    } else if process_name.eq_ignore_ascii_case("winword.exe") {
+        "Word".to_string()
+    } else if process_name.eq_ignore_ascii_case("excel.exe") {
+        "Excel".to_string()
+    } else if process_name.eq_ignore_ascii_case("powerpnt.exe") {
+        "PowerPoint".to_string()
+    } else if is_wechat_process_name(process_name) {
+        "微信".to_string()
+    } else if process_name.eq_ignore_ascii_case("dingtalk.exe") {
+        "钉钉".to_string()
+    } else if process_name.eq_ignore_ascii_case("wework.exe")
+        || process_name.eq_ignore_ascii_case("wxwork.exe")
+    {
+        "企业微信".to_string()
+    } else if process_name.eq_ignore_ascii_case("feishu.exe")
+        || process_name.eq_ignore_ascii_case("lark.exe")
+    {
+        "飞书".to_string()
+    } else if process_name.to_ascii_lowercase().contains("ris") {
+        "RIS".to_string()
+    } else if process_name.to_ascii_lowercase().contains("his") {
+        "HIS".to_string()
+    } else {
+        process_name.to_string()
+    }
+}
+
+fn friendly_control_label(control_class: Option<&str>) -> String {
+    let Some(class_name) = control_class
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return "输入框".to_string();
+    };
+    let lower = class_name.to_ascii_lowercase();
+    if lower.contains("cefbrowserwindow")
+        || lower.contains("chrome_renderwidgethosthwnd")
+        || lower.contains("chrome_widgetwin")
+        || lower.contains("internet explorer_server")
+    {
+        "输入框".to_string()
+    } else {
+        class_name.to_string()
+    }
 }
 
 fn classify_app(process_name: &str, title: Option<&str>) -> String {

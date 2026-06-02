@@ -238,12 +238,20 @@ func (s *Service) ensureBuiltinGroup(ctx context.Context, dicts []*domain.Dict, 
 		if !ok || normalized != group.Key {
 			continue
 		}
-		needsUpdate := item.Name != group.Name || item.GroupKey != group.Key || item.Description != group.Description || item.IsBase != group.IsBase
-		if needsUpdate {
-			item.Name = group.Name
+		needsUpdate := false
+		if item.GroupKey != group.Key {
 			item.GroupKey = group.Key
+			needsUpdate = true
+		}
+		if strings.TrimSpace(item.Name) == "" {
+			item.Name = group.Name
+			needsUpdate = true
+		}
+		if strings.TrimSpace(item.Description) == "" {
 			item.Description = group.Description
-			item.IsBase = group.IsBase
+			needsUpdate = true
+		}
+		if needsUpdate {
 			if err := s.dictRepo.Update(ctx, item); err != nil {
 				return nil, err
 			}
@@ -295,8 +303,7 @@ func (s *Service) ensureBuiltinGroupEntries(ctx context.Context, dictID uint64, 
 			continue
 		}
 
-		mergedUtterances := normalizeUtterances(append(append([]string{}, spec.DefaultUtterances...), target.Utterances...))
-		needsUpdate := target.Intent != spec.Key || len(mergedUtterances) != len(target.Utterances)
+		needsUpdate := target.Intent != spec.Key
 		if strings.TrimSpace(target.Label) == "" {
 			target.Label = spec.DefaultLabel
 			needsUpdate = true
@@ -307,9 +314,6 @@ func (s *Service) ensureBuiltinGroupEntries(ctx context.Context, dictID uint64, 
 		}
 		if target.Intent != spec.Key {
 			target.Intent = spec.Key
-		}
-		if len(mergedUtterances) != len(target.Utterances) {
-			target.Utterances = mergedUtterances
 		}
 		if needsUpdate {
 			if err := s.entryRepo.Update(ctx, target); err != nil {

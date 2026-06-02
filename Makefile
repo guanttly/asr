@@ -28,7 +28,7 @@
 #   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=./dist JUSHA_ASR_PART_SIZE=2g
 #
 # release-jusha-* 发布形态：
-#   business  产物为 jusha-asr-business-<version>.run
+#   business  产物为 jusha-asr-business-<version>.run 和 .run.partNNN 分包
 #   models    产物为 jusha-asr-models-<version>.run，内部包含 jusha-asr-asr-<version>.run
 #             和 jusha-asr-speaker-<version>.run；speaker 不是顶层 mode，而是 models 内部组件包
 #   all       产物为 jusha-asr-all-<version>.run，内部包含 business + models
@@ -67,9 +67,9 @@
 #
 # release-jusha-* 组合示例：
 #   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist SERVER_HOST=192.168.40.221
-#   make release-jusha-business VERSION=0.9.4 JUSHA_ASR_PART_SIZE=2g OUTPUT_DIR=../ SERVER_HOST=192.168.40.221 DRY_RUN=1
-#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../ JUSHA_ASR_PART_SIZE=2g
-#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../ JUSHA_ASR_PART_SIZE=524288000
+#   make release-jusha-business VERSION=0.9.4 JUSHA_ASR_PART_SIZE=2g OUTPUT_DIR=../releases SERVER_HOST=192.168.40.221 DRY_RUN=1
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../releases JUSHA_ASR_PART_SIZE=2g
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../releases JUSHA_ASR_PART_SIZE=524288000
 
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)

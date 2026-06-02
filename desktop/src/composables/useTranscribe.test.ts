@@ -9,6 +9,7 @@ const authMocks = vi.hoisted(() => ({
       cleanup: vi.fn(),
     }
   }),
+  ensureMeetingWorkflowBinding: vi.fn(),
   ensureProductFeatures: vi.fn(),
   ensureRealtimeWorkflowBinding: vi.fn(),
 }))
@@ -58,6 +59,7 @@ const appStoreMocks = vi.hoisted(() => {
 vi.mock('@/utils/auth', () => ({
   authedFetch: authMocks.authedFetch,
   createTimeoutSignal: authMocks.createTimeoutSignal,
+  ensureMeetingWorkflowBinding: authMocks.ensureMeetingWorkflowBinding,
   ensureProductFeatures: authMocks.ensureProductFeatures,
   ensureRealtimeWorkflowBinding: authMocks.ensureRealtimeWorkflowBinding,
   readResponseEnvelope: async (response: Response) => response.json(),
@@ -116,6 +118,7 @@ describe('useTranscribe realtime persistence', () => {
   beforeEach(() => {
     authMocks.authedFetch.mockReset()
     authMocks.createTimeoutSignal.mockClear()
+    authMocks.ensureMeetingWorkflowBinding.mockReset().mockResolvedValue(null)
     authMocks.ensureProductFeatures.mockReset().mockResolvedValue(undefined)
     authMocks.ensureRealtimeWorkflowBinding.mockReset().mockResolvedValue(null)
 
@@ -187,5 +190,41 @@ describe('useTranscribe realtime persistence', () => {
     expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
     expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
     expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
+  })
+
+  it('does not inject or append realtime history while recording in meeting mode', async () => {
+    authMocks.authedFetch.mockResolvedValue(envelope({ text: '会议内容' }))
+    appStoreMocks.state.sceneMode = 'meeting'
+    appStoreMocks.state.meetingCapability = true
+    appStoreMocks.state.autoInject = true
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    for (let i = 0; i < 20; i++)
+      transcribe.handleChunk(createChunk(0))
+    await transcribe.stopAndFlush()
+
+    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    expect(injectorMocks.injectText).not.toHaveBeenCalled()
+    expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
+    expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
+    expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
+  })
+
+  it('sends the configured meeting workflow id when uploading desktop meeting recordings', async () => {
+    authMocks.authedFetch.mockResolvedValue(envelope({ text: '会议内容' }))
+    authMocks.ensureMeetingWorkflowBinding.mockResolvedValue(33)
+    appStoreMocks.state.sceneMode = 'meeting'
+    appStoreMocks.state.meetingCapability = true
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    for (let i = 0; i < 20; i++)
+      transcribe.handleChunk(createChunk(0))
+    await transcribe.stopAndFlush()
+
+    expect(authMocks.ensureMeetingWorkflowBinding).toHaveBeenCalled()
+    const [formData] = transcriptionMocks.uploadMeetingFromAudio.mock.calls[0]
+    expect(formData.get('workflow_id')).toBe('33')
   })
 })

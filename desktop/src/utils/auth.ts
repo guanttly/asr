@@ -260,7 +260,7 @@ export async function ensureProductFeatures(force = false): Promise<ProductFeatu
 export async function ensureRealtimeWorkflowBinding(force = false): Promise<number | null> {
   const appStore = useAppStore()
   if (!appStore.productFeaturesLoaded)
-		await ensureProductFeatures()
+    await ensureProductFeatures()
   if (!force && appStore.workflowBindingsLoaded)
     return appStore.realtimeWorkflowId
 
@@ -282,12 +282,39 @@ export async function ensureRealtimeWorkflowBinding(force = false): Promise<numb
   }
 }
 
+export async function ensureMeetingWorkflowBinding(force = false): Promise<number | null> {
+  const appStore = useAppStore()
+  if (!appStore.productFeaturesLoaded)
+    await ensureProductFeatures()
+  if (!appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING))
+    return null
+  if (!force && appStore.workflowBindingsLoaded)
+    return appStore.meetingWorkflowId
+
+  if (workflowBindingsPromise && !force) {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.meeting === 'number' ? bindings.meeting : null
+  }
+
+  workflowBindingsPromise = (async () => {
+    return await getCurrentUserWorkflowBindings()
+  })()
+
+  try {
+    const bindings = await workflowBindingsPromise
+    return typeof bindings?.meeting === 'number' ? bindings.meeting : null
+  }
+  finally {
+    workflowBindingsPromise = null
+  }
+}
+
 export async function ensureVoiceWorkflowBinding(force = false): Promise<number | null> {
   const appStore = useAppStore()
   if (!appStore.productFeaturesLoaded)
-		await ensureProductFeatures()
+    await ensureProductFeatures()
   if (!appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL))
-		return null
+    return null
   if (!force && appStore.workflowBindingsLoaded)
     return appStore.voiceWorkflowId
 

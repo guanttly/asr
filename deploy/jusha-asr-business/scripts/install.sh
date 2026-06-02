@@ -80,6 +80,135 @@ backup_optional_file() {
   cp "$SRC_PATH" "$DEST_PATH"
 }
 
+canonical_path() {
+  TARGET_PATH="$1"
+  if [ -d "$TARGET_PATH" ]; then
+    CDPATH= cd -- "$TARGET_PATH" && pwd -P
+    return 0
+  fi
+
+  TARGET_PARENT=$(dirname "$TARGET_PATH")
+  TARGET_NAME=$(basename "$TARGET_PATH")
+  if [ -d "$TARGET_PARENT" ]; then
+    PARENT_REAL=$(CDPATH= cd -- "$TARGET_PARENT" && pwd -P)
+    printf '%s/%s\n' "$PARENT_REAL" "$TARGET_NAME"
+    return 0
+  fi
+
+  printf '%s\n' "$TARGET_PATH"
+}
+
+container_mount_source() {
+  CONTAINER_NAME_VALUE="$1"
+  DESTINATION_PATH="$2"
+
+  docker inspect -f '{{range .Mounts}}{{.Destination}}{{printf "\t"}}{{.Source}}{{printf "\n"}}{{end}}' "$CONTAINER_NAME_VALUE" 2>/dev/null |
+    awk -F '\t' -v destination="$DESTINATION_PATH" '$1 == destination { print $2; exit }'
+}
+
+assert_existing_runtime_matches_install_dir() {
+  if [ "${ASR_INSTALL_ALLOW_RUNTIME_SWITCH:-0}" = "1" ]; then
+    echo "警告: 已设置 ASR_INSTALL_ALLOW_RUNTIME_SWITCH=1，跳过已有容器 runtime 挂载一致性检查。" >&2
+    return 0
+  fi
+
+  if ! docker container inspect "$ASR_CONTAINER_NAME" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for MOUNT_PAIR in \
+    "/var/lib/asr/mysql:runtime/mysql:MySQL 数据目录" \
+    "/var/lib/asr/uploads:runtime/uploads:上传文件目录" \
+    "/var/lib/asr/term-catalog:runtime/term-catalog:影像术语库目录"
+  do
+    CONTAINER_DEST=$(printf '%s\n' "$MOUNT_PAIR" | cut -d: -f1)
+    LOCAL_REL=$(printf '%s\n' "$MOUNT_PAIR" | cut -d: -f2)
+    LABEL=$(printf '%s\n' "$MOUNT_PAIR" | cut -d: -f3)
+    CURRENT_SOURCE=$(container_mount_source "$ASR_CONTAINER_NAME" "$CONTAINER_DEST" || true)
+    if [ -z "$CURRENT_SOURCE" ]; then
+      continue
+    fi
+
+    EXPECTED_SOURCE=$(canonical_path "$SCRIPT_DIR/$LOCAL_REL")
+    CURRENT_SOURCE_REAL=$(canonical_path "$CURRENT_SOURCE")
+    if [ "$CURRENT_SOURCE_REAL" = "$EXPECTED_SOURCE" ]; then
+      continue
+    fi
+
+    echo "检测到已有容器 $ASR_CONTAINER_NAME 使用的 ${LABEL} 不属于当前安装目录，已拒绝继续升级。" >&2
+    echo "  容器当前挂载: $CONTAINER_DEST -> $CURRENT_SOURCE_REAL" >&2
+    echo "  当前安装目录: $EXPECTED_SOURCE" >&2
+    echo "请在旧安装目录的父目录执行新的 .run，或设置 ASR_RUN_TARGET_DIR 指向旧安装目录的父目录。" >&2
+    echo "如果你已经完整迁移 runtime 数据并确认要切换目录，可显式设置 ASR_INSTALL_ALLOW_RUNTIME_SWITCH=1 后重试。" >&2
+    exit 1
+  done
+}
+
+path_has_content() {
+  TARGET_PATH="$1"
+  [ -d "$TARGET_PATH" ] && [ -n "$(find "$TARGET_PATH" -mindepth 1 -print -quit 2>/dev/null)" ]
+}
+
+backup_directory_archive() {
+  SRC_DIR="$1"
+  ARCHIVE_PATH="$2"
+  LABEL="$3"
+
+  if ! path_has_content "$SRC_DIR"; then
+    return 0
+  fi
+
+  SRC_PARENT=$(dirname "$SRC_DIR")
+  SRC_NAME=$(basename "$SRC_DIR")
+  if tar -czf "$ARCHIVE_PATH" -C "$SRC_PARENT" "$SRC_NAME"; then
+    echo "已备份 ${LABEL}: $ARCHIVE_PATH"
+    return 0
+  fi
+
+  echo "备份 ${LABEL} 失败: $SRC_DIR" >&2
+  return 1
+}
+
+backup_mysql_before_upgrade() {
+  if [ "${ASR_INSTALL_SKIP_DATA_BACKUP:-0}" = "1" ]; then
+    echo "警告: 已设置 ASR_INSTALL_SKIP_DATA_BACKUP=1，跳过升级前 MySQL 备份。" >&2
+    return 0
+  fi
+
+  if docker container inspect "$ASR_CONTAINER_NAME" >/dev/null 2>&1; then
+    CONTAINER_STATE=$(docker inspect -f '{{.State.Status}}' "$ASR_CONTAINER_NAME" 2>/dev/null || true)
+    if [ "$CONTAINER_STATE" = "running" ]; then
+      DUMP_PATH="$BACKUP_DIR/mysql-${ASR_MYSQL_DATABASE:-asr}.sql"
+      echo "正在备份 MySQL 数据库到: ${DUMP_PATH}.gz"
+      if docker exec "$ASR_CONTAINER_NAME" sh -lc 'mysqldump --single-transaction --quick --routines --triggers -uroot -p"$ASR_MYSQL_ROOT_PASSWORD" "$ASR_MYSQL_DATABASE"' > "$DUMP_PATH"; then
+        gzip -f "$DUMP_PATH"
+        return 0
+      fi
+      rm -f "$DUMP_PATH"
+      echo "MySQL 逻辑备份失败，已中止升级以保护现有数据。" >&2
+      echo "确认已有外部备份后，可设置 ASR_INSTALL_SKIP_DATA_BACKUP=1 强制跳过。" >&2
+      exit 1
+    fi
+  fi
+
+  if backup_directory_archive "$SCRIPT_DIR/runtime/mysql" "$BACKUP_DIR/runtime-mysql.tar.gz" "MySQL 数据目录"; then
+    return 0
+  fi
+
+  echo "MySQL 数据目录备份失败，已中止升级以保护现有数据。" >&2
+  echo "确认已有外部备份后，可设置 ASR_INSTALL_SKIP_DATA_BACKUP=1 强制跳过。" >&2
+  exit 1
+}
+
+backup_runtime_data_before_upgrade() {
+  backup_mysql_before_upgrade
+  if ! backup_directory_archive "$SCRIPT_DIR/runtime/term-catalog" "$BACKUP_DIR/runtime-term-catalog.tar.gz" "影像术语库目录"; then
+    echo "影像术语库目录备份失败，已中止升级以保护现有数据。" >&2
+    echo "确认已有外部备份后，可设置 ASR_INSTALL_SKIP_DATA_BACKUP=1 强制跳过。" >&2
+    exit 1
+  fi
+}
+
 detect_primary_ip() {
   if command -v hostname >/dev/null 2>&1; then
     hostname -I 2>/dev/null | awk '{print $1}'
@@ -691,6 +820,7 @@ ensure_docker_network_env
 . ./.env
 
 ASR_CONTAINER_NAME=${ASR_CONTAINER_NAME:-jusha-asr-business}
+assert_existing_runtime_matches_install_dir
 
 BACKUP_DIR="$SCRIPT_DIR/backups/$(date +%Y%m%d%H%M%S)"
 mkdir -p "$BACKUP_DIR"
@@ -704,6 +834,8 @@ CURRENT_IMAGE=""
 if docker container inspect "$ASR_CONTAINER_NAME" >/dev/null 2>&1; then
   CURRENT_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$ASR_CONTAINER_NAME" 2>/dev/null || true)
 fi
+
+backup_runtime_data_before_upgrade
 
 if [ ! -f "$IMAGE_ARCHIVE" ]; then
   echo "缺少离线镜像包: $IMAGE_ARCHIVE" >&2

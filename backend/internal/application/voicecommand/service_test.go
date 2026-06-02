@@ -235,14 +235,14 @@ func TestEnsureSeedDataUpgradesLegacyIntentKeys(t *testing.T) {
 	if meetingEntry.Intent != domain.IntentKeySceneMeetingSwitch {
 		t.Fatalf("expected legacy meeting intent upgraded, got %s", meetingEntry.Intent)
 	}
-	if len(reportEntry.Utterances) == 0 || len(meetingEntry.Utterances) == 0 {
-		t.Fatal("expected builtin utterances preserved during upgrade")
+	if len(reportEntry.Utterances) != 1 || reportEntry.Utterances[0] != "切到报告模式" || len(meetingEntry.Utterances) != 1 || meetingEntry.Utterances[0] != "切到会议模式" {
+		t.Fatalf("expected existing utterances preserved during upgrade, got report=%v meeting=%v", reportEntry.Utterances, meetingEntry.Utterances)
 	}
 	if _, ok := dicts.items[1]; !ok {
 		t.Fatal("expected builtin dict retained")
 	}
-	if dicts.items[1].Description == "旧说明" {
-		t.Fatal("expected builtin dict description reconciled")
+	if dicts.items[1].Description != "旧说明" {
+		t.Fatalf("expected existing dict description preserved, got %q", dicts.items[1].Description)
 	}
 	if !dicts.items[1].IsBase {
 		t.Fatal("expected builtin dict to remain base group")

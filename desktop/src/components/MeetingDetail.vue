@@ -7,6 +7,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useAppStore } from '@/stores/app'
 import { getMeetingDetail, regenerateMeetingSummary, updateMeeting, type MeetingDetailResponse } from '@/utils/meetings'
 import { debugLog } from '@/utils/debug'
+import { ensureMeetingWorkflowBinding } from '@/utils/auth'
 
 const props = defineProps<{ meetingId: number }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'deleted'): void; (e: 'saved'): void }>()
@@ -487,7 +488,10 @@ async function handleRegenerate() {
     return
   regenerating.value = true
   try {
-    await regenerateMeetingSummary(detail.value.id, detail.value.workflow_id ?? null)
+    const workflowId = detail.value.workflow_id ?? (
+      await ensureMeetingWorkflowBinding().catch(() => appStore.meetingWorkflowId)
+    )
+    await regenerateMeetingSummary(detail.value.id, workflowId)
     await load({ silent: true, resetDraft: true })
     summaryMode.value = 'preview'
   }

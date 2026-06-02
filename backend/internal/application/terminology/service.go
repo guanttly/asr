@@ -33,27 +33,6 @@ const (
 	maxBatchImportEntries                 = 5000
 )
 
-// deprecatedNonMedicalSeeds lists historical seed dictionaries that were shipped
-// before this project was scoped to the medical domain. They are removed on
-// first boot regardless of user-added content because the product no longer
-// supports non-medical scenes.
-var deprecatedNonMedicalSeeds = []struct {
-	Name   string
-	Domain string
-}{
-	{Name: "庭审记录", Domain: "法律"},
-	{Name: "会议纪要", Domain: "办公"},
-}
-
-var deprecatedDefaultSceneSeeds = []struct {
-	Name   string
-	Domain string
-}{
-	{Name: "写报告", Domain: "医疗"},
-	{Name: "医疗查房", Domain: "医疗"},
-	{Name: "检验报告", Domain: "医疗检验"},
-}
-
 // NewService creates a new terminology application service.
 func NewService(
 	dictRepo domain.DictRepository,
@@ -413,7 +392,8 @@ func (s *Service) ClearRules(ctx context.Context, dictID uint64) (int, error) {
 	return len(rules), nil
 }
 
-// EnsureSeedData creates default terminology dictionaries and scene rules.
+// EnsureSeedData creates default terminology dictionaries only for an empty
+// installation. Existing dictionaries are always treated as user data.
 func (s *Service) EnsureSeedData(ctx context.Context) error {
 	if err := s.removeLegacyNonMedicalSeeds(ctx); err != nil {
 		return err
@@ -421,16 +401,16 @@ func (s *Service) EnsureSeedData(ctx context.Context) error {
 	if err := s.removeDeprecatedDefaultSceneSeeds(ctx); err != nil {
 		return err
 	}
-	if err := s.ensureSeedDictionaries(ctx); err != nil {
+	createdDefaults, err := s.ensureSeedDictionaries(ctx)
+	if err != nil {
 		return err
 	}
-	return s.ensureDefaultRules(ctx)
+	return s.ensureDefaultRules(ctx, createdDefaults)
 }
 
-// removeLegacyNonMedicalSeeds drops the historical 庭审记录/会议纪要 seed dictionaries
-// (entries + rules + dict row) on first boot after the medical refocus. Matching
-// is by exact name+domain to avoid touching unrelated user dictionaries that
-// happen to reuse the same display name.
+// removeLegacyNonMedicalSeeds used to delete historical 庭审记录/会议纪要 seed
+// dictionaries. It now only records the transition state; data deletion requires
+// an explicit operator action.
 func (s *Service) removeLegacyNonMedicalSeeds(ctx context.Context) error {
 	cleaned, err := s.seedRepo.IsSeeded(ctx, terminologyLegacyNonMedicalCleanupKey)
 	if err != nil {
@@ -440,23 +420,12 @@ func (s *Service) removeLegacyNonMedicalSeeds(ctx context.Context) error {
 		return nil
 	}
 
-	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
-	if err != nil {
-		return err
-	}
-
-	for _, dict := range dicts {
-		if !isDeprecatedNonMedicalSeed(dict.Name, dict.Domain) {
-			continue
-		}
-		if err := s.deleteDictCascade(ctx, dict.ID); err != nil {
-			return err
-		}
-	}
-
 	return s.seedRepo.MarkSeeded(ctx, terminologyLegacyNonMedicalCleanupKey)
 }
 
+// removeDeprecatedDefaultSceneSeeds keeps old default dictionaries untouched.
+// They may have been edited by users before this version, so startup must not
+// remove them by display name.
 func (s *Service) removeDeprecatedDefaultSceneSeeds(ctx context.Context) error {
 	cleaned, err := s.seedRepo.IsSeeded(ctx, terminologyDefaultSceneCleanupKey)
 	if err != nil {
@@ -466,84 +435,30 @@ func (s *Service) removeDeprecatedDefaultSceneSeeds(ctx context.Context) error {
 		return nil
 	}
 
-	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
-	if err != nil {
-		return err
-	}
-
-	for _, dict := range dicts {
-		if !isDeprecatedDefaultSceneSeed(dict.Name, dict.Domain) {
-			continue
-		}
-		if err := s.deleteDictCascade(ctx, dict.ID); err != nil {
-			return err
-		}
-	}
-
 	return s.seedRepo.MarkSeeded(ctx, terminologyDefaultSceneCleanupKey)
 }
 
-func (s *Service) deleteDictCascade(ctx context.Context, dictID uint64) error {
-	entries, err := s.entryRepo.ListByDict(ctx, dictID)
-	if err != nil {
-		return err
-	}
-	for i := range entries {
-		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
-			return err
-		}
-	}
-	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
-	if err != nil {
-		return err
-	}
-	for i := range rules {
-		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
-			return err
-		}
-	}
-	return s.dictRepo.Delete(ctx, dictID)
-}
-
-func isDeprecatedNonMedicalSeed(name, domain string) bool {
-	for _, seed := range deprecatedNonMedicalSeeds {
-		if seed.Name == name && seed.Domain == domain {
-			return true
-		}
-	}
-	return false
-}
-
-func isDeprecatedDefaultSceneSeed(name, domain string) bool {
-	for _, seed := range deprecatedDefaultSceneSeeds {
-		if seed.Name == name && seed.Domain == domain {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) ensureSeedDictionaries(ctx context.Context) error {
+func (s *Service) ensureSeedDictionaries(ctx context.Context) (bool, error) {
 	seeded, err := s.seedRepo.IsSeeded(ctx, terminologySeedStateKey)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if seeded {
-		return nil
+		return false, nil
 	}
 
 	existing, total, err := s.dictRepo.List(ctx, 0, 1)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if total > 0 || len(existing) > 0 {
-		return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
+		return false, s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
 	}
 
 	for _, seed := range defaultTerminologySeeds() {
 		dict := &domain.TermDict{Name: seed.Name, Domain: seed.Domain, RuleProcessingEnabled: true, TextReplacementEnabled: true}
 		if err := s.dictRepo.Create(ctx, dict); err != nil {
-			return err
+			return false, err
 		}
 
 		entries := make([]domain.TermEntry, len(seed.Entries))
@@ -553,21 +468,24 @@ func (s *Service) ensureSeedDictionaries(ctx context.Context) error {
 		}
 		if len(entries) > 0 {
 			if err := s.entryRepo.BatchCreate(ctx, entries); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
 
-	return s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
+	return true, s.seedRepo.MarkSeeded(ctx, terminologySeedStateKey)
 }
 
-func (s *Service) ensureDefaultRules(ctx context.Context) error {
+func (s *Service) ensureDefaultRules(ctx context.Context, allowSeedMutation bool) error {
 	seeded, err := s.seedRepo.IsSeeded(ctx, terminologyDefaultRuleSeedStateKey)
 	if err != nil {
 		return err
 	}
 	if seeded {
 		return nil
+	}
+	if !allowSeedMutation {
+		return s.seedRepo.MarkSeeded(ctx, terminologyDefaultRuleSeedStateKey)
 	}
 
 	dicts, _, err := s.dictRepo.List(ctx, 0, terminologySeedDictionaryListLimit)
@@ -592,9 +510,6 @@ func (s *Service) ensureDefaultRules(ctx context.Context) error {
 		}
 
 		if err := s.ensureSeedEntries(ctx, dict.ID, seed.Entries); err != nil {
-			return err
-		}
-		if err := s.removeDeprecatedLiteralSeedRules(ctx, dict.ID); err != nil {
 			return err
 		}
 		if err := s.ensureSeedRules(ctx, dict.ID, seed.Rules); err != nil {
@@ -631,41 +546,6 @@ func (s *Service) ensureSeedEntries(ctx context.Context, dictID uint64, entries 
 		return nil
 	}
 	return s.entryRepo.BatchCreate(ctx, pending)
-}
-
-func (s *Service) removeDeprecatedLiteralSeedRules(ctx context.Context, dictID uint64) error {
-	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
-	if err != nil {
-		return err
-	}
-	for _, rule := range rules {
-		if rule.MatchType != domain.RuleMatchLiteral {
-			continue
-		}
-		replacement := deprecatedSeedLiteralReplacement(rule.Pattern)
-		if replacement == "" || replacement != rule.Replacement {
-			continue
-		}
-		if err := s.ruleRepo.Delete(ctx, rule.ID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func deprecatedSeedLiteralReplacement(pattern string) string {
-	switch pattern {
-	case "舒张亚":
-		return "舒张压"
-	case "关状动脉":
-		return "冠状动脉"
-	case "被告银":
-		return "被告人"
-	case "合一庭":
-		return "合议庭"
-	default:
-		return ""
-	}
 }
 
 func (s *Service) ensureSeedRules(ctx context.Context, dictID uint64, seedRules []domain.CorrectionRule) error {

@@ -25,6 +25,11 @@ const (
 	maxPasswordLength    = 128
 	maxDisplayNameLength = 128
 	deviceUsernamePrefix = "device_"
+
+	defaultBatchWorkflowName    = "批量转写整理"
+	defaultRealtimeWorkflowName = "实时转写整理"
+	defaultMeetingWorkflowName  = "会议纪要工作流"
+	defaultVoiceWorkflowName    = "语音控制工作流"
 )
 
 type ValidationError struct {
@@ -316,6 +321,124 @@ func (s *Service) EnsureAdmin(ctx context.Context, username, password, displayNa
 		return nil
 	}
 	return err
+}
+
+// EnsureBuiltinWorkflowBindings fills empty bootstrap-admin workflow bindings
+// with the built-in system workflow templates.
+func (s *Service) EnsureBuiltinWorkflowBindings(ctx context.Context, username string) error {
+	if s.workflowRepo == nil {
+		return nil
+	}
+
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil
+	}
+
+	user, err := s.userRepo.GetByUsername(ctx, username)
+	if err != nil {
+		return err
+	}
+	if user.Role != domain.RoleAdmin {
+		return errors.New("bootstrap username exists but is not admin")
+	}
+
+	bindings, err := s.userRepo.GetWorkflowBindings(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	if bindings == nil {
+		bindings = &domain.WorkflowBindings{UserID: user.ID}
+	}
+	bindings.UserID = user.ID
+
+	defaults, err := s.builtinDefaultWorkflowBindings(ctx)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	changed = setMissingWorkflowBinding(&bindings.RealtimeWorkflowID, defaults.RealtimeWorkflowID) || changed
+	changed = setMissingWorkflowBinding(&bindings.BatchWorkflowID, defaults.BatchWorkflowID) || changed
+	changed = setMissingWorkflowBinding(&bindings.MeetingWorkflowID, defaults.MeetingWorkflowID) || changed
+	changed = setMissingWorkflowBinding(&bindings.VoiceWorkflowID, defaults.VoiceWorkflowID) || changed
+	if !changed {
+		return nil
+	}
+
+	return s.userRepo.SaveWorkflowBindings(ctx, bindings)
+}
+
+func (s *Service) builtinDefaultWorkflowBindings(ctx context.Context) (*domain.WorkflowBindings, error) {
+	sysType := wfdomain.OwnerSystem
+	workflows, _, err := s.workflowRepo.List(ctx, &sysType, nil, true, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var defaults domain.WorkflowBindings
+	fallbacks := make(map[wfdomain.WorkflowType]uint64)
+	for _, workflow := range workflows {
+		if workflow == nil || workflow.ID == 0 {
+			continue
+		}
+		switch strings.TrimSpace(workflow.Name) {
+		case defaultRealtimeWorkflowName:
+			if defaults.RealtimeWorkflowID == nil {
+				defaults.RealtimeWorkflowID = uint64Ptr(workflow.ID)
+			}
+		case defaultBatchWorkflowName:
+			if defaults.BatchWorkflowID == nil {
+				defaults.BatchWorkflowID = uint64Ptr(workflow.ID)
+			}
+		case defaultMeetingWorkflowName:
+			if defaults.MeetingWorkflowID == nil {
+				defaults.MeetingWorkflowID = uint64Ptr(workflow.ID)
+			}
+		case defaultVoiceWorkflowName:
+			if defaults.VoiceWorkflowID == nil {
+				defaults.VoiceWorkflowID = uint64Ptr(workflow.ID)
+			}
+		}
+
+		if workflow.IsLegacy || workflow.WorkflowType == "" {
+			continue
+		}
+		if _, ok := fallbacks[workflow.WorkflowType]; !ok {
+			fallbacks[workflow.WorkflowType] = workflow.ID
+		}
+	}
+
+	if defaults.RealtimeWorkflowID == nil {
+		defaults.RealtimeWorkflowID = uint64Ptr(fallbacks[wfdomain.WorkflowTypeRealtime])
+	}
+	if defaults.BatchWorkflowID == nil {
+		defaults.BatchWorkflowID = uint64Ptr(fallbacks[wfdomain.WorkflowTypeBatch])
+	}
+	if defaults.MeetingWorkflowID == nil {
+		defaults.MeetingWorkflowID = uint64Ptr(fallbacks[wfdomain.WorkflowTypeMeeting])
+	}
+	if defaults.VoiceWorkflowID == nil {
+		defaults.VoiceWorkflowID = uint64Ptr(fallbacks[wfdomain.WorkflowTypeVoice])
+	}
+
+	return &defaults, nil
+}
+
+func setMissingWorkflowBinding(target **uint64, fallback *uint64) bool {
+	if *target != nil || fallback == nil || *fallback == 0 {
+		return false
+	}
+	value := *fallback
+	*target = &value
+	return true
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }
 
 func loadAllUsers(ctx context.Context, repo domain.UserRepository) ([]*domain.User, error) {

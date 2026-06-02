@@ -22,8 +22,8 @@
 
 1. 打包脚本现在可以自动把桌面端安装包打入 runtime/downloads。
 2. 打包时可直接传服务器 IP、HTTP 端口和管理员密码，生成预配置 `.env`。
-3. 发布产物除了 `.tar.gz`，还会额外输出一个可直接执行的 `.run` 一键安装包。
-4. 如果是最终交付，优先使用 `.run`；服务器上执行 `bash jusha-asr-business-<version>.run` 即可自动解包并安装。
+3. 发布产物默认输出 `.run` 启动脚本和 `.run.partNNN` 分包；如设置 `ASR_RELEASE_KEEP_ARCHIVE=1`，会额外保留 `.tar.gz`。
+4. 如果是最终交付，请把 `.run` 和所有 `.run.partNNN` 放在同一目录；服务器上执行 `bash jusha-asr-business-<version>.run` 即可自动解包并安装。
 
 ## 下载页说明
 
@@ -45,13 +45,16 @@
 
 ## 离线发布包
 
-- 执行 deploy/jusha-asr-business/scripts/build-release.sh 会输出完整离线发布目录、tar.gz 压缩包和 `.run` 一键安装包。
+- 执行 deploy/jusha-asr-business/scripts/build-release.sh 会输出完整离线发布目录、`.run` 启动脚本和 `.run.partNNN` 分包；`.tar.gz` 中间压缩包默认会在分包后删除，可用 `ASR_RELEASE_KEEP_ARCHIVE=1` 保留。
+- 如果在部署服务器本机打包，请使用独立输出目录（例如 `/data/ganttly/releases`），不要把输出目录设为正在运行的 `jusha-asr-business` 安装目录或它的父目录中会覆盖安装目录的位置；打包脚本会拒绝覆盖正在运行容器的安装目录。
 - 发布包内包含 docker-compose.yml、install.sh、uninstall.sh、.env、.env.example、.release-manifest、runtime 目录和离线镜像包。
 - 发布包解压后的根目录固定为 jusha-asr-business，便于新版本直接覆盖到同一路径后执行升级。
 - 目标服务器解压后执行 install.sh 或 install.sh upgrade，即可自动 load 镜像并启动或原地升级服务。
-- 如果直接执行 `.run` 文件，会自动解包到当前目录并执行 install.sh。
+- 如果直接执行 `.run` 文件，会自动解包到当前目录并执行 install.sh。升级时请在旧安装目录的父目录执行，保证目标仍是原来的 `jusha-asr-business` 目录；如果需要指定父目录，请设置 `ASR_RUN_TARGET_DIR=/path/to/parent`。
 - 如果在已有 `jusha-asr-business` 目录上再次执行新的 `.run`，安装包会先解包到临时目录，再同步到现有目录：保留现有 `.env`、runtime/mysql、runtime/uploads、runtime/tmp、runtime/term-catalog 和已有证书，同时刷新 docker-compose.yml、安装脚本、离线镜像包与 runtime/downloads，并清理旧版本残留的发布文件。
-- 这样既能避免 MySQL 数据目录因属主为容器用户而在覆盖解包时触发 tar 报错，也能确保升级后实际运行的是新版本 compose 和下载资源；install.sh 会额外备份当前 .env 与 compose 文件。
+- install.sh 会检查已有容器的 runtime/mysql、runtime/uploads、runtime/term-catalog 挂载来源是否属于当前安装目录；如果在新目录误执行升级，会拒绝继续，避免容器切到空 MySQL 数据目录导致工作流、术语库等数据看似丢失。
+- install.sh 在升级前会备份当前 `.env`、compose、证书、MySQL 数据和 runtime/term-catalog 到 `backups/<timestamp>/`。运行中的容器会优先生成 MySQL 逻辑备份 `mysql-<dbname>.sql.gz`；停机状态则备份 runtime/mysql 目录归档。
+- 这样既能避免 MySQL 数据目录因属主为容器用户而在覆盖解包时触发 tar 报错，也能确保升级后实际运行的是新版本 compose 和下载资源。
 - install.sh 默认使用共享 Docker 网络 `jusha-asr`。如果该网络已存在，会复用已有网段；如果不存在，会在启动前检查宿主机 IPv4 路由和已有 Docker 网络，自动选择未占用的 Docker 内部网段并创建该网络。
 - install.sh 会等待容器健康检查通过；如果升级后服务未通过健康检查，脚本会尝试回滚到上一版镜像。
 - install.sh 完成后会输出当前证书的 SAN、推荐访问地址，以及 Windows Chrome/Edge 与 Firefox 的自签证书导入提示。

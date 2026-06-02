@@ -209,6 +209,10 @@ func main() {
 		log.Fatal(err)
 	}
 	logger.Info("workflow seed templates ensured")
+	if err := userService.EnsureBuiltinWorkflowBindings(context.Background(), cfg.Bootstrap.AdminUsername); err != nil {
+		log.Fatal(err)
+	}
+	logger.Info("builtin workflow bindings ensured", zap.String("username", cfg.Bootstrap.AdminUsername))
 	openPlatformService := appopenplatform.NewService(
 		persistence.NewOpenAppRepo(db),
 		persistence.NewOpenSkillRepo(db),

@@ -1,22 +1,15 @@
 -- 014_remove_legacy_nonmedical_seeds.sql
--- 删除产品聚焦医学领域前内置的"庭审记录"与"会议纪要"种子词典及其所有条目/规则。
--- 注:实际清理也由 backend/internal/application/terminology/service.go::removeLegacyNonMedicalSeeds
--- 在启动时执行一次。本 SQL 仅作为离线/手动运维入口。
+-- Historical note:
+-- Earlier builds used this migration as an operator helper to delete the
+-- factory "庭审记录"/"会议纪要" terminology dictionaries. That is unsafe during
+-- upgrades because the schema cannot distinguish untouched factory data from
+-- user-customized dictionaries with the same name.
+--
+-- This file is intentionally non-destructive. If cleanup is needed, first
+-- export/backup the database, inspect matching rows manually, and delete only
+-- records confirmed to be disposable factory data.
 
-DELETE FROM correction_rules
-WHERE dict_id IN (
-  SELECT id FROM term_dicts
-  WHERE (name = '庭审记录' AND domain = '法律')
-     OR (name = '会议纪要' AND domain = '办公')
-);
-
-DELETE FROM term_entries
-WHERE dict_id IN (
-  SELECT id FROM term_dicts
-  WHERE (name = '庭审记录' AND domain = '法律')
-     OR (name = '会议纪要' AND domain = '办公')
-);
-
-DELETE FROM term_dicts
+SELECT id, name, domain
+FROM term_dicts
 WHERE (name = '庭审记录' AND domain = '法律')
    OR (name = '会议纪要' AND domain = '办公');

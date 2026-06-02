@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAppStore } from '@/stores/app'
-import { authedFetch, ensureAnonymousLogin } from './auth'
+import { authedFetch, ensureAnonymousLogin, ensureMeetingWorkflowBinding } from './auth'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -89,5 +89,39 @@ describe('desktop anonymous auth flow', () => {
     expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('Authorization')).toBe('Bearer jwt-2')
     expect(appStore.token).toBe('jwt-2')
     expect(appStore.username).toBe('anon-machine-001')
+  })
+
+  it('loads the meeting workflow binding after product features are known', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(envelope({
+        edition: 'advanced',
+        capabilities: {
+          realtime: true,
+          batch: true,
+          meeting: true,
+          voiceprint: false,
+          voice_control: false,
+        },
+      }))
+      .mockResolvedValueOnce(envelope({
+        realtime: 11,
+        meeting: 33,
+        voice_control: null,
+      }))
+
+    const appStore = useAppStore()
+    appStore.serverUrl = 'http://127.0.0.1:10010'
+    appStore.token = 'jwt-current'
+    appStore.username = 'anon-current'
+
+    const workflowId = await ensureMeetingWorkflowBinding(true)
+
+    expect(workflowId).toBe(33)
+    expect(appStore.meetingWorkflowId).toBe(33)
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:10010/api/admin/app-settings/product-features',
+      'http://127.0.0.1:10010/api/admin/me/workflow-bindings',
+    ])
   })
 })

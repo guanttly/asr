@@ -37,6 +37,7 @@ DESKTOP_CARGO_TOML_OWNER=""
 DESKTOP_CARGO_LOCK_OWNER=""
 DESKTOP_ELECTRON_PACKAGE_OWNER=""
 OUTPUT_OWNER=""
+BUILD_WORK_ROOT=""
 PART_SIZE="${ASR_RELEASE_PART_SIZE:-${JUSHA_ASR_PART_SIZE:-500m}}"
 KEEP_ARCHIVE="${ASR_RELEASE_KEEP_ARCHIVE:-${JUSHA_ASR_KEEP_ARCHIVE:-0}}"
 AUTO_INSTALL_RUST="${ASR_RELEASE_AUTO_INSTALL_RUST:-1}"
@@ -569,6 +570,95 @@ reset_staging_dir() {
   rm -rf "$TARGET_PATH"
 }
 
+canonical_path() {
+  TARGET_PATH="$1"
+  if [ -d "$TARGET_PATH" ]; then
+    CDPATH= cd -- "$TARGET_PATH" && pwd -P
+    return 0
+  fi
+
+  TARGET_PARENT=$(dirname "$TARGET_PATH")
+  TARGET_NAME=$(basename "$TARGET_PATH")
+  if [ -d "$TARGET_PARENT" ]; then
+    PARENT_REAL=$(CDPATH= cd -- "$TARGET_PARENT" && pwd -P)
+    printf '%s/%s\n' "$PARENT_REAL" "$TARGET_NAME"
+    return 0
+  fi
+
+  printf '%s\n' "$TARGET_PATH"
+}
+
+active_install_root_from_mount() {
+  SOURCE_PATH="$1"
+  case "$SOURCE_PATH" in
+    */runtime/*)
+      dirname "$(dirname "$SOURCE_PATH")"
+      ;;
+    */runtime)
+      dirname "$SOURCE_PATH"
+      ;;
+    *)
+      printf '%s\n' "$SOURCE_PATH"
+      ;;
+  esac
+}
+
+find_active_install_conflict() {
+  CHECK_PATH_REAL=$(canonical_path "$1")
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  docker ps -q 2>/dev/null | while read -r CID; do
+    [ -n "$CID" ] || continue
+    CONTAINER_NAME=$(docker inspect -f '{{.Name}}' "$CID" 2>/dev/null | sed 's#^/##' || true)
+    docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$CID" 2>/dev/null | while read -r SOURCE_PATH; do
+      [ -n "$SOURCE_PATH" ] || continue
+      case "$SOURCE_PATH" in
+        */runtime|*/runtime/*)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+
+      INSTALL_ROOT=$(active_install_root_from_mount "$SOURCE_PATH")
+      INSTALL_ROOT_REAL=$(canonical_path "$INSTALL_ROOT")
+      if [ "$CHECK_PATH_REAL" = "$INSTALL_ROOT_REAL" ]; then
+        printf '%s uses %s (install root %s)\n' "$CONTAINER_NAME" "$SOURCE_PATH" "$INSTALL_ROOT_REAL"
+        exit 0
+      fi
+    done
+  done | head -n 1
+}
+
+assert_not_active_install_output() {
+  TARGET_PATH="$1"
+
+  if [ "${ASR_RELEASE_ALLOW_ACTIVE_INSTALL_OUTPUT:-0}" = "1" ]; then
+    return 0
+  fi
+
+  CONFLICT=$(find_active_install_conflict "$TARGET_PATH" || true)
+  if [ -n "$CONFLICT" ]; then
+    echo "发布输出路径指向正在运行容器的安装目录，已拒绝继续: $TARGET_PATH" >&2
+    echo "检测到活动挂载: $CONFLICT" >&2
+    echo "请改用独立输出目录，例如 OUTPUT_DIR=/data/ganttly/releases；如需升级，请使用生成的 .run 和 .run.partNNN 文件安装。" >&2
+    echo "若你确认要覆盖该活动目录，可设置 ASR_RELEASE_ALLOW_ACTIVE_INSTALL_OUTPUT=1 强制执行。" >&2
+    exit 1
+  fi
+}
+
+publish_staging_dir() {
+  SOURCE_DIR="$1"
+  TARGET_DIR="$2"
+
+  assert_not_active_install_output "$TARGET_DIR"
+  reset_staging_dir "$TARGET_DIR"
+  mv "$SOURCE_DIR" "$TARGET_DIR"
+}
+
 restore_desktop_version_files() {
   if [ -z "${DESKTOP_VERSION_BACKUP_DIR:-}" ] || [ ! -d "$DESKTOP_VERSION_BACKUP_DIR" ]; then
     return 0
@@ -992,6 +1082,9 @@ EOF
 cleanup_on_exit() {
   restore_desktop_version_files
   restore_desktop_electron_version_file
+  if [ -n "${BUILD_WORK_ROOT:-}" ] && [ -d "$BUILD_WORK_ROOT" ]; then
+    rm -rf "$BUILD_WORK_ROOT"
+  fi
 }
 
 trap cleanup_on_exit EXIT HUP INT TERM
@@ -1130,7 +1223,7 @@ fi
 IMAGE_TAG="jusha-asr-business:$VERSION"
 PACKAGE_ROOT_NAME="jusha-asr-business"
 PACKAGE_NAME="${PACKAGE_ROOT_NAME}-${VERSION}"
-STAGING_DIR="$OUTPUT_ROOT/$PACKAGE_ROOT_NAME"
+PUBLISHED_STAGING_DIR="$OUTPUT_ROOT/$PACKAGE_ROOT_NAME"
 ARCHIVE_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.tar.gz"
 RUN_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.run"
 # 发行包默认优先走 HTTPS，自签证书场景由桌面客户端放宽校验；
@@ -1138,8 +1231,12 @@ RUN_PATH="$OUTPUT_ROOT/$PACKAGE_NAME.run"
 DEFAULT_CLIENT_URL=$(build_https_origin "$SERVER_HOST" "$HTTPS_PORT")
 DEFAULT_CLIENT_FALLBACK_URL=$(build_http_origin "$SERVER_HOST" "$HTTP_PORT")
 TLS_ALT_NAMES=$(build_tls_alt_names "$SERVER_HOST")
+mkdir -p "$OUTPUT_ROOT"
 OUTPUT_OWNER=$(resolve_path_owner "$OUTPUT_ROOT")
 
+assert_not_active_install_output "$OUTPUT_ROOT"
+assert_not_active_install_output "$PUBLISHED_STAGING_DIR"
+ensure_output_owner_matches_current_user "$PUBLISHED_STAGING_DIR"
 ensure_output_owner_matches_current_user "$ARCHIVE_PATH"
 ensure_output_owner_matches_current_user "$RUN_PATH"
 for EXISTING_PART in "$RUN_PATH".part[0-9][0-9][0-9]*; do
@@ -1147,7 +1244,8 @@ for EXISTING_PART in "$RUN_PATH".part[0-9][0-9][0-9]*; do
   ensure_output_owner_matches_current_user "$EXISTING_PART"
 done
 
-reset_staging_dir "$STAGING_DIR"
+BUILD_WORK_ROOT=$(mktemp -d "$OUTPUT_ROOT/.${PACKAGE_NAME}.staging.XXXXXX")
+STAGING_DIR="$BUILD_WORK_ROOT/$PACKAGE_ROOT_NAME"
 mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog"
 
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
@@ -1158,7 +1256,7 @@ chmod +x "$STAGING_DIR/install.sh"
 chmod +x "$STAGING_DIR/uninstall.sh"
 
 cat > "$STAGING_DIR/.env" <<EOF
-ASR_RELEASE_IMAGE=jusha-asr-business:latest
+ASR_RELEASE_IMAGE=$IMAGE_TAG
 ASR_RELEASE_VERSION=$VERSION
 ASR_CONTAINER_NAME=jusha-asr-business
 ASR_DOCKER_NETWORK_NAME=jusha-asr
@@ -1186,7 +1284,7 @@ cp "$STAGING_DIR/.env" "$STAGING_DIR/.env.example"
 
 cat > "$STAGING_DIR/.release-manifest" <<EOF
 RELEASE_VERSION=$VERSION
-RELEASE_IMAGE=jusha-asr-business:latest
+RELEASE_IMAGE=$IMAGE_TAG
 EOF
 
 DESKTOP_INSTALLER_PATH=""
@@ -1275,12 +1373,16 @@ fi
 rm -f "$ARCHIVE_PATH"
 rm -f "$RUN_PATH"
 rm -f "$RUN_PATH".part[0-9][0-9][0-9]*
-tar -czf "$ARCHIVE_PATH" -C "$OUTPUT_ROOT" "$PACKAGE_ROOT_NAME"
+tar -czf "$ARCHIVE_PATH" -C "$BUILD_WORK_ROOT" "$PACKAGE_ROOT_NAME"
 create_self_extract_run "$RUN_PATH" "$ARCHIVE_PATH"
 if [ "$KEEP_ARCHIVE" != "1" ]; then
   rm -f "$ARCHIVE_PATH"
 fi
-maybe_restore_tree_owner "$OUTPUT_OWNER" "$STAGING_DIR"
+publish_staging_dir "$STAGING_DIR" "$PUBLISHED_STAGING_DIR"
+rmdir "$BUILD_WORK_ROOT" 2>/dev/null || true
+BUILD_WORK_ROOT=""
+STAGING_DIR="$PUBLISHED_STAGING_DIR"
+maybe_restore_tree_owner "$OUTPUT_OWNER" "$PUBLISHED_STAGING_DIR"
 maybe_restore_owner "$OUTPUT_OWNER" "$ARCHIVE_PATH"
 maybe_restore_owner "$OUTPUT_OWNER" "$RUN_PATH"
 for PART_PATH in "$RUN_PATH".part[0-9][0-9][0-9]*; do
@@ -1288,7 +1390,7 @@ for PART_PATH in "$RUN_PATH".part[0-9][0-9][0-9]*; do
   maybe_restore_owner "$OUTPUT_OWNER" "$PART_PATH"
 done
 
-echo "发布目录: $STAGING_DIR"
+echo "发布目录: $PUBLISHED_STAGING_DIR"
 echo "一键安装包: $RUN_PATH"
 echo "分包文件: $RUN_PATH.part001 ..."
 if [ "$KEEP_ARCHIVE" = "1" ]; then

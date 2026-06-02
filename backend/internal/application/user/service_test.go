@@ -141,7 +141,8 @@ func TestCreateUserValidatesLengthRangesAndTrimsUsername(t *testing.T) {
 }
 
 type workflowRepoStub struct {
-	items map[uint64]*wfdomain.Workflow
+	items  map[uint64]*wfdomain.Workflow
+	listed []*wfdomain.Workflow
 }
 
 func (r *workflowRepoStub) Create(_ context.Context, _ *wfdomain.Workflow) error { return nil }
@@ -155,7 +156,7 @@ func (r *workflowRepoStub) GetByID(_ context.Context, id uint64) (*wfdomain.Work
 func (r *workflowRepoStub) Update(_ context.Context, _ *wfdomain.Workflow) error { return nil }
 func (r *workflowRepoStub) Delete(_ context.Context, _ uint64) error             { return nil }
 func (r *workflowRepoStub) List(_ context.Context, _ *wfdomain.OwnerType, _ *uint64, _ bool, _, _ int) ([]*wfdomain.Workflow, int64, error) {
-	return nil, 0, nil
+	return r.listed, int64(len(r.listed)), nil
 }
 func (r *workflowRepoStub) ListFiltered(_ context.Context, _ *wfdomain.OwnerType, _ *uint64, _ bool, _ wfdomain.WorkflowListFilter, _, _ int) ([]*wfdomain.Workflow, int64, error) {
 	return nil, 0, nil
@@ -281,6 +282,43 @@ func TestUpdateWorkflowBindingsRejectsIncompatibleWorkflowType(t *testing.T) {
 	}
 	if userRepo.saved != nil {
 		t.Fatalf("did not expect repository save on validation failure, got %#v", userRepo.saved)
+	}
+}
+
+func TestEnsureBuiltinWorkflowBindingsFillsMissingAdminBindings(t *testing.T) {
+	batchID := uint64(99)
+	userRepo := &userRepoStub{
+		user: &userdomain.User{ID: 1, Username: "admin", Role: userdomain.RoleAdmin},
+		bindings: &userdomain.WorkflowBindings{
+			UserID:          1,
+			BatchWorkflowID: &batchID,
+		},
+	}
+	workflowRepo := &workflowRepoStub{listed: []*wfdomain.Workflow{
+		{ID: 11, Name: defaultRealtimeWorkflowName, WorkflowType: wfdomain.WorkflowTypeRealtime, OwnerType: wfdomain.OwnerSystem, IsPublished: true},
+		{ID: 12, Name: defaultBatchWorkflowName, WorkflowType: wfdomain.WorkflowTypeBatch, OwnerType: wfdomain.OwnerSystem, IsPublished: true},
+		{ID: 13, Name: defaultMeetingWorkflowName, WorkflowType: wfdomain.WorkflowTypeMeeting, OwnerType: wfdomain.OwnerSystem, IsPublished: true},
+		{ID: 14, Name: defaultVoiceWorkflowName, WorkflowType: wfdomain.WorkflowTypeVoice, OwnerType: wfdomain.OwnerSystem, IsPublished: true},
+	}}
+	service := NewService(userRepo, workflowRepo)
+
+	if err := service.EnsureBuiltinWorkflowBindings(context.Background(), "admin"); err != nil {
+		t.Fatalf("EnsureBuiltinWorkflowBindings returned error: %v", err)
+	}
+	if userRepo.saved == nil {
+		t.Fatal("expected workflow bindings to be saved")
+	}
+	if userRepo.saved.RealtimeWorkflowID == nil || *userRepo.saved.RealtimeWorkflowID != 11 {
+		t.Fatalf("expected realtime binding to use built-in workflow 11, got %#v", userRepo.saved)
+	}
+	if userRepo.saved.BatchWorkflowID == nil || *userRepo.saved.BatchWorkflowID != batchID {
+		t.Fatalf("expected existing batch binding to be preserved, got %#v", userRepo.saved)
+	}
+	if userRepo.saved.MeetingWorkflowID == nil || *userRepo.saved.MeetingWorkflowID != 13 {
+		t.Fatalf("expected meeting binding to use built-in workflow 13, got %#v", userRepo.saved)
+	}
+	if userRepo.saved.VoiceWorkflowID == nil || *userRepo.saved.VoiceWorkflowID != 14 {
+		t.Fatalf("expected voice binding to use built-in workflow 14, got %#v", userRepo.saved)
 	}
 }
 

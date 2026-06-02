@@ -3,7 +3,7 @@ import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
-import { authedFetch, createTimeoutSignal, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
+import { authedFetch, createTimeoutSignal, ensureMeetingWorkflowBinding, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
 
@@ -300,6 +300,15 @@ export function useTranscribe() {
 
             sessionRecognizedTexts.push(rawText)
 
+            if (appStore.sceneMode !== SCENE_MODES.REPORT) {
+              lastError.value = ''
+              await debugLog('transcribe.upload', 'skip report write path outside report scene', {
+                scene: appStore.sceneMode,
+                text: rawText,
+              })
+              continue
+            }
+
             const text = await applyRealtimeWorkflow(rawText)
             if (!text || !hasContent(text)) {
               await debugLog('transcribe.workflow', 'workflow produced empty segment text', { rawText })
@@ -484,13 +493,16 @@ export function useTranscribe() {
       formData.append('file', createWav(sessionAudioChunks, `meeting-session-${Date.now()}.wav`))
       const meetingTitle = `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`
       formData.append('title', meetingTitle)
-      if (appStore.meetingWorkflowId != null)
-        formData.append('workflow_id', String(appStore.meetingWorkflowId))
+      const meetingWorkflowId = await ensureMeetingWorkflowBinding()
+        .catch(() => appStore.meetingWorkflowId)
+      if (meetingWorkflowId != null)
+        formData.append('workflow_id', String(meetingWorkflowId))
       const result = await uploadMeetingFromAudio(formData)
       await debugLog('transcribe.session', 'created meeting from desktop session', {
         meetingId: result?.meeting?.id,
         duration,
         segmentCount: sessionRecognizedTexts.length,
+        workflowId: meetingWorkflowId,
       })
     }
     catch (error) {

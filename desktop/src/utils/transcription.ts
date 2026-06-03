@@ -155,3 +155,104 @@ export async function uploadMeetingFromAudio(payload: FormData) {
     throw new Error(envelope.message || '会议录音上传失败')
   return envelope.data || null
 }
+
+export interface MeetingChunkUploadFields {
+  filename: string
+  title?: string
+  workflow_id?: number | string
+  language?: string
+}
+
+// MEETING_CHUNK_SIZE keeps every chunk request comfortably below the backend
+// and nginx single-request limits so arbitrarily long meetings can be uploaded.
+const MEETING_CHUNK_SIZE = 8 * 1024 * 1024
+
+// MEETING_DIRECT_UPLOAD_LIMIT is the largest file we still upload in a single
+// multipart request; larger files switch to the chunked protocol.
+export const MEETING_DIRECT_UPLOAD_LIMIT = 150 * 1024 * 1024
+
+async function initMeetingChunkUpload(fields: MeetingChunkUploadFields): Promise<string> {
+  const form = new FormData()
+  form.append('filename', fields.filename)
+  if (fields.title != null)
+    form.append('title', fields.title)
+  if (fields.workflow_id != null)
+    form.append('workflow_id', String(fields.workflow_id))
+  if (fields.language != null)
+    form.append('language', fields.language)
+  const response = await authedFetch('/api/meetings/upload/init', {
+    method: 'POST',
+    body: form,
+  })
+  const envelope = await readResponseEnvelope<{ upload_id?: string }>(response)
+  if (!response.ok || !envelope.data?.upload_id)
+    throw new Error(envelope.message || '初始化会议上传失败')
+  return envelope.data.upload_id
+}
+
+async function appendMeetingChunk(uploadId: string, index: number, chunk: Blob): Promise<void> {
+  const response = await authedFetch(`/api/meetings/upload/chunk?upload_id=${encodeURIComponent(uploadId)}&index=${index}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+    },
+    body: chunk,
+  })
+  if (!response.ok) {
+    const envelope = await readResponseEnvelope(response)
+    throw new Error(envelope.message || '会议分片上传失败')
+  }
+}
+
+async function completeMeetingChunkUpload(uploadId: string) {
+  const response = await authedFetch(`/api/meetings/upload/complete?upload_id=${encodeURIComponent(uploadId)}`, {
+    method: 'POST',
+  })
+  const envelope = await readResponseEnvelope<{
+    meeting?: { id: number, title?: string, status?: string }
+    audio_url?: string
+    filename?: string
+  }>(response)
+  if (!response.ok)
+    throw new Error(envelope.message || '会议录音上传失败')
+  return envelope.data || null
+}
+
+async function abortMeetingChunkUpload(uploadId: string): Promise<void> {
+  try {
+    await authedFetch(`/api/meetings/upload/abort?upload_id=${encodeURIComponent(uploadId)}`, {
+      method: 'POST',
+    })
+  }
+  catch {
+    // best-effort cleanup; ignore failures
+  }
+}
+
+// uploadMeetingFromAudioChunked uploads a (potentially very large) meeting
+// recording by splitting it into sequential chunks. The backend reassembles the
+// chunks on disk and then creates the meeting.
+export async function uploadMeetingFromAudioChunked(
+  file: File,
+  fields: Omit<MeetingChunkUploadFields, 'filename'>,
+  onProgress?: (uploaded: number, total: number) => void,
+) {
+  const uploadId = await initMeetingChunkUpload({ ...fields, filename: file.name })
+  try {
+    const total = file.size
+    let offset = 0
+    let index = 0
+    while (offset < total) {
+      const end = Math.min(offset + MEETING_CHUNK_SIZE, total)
+      await appendMeetingChunk(uploadId, index, file.slice(offset, end))
+      offset = end
+      index += 1
+      onProgress?.(offset, total)
+    }
+    return await completeMeetingChunkUpload(uploadId)
+  }
+  catch (error) {
+    await abortMeetingChunkUpload(uploadId)
+    throw error
+  }
+}

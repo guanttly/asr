@@ -28,6 +28,7 @@ import (
 	"github.com/lgt/asr/internal/interfaces/middleware"
 	wsapi "github.com/lgt/asr/internal/interfaces/ws"
 	pkgconfig "github.com/lgt/asr/pkg/config"
+	"github.com/lgt/asr/pkg/logging"
 	"go.uber.org/zap"
 
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
@@ -334,13 +335,13 @@ func startMeetingSyncLoop(logger *zap.Logger, service *appmeeting.Service, inter
 }
 
 func main() {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-
 	cfg, err := pkgconfig.Load("configs/config.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	logger := logging.New(cfg.Log.Level)
+	defer logger.Sync()
 
 	db, err := persistence.NewMySQL(cfg.Database, logger)
 	if err != nil {
@@ -442,7 +443,7 @@ func main() {
 	protected := router.Group("/api", middleware.AuthRequired(cfg.JWT.Secret))
 	productFeatures := cfg.Product.Features()
 	api.NewASRHandler(asrService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/asr"))
-	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, productFeatures).Register(protected.Group("/meetings"))
+	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, cfg.Upload.MaxChunkSizeMB, cfg.Upload.MaxSessionSizeMB, productFeatures).Register(protected.Group("/meetings"))
 	api.NewVoiceprintHandler(voiceprintService, cfg.Upload.MaxAudioSizeMB, productFeatures).Register(protected.Group("/meetings/voiceprints"))
 	router.GET("/ws/events", middleware.AuthRequired(cfg.JWT.Secret), businessHub.Handle)
 

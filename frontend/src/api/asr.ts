@@ -17,6 +17,7 @@ export interface GetTranscriptionTasksParams {
   offset?: number
   limit?: number
   type?: TranscriptionTaskType
+  scope?: 'all'
 }
 
 export function createTranscriptionTask(payload: CreateTranscriptionTaskPayload) {

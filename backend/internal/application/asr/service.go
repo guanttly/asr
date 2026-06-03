@@ -446,9 +446,28 @@ func (s *Service) GetTask(ctx context.Context, userID, id uint64) (*TaskResponse
 	return ToResponse(task), nil
 }
 
+// GetTaskAdmin returns a task without user ownership filtering (admin scope).
+func (s *Service) GetTaskAdmin(ctx context.Context, id uint64) (*TaskResponse, error) {
+	task, err := s.resolveTask(ctx, 0, id, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return ToResponse(task), nil
+}
+
 // DeleteTask removes a finished transcription task from the user's history.
 func (s *Service) DeleteTask(ctx context.Context, userID, id uint64) error {
-	task, err := s.getOwnedTask(ctx, userID, id)
+	return s.deleteTaskInternal(ctx, userID, id, false)
+}
+
+// DeleteTaskAdmin removes a finished transcription task regardless of owner (admin scope).
+func (s *Service) DeleteTaskAdmin(ctx context.Context, id uint64) error {
+	return s.deleteTaskInternal(ctx, 0, id, true)
+}
+
+func (s *Service) deleteTaskInternal(ctx context.Context, userID, id uint64, allowAny bool) error {
+	task, err := s.resolveTask(ctx, userID, id, allowAny)
 	if err != nil {
 		return err
 	}
@@ -556,7 +575,16 @@ func (s *Service) SyncTask(ctx context.Context, userID, id uint64) (*TaskRespons
 
 // ResumeTaskPostProcessFromFailure continues a failed batch workflow from the failed node.
 func (s *Service) ResumeTaskPostProcessFromFailure(ctx context.Context, userID, id uint64) (*TaskResponse, error) {
-	task, err := s.getOwnedTask(ctx, userID, id)
+	return s.resumeTaskPostProcessInternal(ctx, userID, id, false)
+}
+
+// ResumeTaskPostProcessFromFailureAdmin resumes a failed batch workflow regardless of owner (admin scope).
+func (s *Service) ResumeTaskPostProcessFromFailureAdmin(ctx context.Context, id uint64) (*TaskResponse, error) {
+	return s.resumeTaskPostProcessInternal(ctx, 0, id, true)
+}
+
+func (s *Service) resumeTaskPostProcessInternal(ctx context.Context, userID, id uint64, allowAny bool) (*TaskResponse, error) {
+	task, err := s.resolveTask(ctx, userID, id, allowAny)
 	if err != nil {
 		return nil, err
 	}
@@ -632,6 +660,21 @@ func (s *Service) SyncPendingTasks(ctx context.Context, limit int) (*BatchSyncSu
 // ListTasks returns a paginated list of tasks for a user.
 func (s *Service) ListTasks(ctx context.Context, userID uint64, taskType *domain.TaskType, offset, limit int) (*TaskListResponse, error) {
 	tasks, total, err := s.taskRepo.ListByUser(ctx, userID, taskType, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*TaskResponse, len(tasks))
+	for i, task := range tasks {
+		items[i] = ToResponse(task)
+	}
+
+	return &TaskListResponse{Items: items, Total: total}, nil
+}
+
+// ListAllTasks returns a paginated list of tasks across all users (admin scope).
+func (s *Service) ListAllTasks(ctx context.Context, taskType *domain.TaskType, offset, limit int) (*TaskListResponse, error) {
+	tasks, total, err := s.taskRepo.List(ctx, taskType, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -907,6 +950,10 @@ func toRetryPostProcessRecord(result *RetryPostProcessResponse) *domain.RetryPos
 }
 
 func (s *Service) getOwnedTask(ctx context.Context, userID, id uint64) (*domain.TranscriptionTask, error) {
+	return s.resolveTask(ctx, userID, id, false)
+}
+
+func (s *Service) resolveTask(ctx context.Context, userID, id uint64, allowAny bool) (*domain.TranscriptionTask, error) {
 	task, err := s.taskRepo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -914,7 +961,7 @@ func (s *Service) getOwnedTask(ctx context.Context, userID, id uint64) (*domain.
 		}
 		return nil, ErrTaskNotFound
 	}
-	if task.UserID != userID {
+	if !allowAny && task.UserID != userID {
 		return nil, ErrTaskNotFound
 	}
 	return task, nil

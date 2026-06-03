@@ -1,5 +1,9 @@
 app_name: asr
 
+# 日志级别：debug / info / warn / error。心跳与健康检查请求不会写访问日志。
+log:
+  level: info
+
 server:
   host: 0.0.0.0
   port: 10010
@@ -45,6 +49,10 @@ upload:
   dir: uploads
   public_base_url: http://localhost:10010
   max_audio_size_mb: 200
+  # 分片上传单片大小上限（MB），用于会议长录音分片上传，需 <= nginx client_max_body_size。
+  max_chunk_size_mb: 8
+  # 分片上传整段会话音频大小上限（MB），默认约 4GB，足够覆盖整夜录音。
+  max_session_size_mb: 4096
 
 download:
   dir: downloads
@@ -56,6 +64,8 @@ download:
 catalog:
   dir: ""
 
+# 网关上游地址。容器部署时需显式指向各服务容器名。
+# 若留空，则自动按 server.*_api_port 推导为 http://127.0.0.1:<port>。
 gateway:
   asr_api: http://asr-api:10011
   admin_api: http://admin-api:10012

@@ -177,6 +177,37 @@ func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, taskType *doma
 	return tasks, total, nil
 }
 
+// List returns a paginated list of tasks across all users (admin scope).
+func (r *TaskRepo) List(ctx context.Context, taskType *domain.TaskType, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
+	var models []TaskModel
+	var total int64
+	q := r.db.WithContext(ctx).Model(&TaskModel{})
+	if taskType != nil {
+		q = q.Where("type = ?", string(*taskType))
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := q.Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&models).Error; err != nil {
+		return nil, 0, err
+	}
+	latestFinalTexts, err := r.latestFinalTextsByTaskIDs(ctx, models)
+	if err != nil {
+		return nil, 0, err
+	}
+	tasks := make([]*domain.TranscriptionTask, len(models))
+	for i := range models {
+		tasks[i] = r.toDomain(&models[i])
+		if finalText, ok := latestFinalTexts[models[i].ID]; ok {
+			tasks[i].LatestFinalText = finalText
+		}
+	}
+	return tasks, total, nil
+}
+
 type latestExecutionTextRow struct {
 	TriggerID string         `gorm:"column:trigger_id"`
 	FinalText sql.NullString `gorm:"column:final_text"`

@@ -11,17 +11,18 @@ import (
 	api "github.com/lgt/asr/internal/interfaces/api"
 	"github.com/lgt/asr/internal/interfaces/middleware"
 	pkgconfig "github.com/lgt/asr/pkg/config"
+	"github.com/lgt/asr/pkg/logging"
 	"go.uber.org/zap"
 )
 
 func main() {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-
 	cfg, err := pkgconfig.Load("configs/config.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	logger := logging.New(cfg.Log.Level)
+	defer logger.Sync()
 
 	db, err := persistence.NewMySQL(cfg.Database, logger)
 	if err != nil {

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { PRODUCT_API_CAPABILITY_KEYS, PRODUCT_CAPABILITY_KEYS, PRODUCT_EDITIONS } from '@/constants/product'
 import { useAppStore } from '@/stores/app'
 import { buildServerCandidates, describeNetworkError, normalizeServerUrl } from './server'
+import { validateDeviceAlias } from './settingsValidation'
 
 interface ApiEnvelope<T> {
   code: number
@@ -148,12 +149,14 @@ export async function ensureAnonymousLogin(force = false): Promise<AuthUser> {
   anonymousLoginPromise = (async () => {
     appStore.serverUrl = normalizeServerUrl(appStore.serverUrl)
     const identity = await getMachineIdentity()
+    const aliasValidation = validateDeviceAlias(appStore.deviceAlias)
+    const safeAlias = aliasValidation.valid ? aliasValidation.value : ''
     const response = await fetchWithServerFallback('/api/admin/auth/anonymous-login', {
       method: 'POST',
       headers: mergeHeaders(undefined, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         machine_code: identity.machine_code,
-        display_name: appStore.deviceAlias.trim(),
+        display_name: safeAlias,
         hostname: identity.hostname,
         platform: identity.platform,
         ip_addresses: identity.ip_addresses,

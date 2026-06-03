@@ -7,7 +7,7 @@ import { useAudioRecorder } from '@/composables/useAudioRecorder'
 import { useInputBridge, type InputBridgeStateView, type InputBridgeTargetView } from '@/composables/useInputBridge'
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore, type SceneMode } from '@/stores/app'
-import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer, updateProfile } from '@/utils/auth'
+import { ensureAnonymousLogin, ensureProductFeatures, ensureRealtimeWorkflowBinding, getCurrentUser, getMachineIdentity, pingServer } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
 import { HOTKEY_ACTIONS, HOTKEY_ACTION_DEFINITIONS, HOTKEY_MOUSE_BUTTONS, cloneHotkeyBindings, findConflictingHotkeyAction, formatHotkeyBinding, formatHotkeySyncFailureMessage, normalizeHotkeyBinding, replaceHotkeyBindings, serializeHotkeyBindings, type HotkeyActionId, type HotkeyBinding } from '@/utils/hotkeys'
 import { MAX_DEVICE_ALIAS_LENGTH, MAX_SERVER_URL_LENGTH, validateDeviceAlias, validateServerAddressInput } from '@/utils/settingsValidation'
@@ -400,6 +400,15 @@ async function syncIdentityAndLogin(forceLogin = false) {
   try {
     if (!prepareServerUrlForAction())
       return
+    if (forceLogin) {
+      const aliasValidation = validateDeviceAlias(appStore.deviceAlias)
+      if (!aliasValidation.valid) {
+        setAuthMessage('error', aliasValidation.message)
+        deviceAliasInputRef.value?.focus()
+        return
+      }
+      appStore.deviceAlias = aliasValidation.value
+    }
     await debugLog('settings.auth', 'starting identity sync', { forceLogin, serverUrl: appStore.serverUrl })
     await getMachineIdentity()
     if (forceLogin || !appStore.token.trim())
@@ -408,6 +417,8 @@ async function syncIdentityAndLogin(forceLogin = false) {
       await getCurrentUser().catch(async () => await ensureAnonymousLogin(true))
     await ensureProductFeatures(true)
     await ensureRealtimeWorkflowBinding(true)
+    if (forceLogin)
+      savedDeviceAlias.value = appStore.deviceAlias.trim()
     setAuthMessage('success', '服务连接正常，已完成匿名登录')
     await debugLog('settings.auth', 'identity sync completed', { username: appStore.username, machineCode: appStore.machineCode, realtimeWorkflowId: appStore.realtimeWorkflowId })
   }
@@ -432,34 +443,6 @@ async function verifyServer() {
   catch (error) {
     setAuthMessage('error', error instanceof Error ? error.message : '服务校验失败')
     void debugLog('settings.error', 'server health check failed', error instanceof Error ? { message: error.message, stack: error.stack } : error)
-  }
-  finally {
-    authLoading.value = false
-  }
-}
-
-async function saveAlias() {
-  authLoading.value = true
-  const previousAlias = savedDeviceAlias.value || appStore.displayName || ''
-  try {
-    const validation = validateDeviceAlias(appStore.deviceAlias)
-    if (!validation.valid) {
-      setAuthMessage('error', validation.message)
-      deviceAliasInputRef.value?.focus()
-      return
-    }
-    const alias = validation.value
-    appStore.deviceAlias = alias
-    await updateProfile(alias)
-    savedDeviceAlias.value = alias
-    setAuthMessage('success', '设置已保存')
-    await debugLog('settings.profile', 'device alias updated', { alias })
-  }
-  catch (error) {
-    if (previousAlias)
-      appStore.deviceAlias = previousAlias
-    setAuthMessage('error', error instanceof Error ? error.message : '保存别名失败')
-    void debugLog('settings.error', 'device alias update failed', error instanceof Error ? { message: error.message, stack: error.stack } : error)
   }
   finally {
     authLoading.value = false
@@ -535,9 +518,6 @@ onBeforeUnmount(() => {
       <div class="field action-row">
         <button class="action-btn primary" :disabled="authLoading" @click="syncIdentityAndLogin(true)">连接并登录</button>
         <button class="action-btn" :disabled="authLoading" @click="verifyServer">校验服务</button>
-      </div>
-      <div class="field action-row">
-        <button class="action-btn" :disabled="authLoading" @click="saveAlias">保存别名</button>
       </div>
       <div class="identity-grid">
         <div class="identity-card">

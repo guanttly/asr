@@ -15,6 +15,7 @@ import (
 	appaudio "github.com/lgt/asr/internal/application/audio"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	domainasr "github.com/lgt/asr/internal/domain/asr"
+	userdomain "github.com/lgt/asr/internal/domain/user"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/infrastructure/asrengine"
 	"github.com/lgt/asr/internal/interfaces/middleware"
@@ -431,6 +432,10 @@ func (h *ASRHandler) CreateTask(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func requesterIsAdmin(c *gin.Context) bool {
+	return middleware.RoleFromContext(c) == string(userdomain.RoleAdmin)
+}
+
 func (h *ASRHandler) ListTasks(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -441,7 +446,12 @@ func (h *ASRHandler) ListTasks(c *gin.Context) {
 	}
 	userID := middleware.UserIDFromContext(c)
 
-	result, err := h.service.ListTasks(c.Request.Context(), userID, taskType, offset, limit)
+	var result *appasr.TaskListResponse
+	if c.Query("scope") == "all" && requesterIsAdmin(c) {
+		result, err = h.service.ListAllTasks(c.Request.Context(), taskType, offset, limit)
+	} else {
+		result, err = h.service.ListTasks(c.Request.Context(), userID, taskType, offset, limit)
+	}
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
@@ -475,7 +485,12 @@ func (h *ASRHandler) GetTask(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	result, err := h.service.GetTask(c.Request.Context(), userID, id)
+	var result *appasr.TaskResponse
+	if requesterIsAdmin(c) {
+		result, err = h.service.GetTaskAdmin(c.Request.Context(), id)
+	} else {
+		result, err = h.service.GetTask(c.Request.Context(), userID, id)
+	}
 	if err != nil {
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
 		return
@@ -492,7 +507,11 @@ func (h *ASRHandler) DeleteTask(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	err = h.service.DeleteTask(c.Request.Context(), userID, id)
+	if requesterIsAdmin(c) {
+		err = h.service.DeleteTaskAdmin(c.Request.Context(), id)
+	} else {
+		err = h.service.DeleteTask(c.Request.Context(), userID, id)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, appasr.ErrTaskDeleteNotAllowed):
@@ -516,7 +535,12 @@ func (h *ASRHandler) SyncTask(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	result, err := h.service.SyncTask(c.Request.Context(), userID, id)
+	var result *appasr.TaskResponse
+	if requesterIsAdmin(c) {
+		result, err = h.service.AdminSyncTask(c.Request.Context(), id)
+	} else {
+		result, err = h.service.SyncTask(c.Request.Context(), userID, id)
+	}
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
@@ -533,7 +557,12 @@ func (h *ASRHandler) ResumeTaskPostProcess(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	result, err := h.service.ResumeTaskPostProcessFromFailure(c.Request.Context(), userID, id)
+	var result *appasr.TaskResponse
+	if requesterIsAdmin(c) {
+		result, err = h.service.ResumeTaskPostProcessFromFailureAdmin(c.Request.Context(), id)
+	} else {
+		result, err = h.service.ResumeTaskPostProcessFromFailure(c.Request.Context(), userID, id)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, appasr.ErrTaskResumeNotAllowed):
@@ -557,7 +586,12 @@ func (h *ASRHandler) ListTaskExecutions(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
-	if _, err := h.service.GetTask(c.Request.Context(), userID, id); err != nil {
+	if requesterIsAdmin(c) {
+		if _, err := h.service.GetTaskAdmin(c.Request.Context(), id); err != nil {
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+			return
+		}
+	} else if _, err := h.service.GetTask(c.Request.Context(), userID, id); err != nil {
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
 		return
 	}

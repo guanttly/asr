@@ -92,6 +92,27 @@ func (r *taskRepoHandlerStub) ListByUser(_ context.Context, userID uint64, taskT
 	return items[offset:end], int64(len(items)), nil
 }
 
+func (r *taskRepoHandlerStub) List(_ context.Context, taskType *domainasr.TaskType, offset, limit int) ([]*domainasr.TranscriptionTask, int64, error) {
+	items := make([]*domainasr.TranscriptionTask, 0, len(r.tasks))
+	for _, task := range r.tasks {
+		if taskType != nil && task.Type != *taskType {
+			continue
+		}
+		items = append(items, cloneTaskForHandler(task))
+	}
+	if offset >= len(items) {
+		return []*domainasr.TranscriptionTask{}, int64(len(items)), nil
+	}
+	if limit <= 0 {
+		limit = len(items)
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], int64(len(items)), nil
+}
+
 func (r *taskRepoHandlerStub) ListSyncCandidates(_ context.Context, _ int) ([]*domainasr.TranscriptionTask, error) {
 	panic("unexpected ListSyncCandidates call")
 }

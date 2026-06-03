@@ -28,23 +28,25 @@ type MeetingHandler struct {
 	uploadDir      string
 	publicBaseURL  string
 	maxAudioSizeMB int64
+	chunkUpload    *meetingChunkUploader
 	feature        featureGate
 }
 
 // NewMeetingHandler creates a meeting handler.
-func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadDir, publicBaseURL string, maxAudioSizeMB int64, features pkgconfig.ProductFeatures) *MeetingHandler {
+func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadDir, publicBaseURL string, maxAudioSizeMB, maxChunkSizeMB, maxSessionSizeMB int64, features pkgconfig.ProductFeatures) *MeetingHandler {
 	if strings.TrimSpace(uploadDir) == "" {
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
 		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
-	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB, feature: newFeatureGate(features)}
+	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB, chunkUpload: newMeetingChunkUploader(maxChunkSizeMB, maxSessionSizeMB), feature: newFeatureGate(features)}
 }
 
 // Register registers meeting routes.
 func (h *MeetingHandler) Register(group *gin.RouterGroup) {
 	group.POST("/upload", h.Upload)
+	h.RegisterChunkUpload(group)
 	group.POST("", h.Create)
 	group.GET("", h.List)
 	group.GET("/:id", h.Detail)
@@ -65,26 +67,10 @@ func (h *MeetingHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
+	workflowID, err := parseMeetingWorkflowID(c.PostForm("workflow_id"))
 	if err != nil {
 		_ = os.Remove(audioFile.AbsolutePath)
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
-		return
-	}
-
-	var workflowID *uint64
-	if rawWorkflowID := strings.TrimSpace(c.PostForm("workflow_id")); rawWorkflowID != "" {
-		parsed, err := strconv.ParseUint(rawWorkflowID, 10, 64)
-		if err != nil {
-			_ = os.Remove(audioFile.AbsolutePath)
-			response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow_id")
-			return
-		}
-		workflowID = &parsed
-	}
-	if err := h.validateMeetingWorkflow(c.Request.Context(), workflowID); err != nil {
-		_ = os.Remove(audioFile.AbsolutePath)
-		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, "invalid workflow_id")
 		return
 	}
 	language, _, _, err := parseASROptions(c)
@@ -94,9 +80,41 @@ func (h *MeetingHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	userID := middleware.UserIDFromContext(c)
 	title := strings.TrimSpace(c.PostForm("title"))
-	if title == "" {
+	h.finalizeMeetingUpload(c, audioFile, title, workflowID, language)
+}
+
+// parseMeetingWorkflowID parses an optional workflow id form value.
+func parseMeetingWorkflowID(raw string) (*uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+// finalizeMeetingUpload validates the stored audio and creates the meeting. It
+// is shared by the single-shot multipart upload and the chunked upload flow.
+func (h *MeetingHandler) finalizeMeetingUpload(c *gin.Context, audioFile *storedAudioFile, title string, workflowID *uint64, language string) {
+	audioURL, err := buildUploadedFileURL(c, h.publicBaseURL, audioFile.RelativePath)
+	if err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+
+	if err := h.validateMeetingWorkflow(c.Request.Context(), workflowID); err != nil {
+		_ = os.Remove(audioFile.AbsolutePath)
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
+		return
+	}
+
+	userID := middleware.UserIDFromContext(c)
+	if strings.TrimSpace(title) == "" {
 		title = strings.TrimSpace(strings.TrimSuffix(audioFile.OriginalFilename, filepath.Ext(audioFile.OriginalFilename)))
 	}
 	result, err := h.audioService.CreateMeetingFromAudio(c.Request.Context(), userID, appaudio.CreateMeetingRequest{

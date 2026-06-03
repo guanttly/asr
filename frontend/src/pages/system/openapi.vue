@@ -768,7 +768,7 @@ watch(activeTab, (tab) => {
 
     <template v-else>
       <NCard class="card-main flex flex-col min-h-0 flex-1" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
-        <NTabs v-model:value="activeTab" type="line" animated class="flex-1 min-h-0 flex flex-col">
+        <NTabs v-model:value="activeTab" type="line" animated class="openapi-tabs flex-1 min-h-0 flex flex-col">
           <NTabPane name="apps" tab="应用管理" display-directive="show">
             <template #tab>
               应用管理
@@ -1093,6 +1093,14 @@ watch(activeTab, (tab) => {
 </template>
 
 <style scoped>
+.openapi-tabs :deep(.n-tabs-content),
+.openapi-tabs :deep(.n-tab-pane) {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
 .docs-layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);

@@ -327,18 +327,58 @@ function findMetaInsertIndex(lines: string[]) {
   return 0
 }
 
+type MetaLineStyle = 'plain' | 'em' | 'strong'
+
+function splitMetaLeadingMarker(line: string): { marker: string, rest: string } {
+  const match = line.match(/^(\s*(?:[-*]\s+)?)/)
+  const marker = match ? match[1] : ''
+  return { marker, rest: line.slice(marker.length) }
+}
+
+function detectMetaLineStyle(line: string): { marker: string, style: MetaLineStyle } {
+  const { marker, rest } = splitMetaLeadingMarker(line)
+  const colonIndex = rest.search(/[：:]/)
+  const labelRegion = colonIndex >= 0 ? rest.slice(0, colonIndex) : rest
+  if (/\*\*|__/.test(labelRegion))
+    return { marker, style: 'strong' }
+  if (/[*_]/.test(labelRegion))
+    return { marker, style: 'em' }
+  return { marker, style: 'plain' }
+}
+
+function buildMetaLine(field: typeof MEETING_META_FIELDS[number], value: string, marker: string, style: MetaLineStyle) {
+  if (style === 'strong')
+    return `${marker}**${field.label}：** ${value}`
+  if (style === 'em')
+    return `${marker}*${field.label}：* ${value}`
+  return `${marker}${field.label}： ${value}`
+}
+
+function findSiblingMetaStyle(lines: string[]): { marker: string, style: MetaLineStyle } | null {
+  for (const line of lines) {
+    if (MEETING_META_FIELDS.some(field => isMetaLine(line, field)))
+      return detectMetaLineStyle(line)
+  }
+  return null
+}
+
 function setMarkdownField(content: string, field: typeof MEETING_META_FIELDS[number], rawValue: string) {
   const value = rawValue.trim() || field.placeholder
   const lines = content.split(/\r?\n/)
   const existingIndex = lines.findIndex(line => isMetaLine(line, field))
   if (existingIndex >= 0) {
-    lines[existingIndex] = `${field.label}： ${value}`
+    // Preserve the original line's markup (list marker + emphasis) so updating a
+    // field never downgrades the body's styling or produces a mismatched header.
+    const { marker, style } = detectMetaLineStyle(lines[existingIndex])
+    lines[existingIndex] = buildMetaLine(field, value, marker, style)
     return lines.join('\n')
   }
   if (!rawValue.trim())
     return content
+  // New line: follow the style of any sibling meta line so the header stays consistent.
+  const sibling = findSiblingMetaStyle(lines)
   const insertIndex = findMetaInsertIndex(lines)
-  lines.splice(insertIndex, 0, `${field.label}： ${value}`)
+  lines.splice(insertIndex, 0, buildMetaLine(field, value, sibling?.marker ?? '', sibling?.style ?? 'plain'))
   return lines.join('\n')
 }
 
@@ -715,7 +755,7 @@ onBeforeUnmount(() => {
                       maxlength="128"
                       spellcheck="false"
                       :placeholder="field.placeholder"
-                      @input="syncMetaFieldToDraft(field.key)"
+                      @change="syncMetaFieldToDraft(field.key)"
                     >
                   </label>
                 </div>

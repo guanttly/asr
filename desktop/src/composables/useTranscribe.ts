@@ -5,7 +5,7 @@ import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
 import { authedFetch, createTimeoutSignal, ensureMeetingWorkflowBinding, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
-import { createRealtimeTranscriptionTask, uploadMeetingFromAudio, uploadRealtimeSessionTask } from '@/utils/transcription'
+import { createRealtimeTranscriptionTask, MEETING_DIRECT_UPLOAD_LIMIT, uploadMeetingFromAudio, uploadMeetingFromAudioChunked, uploadRealtimeSessionTask } from '@/utils/transcription'
 
 const TARGET_SAMPLE_RATE = 16000
 const CHUNK_MS = 200
@@ -489,18 +489,36 @@ export function useTranscribe() {
         })
         return
       }
-      const formData = new FormData()
-      formData.append('file', createWav(sessionAudioChunks, `meeting-session-${Date.now()}.wav`))
+      const wavFile = createWav(sessionAudioChunks, `meeting-session-${Date.now()}.wav`)
       const meetingTitle = `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`
-      formData.append('title', meetingTitle)
       const meetingWorkflowId = await ensureMeetingWorkflowBinding()
         .catch(() => appStore.meetingWorkflowId)
-      if (meetingWorkflowId != null)
-        formData.append('workflow_id', String(meetingWorkflowId))
-      const result = await uploadMeetingFromAudio(formData)
+
+      let result: Awaited<ReturnType<typeof uploadMeetingFromAudio>>
+      if (wavFile.size > MEETING_DIRECT_UPLOAD_LIMIT) {
+        // Long recordings exceed the single-request size limits of nginx and the
+        // backend, so upload them in sequential chunks.
+        await debugLog('transcribe.session', 'meeting recording large, using chunked upload', {
+          bytes: wavFile.size,
+          duration,
+        })
+        result = await uploadMeetingFromAudioChunked(wavFile, {
+          title: meetingTitle,
+          workflow_id: meetingWorkflowId ?? undefined,
+        })
+      }
+      else {
+        const formData = new FormData()
+        formData.append('file', wavFile)
+        formData.append('title', meetingTitle)
+        if (meetingWorkflowId != null)
+          formData.append('workflow_id', String(meetingWorkflowId))
+        result = await uploadMeetingFromAudio(formData)
+      }
       await debugLog('transcribe.session', 'created meeting from desktop session', {
         meetingId: result?.meeting?.id,
         duration,
+        bytes: wavFile.size,
         segmentCount: sessionRecognizedTexts.length,
         workflowId: meetingWorkflowId,
       })

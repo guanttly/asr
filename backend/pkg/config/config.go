@@ -10,6 +10,7 @@ import (
 // Config is the shared runtime configuration for all backend apps.
 type Config struct {
 	AppName      string             `mapstructure:"app_name"`
+	Log          LogConfig          `mapstructure:"log"`
 	Server       ServerConfig       `mapstructure:"server"`
 	Database     DatabaseConfig     `mapstructure:"database"`
 	JWT          JWTConfig          `mapstructure:"jwt"`
@@ -23,6 +24,12 @@ type Config struct {
 	RulesCatalog RulesCatalogConfig `mapstructure:"rules_catalog"`
 	Gateway      GatewayConfig      `mapstructure:"gateway"`
 	Legacy       LegacyConfig       `mapstructure:"legacy"`
+}
+
+// LogConfig controls structured logging behaviour shared by all apps.
+type LogConfig struct {
+	// Level is the minimum level to emit: debug, info, warn, error.
+	Level string `mapstructure:"level"`
 }
 
 // ServerConfig describes HTTP server settings.
@@ -209,6 +216,10 @@ type UploadConfig struct {
 	Dir            string `mapstructure:"dir"`
 	PublicBaseURL  string `mapstructure:"public_base_url"`
 	MaxAudioSizeMB int64  `mapstructure:"max_audio_size_mb"`
+	// MaxChunkSizeMB caps a single chunk body in the chunked upload protocol.
+	MaxChunkSizeMB int64 `mapstructure:"max_chunk_size_mb"`
+	// MaxSessionSizeMB caps the total assembled size of a chunked upload.
+	MaxSessionSizeMB int64 `mapstructure:"max_session_size_mb"`
 }
 
 // DownloadConfig holds local downloadable package storage settings.
@@ -253,6 +264,7 @@ func Load(path string) (*Config, error) {
 	v.AutomaticEnv()
 
 	v.SetDefault("app_name", "asr")
+	v.SetDefault("log.level", "info")
 	v.SetDefault("server.host", "0.0.0.0")
 	v.SetDefault("server.port", 10010)
 	v.SetDefault("server.asr_api_port", 10011)
@@ -286,13 +298,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("upload.dir", "uploads")
 	v.SetDefault("upload.public_base_url", "")
 	v.SetDefault("upload.max_audio_size_mb", 200)
+	v.SetDefault("upload.max_chunk_size_mb", 8)
+	v.SetDefault("upload.max_session_size_mb", 4096)
 	v.SetDefault("download.dir", "downloads")
 	v.SetDefault("download.public_base_path", "/downloads/files")
 	v.SetDefault("catalog.dir", "")
 	v.SetDefault("rules_catalog.dir", "")
-	v.SetDefault("gateway.asr_api", "http://127.0.0.1:10011")
-	v.SetDefault("gateway.admin_api", "http://127.0.0.1:10012")
-	v.SetDefault("gateway.nlp_api", "http://127.0.0.1:10013")
 	v.SetDefault("legacy.enabled", true)
 	v.SetDefault("legacy.access_log_path", "runtime/legacy-access.log")
 	v.SetDefault("legacy.default_workflow_id_for_asr", 0)
@@ -303,6 +314,19 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+
+	// Gateway upstreams default to the locally-configured service ports so that
+	// changing server.*_port does not leave the gateway pointing at a stale
+	// hard-coded port. Explicit values (e.g. cross-container hosts) win.
+	if strings.TrimSpace(cfg.Gateway.ASRAPI) == "" {
+		cfg.Gateway.ASRAPI = fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.ASRAPIPort)
+	}
+	if strings.TrimSpace(cfg.Gateway.AdminAPI) == "" {
+		cfg.Gateway.AdminAPI = fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.AdminAPIPort)
+	}
+	if strings.TrimSpace(cfg.Gateway.NLPAPI) == "" {
+		cfg.Gateway.NLPAPI = fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.NLPAPIPort)
 	}
 
 	return &cfg, nil

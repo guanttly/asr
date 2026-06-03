@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	api "github.com/lgt/asr/internal/interfaces/api"
 	pkgconfig "github.com/lgt/asr/pkg/config"
+	"github.com/lgt/asr/pkg/logging"
 	"go.uber.org/zap"
 )
 
@@ -23,13 +24,13 @@ var wsUpgrader = websocket.Upgrader{
 }
 
 func main() {
-	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
-
 	cfg, err := pkgconfig.Load("configs/config.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	logger := logging.New(cfg.Log.Level)
+	defer logger.Sync()
 
 	router := api.NewRouter(logger)
 	router.Use(legacyAccessLogger(cfg.Legacy.AccessLogPath))

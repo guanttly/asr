@@ -138,7 +138,7 @@ func TestCreateMeetingRejectsNonMeetingWorkflow(t *testing.T) {
 		nil,
 		nil,
 	)
-	handler := NewMeetingHandler(nil, workflowSvc, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+	handler := NewMeetingHandler(nil, workflowSvc, "uploads", "", 100, 8, 4096, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -181,7 +181,7 @@ func TestRegenerateSummaryRejectsNonMeetingWorkflow(t *testing.T) {
 		nil,
 		nil,
 	)
-	handler := NewMeetingHandler(nil, workflowSvc, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+	handler := NewMeetingHandler(nil, workflowSvc, "uploads", "", 100, 8, 4096, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -222,7 +222,7 @@ func TestDeleteMeetingAllowsCompletedMeeting(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}}
 	service := appmeeting.NewService(meetingRepo, &transcriptRepoHandlerStub{}, &summaryRepoHandlerStub{}, nil, nil, nil)
-	handler := NewMeetingHandler(service, nil, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+	handler := NewMeetingHandler(service, nil, "uploads", "", 100, 8, 4096, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -255,7 +255,7 @@ func TestDeleteMeetingRejectsProcessingMeeting(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}}
 	service := appmeeting.NewService(meetingRepo, &transcriptRepoHandlerStub{}, &summaryRepoHandlerStub{}, nil, nil, nil)
-	handler := NewMeetingHandler(service, nil, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+	handler := NewMeetingHandler(service, nil, "uploads", "", 100, 8, 4096, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -291,7 +291,7 @@ func TestUpdateMeetingPersistsUserEdits(t *testing.T) {
 	}}
 	summaryRepo := &summaryRepoHandlerMemoryStub{current: &meetingdomain.Summary{ID: 19, MeetingID: 9, Content: "旧纪要", ModelVersion: "qwen"}}
 	service := appmeeting.NewService(meetingRepo, &transcriptRepoHandlerStub{}, summaryRepo, nil, nil, nil)
-	handler := NewMeetingHandler(service, nil, "uploads", "", 100, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
+	handler := NewMeetingHandler(service, nil, "uploads", "", 100, 8, 4096, pkgconfig.ProductConfig{Edition: pkgconfig.ProductEditionAdvanced}.Features())
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

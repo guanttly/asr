@@ -12,7 +12,7 @@ import (
 func NewRouter(logger *zap.Logger) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.LoggerWithWriter(gin.DefaultWriter))
+	router.Use(middleware.AccessLog(logger))
 	router.Use(middleware.Recovery())
 	router.Use(middleware.CORS())
 	router.Use(middleware.RateLimit(middleware.DefaultRateLimitConfig()))

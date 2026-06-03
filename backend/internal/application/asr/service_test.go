@@ -157,6 +157,27 @@ func (r *taskRepoServiceStub) ListByUser(_ context.Context, userID uint64, taskT
 	return items[offset:end], int64(len(items)), nil
 }
 
+func (r *taskRepoServiceStub) List(_ context.Context, taskType *domain.TaskType, offset, limit int) ([]*domain.TranscriptionTask, int64, error) {
+	items := make([]*domain.TranscriptionTask, 0, len(r.tasks))
+	for _, task := range r.tasks {
+		if taskType != nil && task.Type != *taskType {
+			continue
+		}
+		items = append(items, cloneTask(task))
+	}
+	if offset >= len(items) {
+		return []*domain.TranscriptionTask{}, int64(len(items)), nil
+	}
+	if limit <= 0 {
+		limit = len(items)
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end], int64(len(items)), nil
+}
+
 func (r *taskRepoServiceStub) ListSyncCandidates(_ context.Context, _ int) ([]*domain.TranscriptionTask, error) {
 	return nil, nil
 }

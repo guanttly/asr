@@ -71,6 +71,7 @@ type TaskRepository interface {
 	Update(ctx context.Context, task *TranscriptionTask) error
 	Delete(ctx context.Context, id uint64) error
 	ListByUser(ctx context.Context, userID uint64, taskType *TaskType, offset, limit int) ([]*TranscriptionTask, int64, error)
+	List(ctx context.Context, taskType *TaskType, offset, limit int) ([]*TranscriptionTask, int64, error)
 	ListSyncCandidates(ctx context.Context, limit int) ([]*TranscriptionTask, error)
 	ListPostProcessRetryCandidates(ctx context.Context, limit int) ([]*TranscriptionTask, error)
 	SaveLatestRetryResult(ctx context.Context, record *RetryPostProcessRecord, maxHistory int) error

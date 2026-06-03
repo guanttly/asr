@@ -21,6 +21,7 @@ const debugMocks = vi.hoisted(() => ({
 const transcriptionMocks = vi.hoisted(() => ({
   createRealtimeTranscriptionTask: vi.fn(),
   uploadMeetingFromAudio: vi.fn(),
+  uploadMeetingFromAudioChunked: vi.fn(),
   uploadRealtimeSessionTask: vi.fn(),
 }))
 
@@ -72,7 +73,9 @@ vi.mock('@/utils/debug', () => ({
 vi.mock('@/utils/transcription', () => ({
   createRealtimeTranscriptionTask: transcriptionMocks.createRealtimeTranscriptionTask,
   uploadMeetingFromAudio: transcriptionMocks.uploadMeetingFromAudio,
+  uploadMeetingFromAudioChunked: transcriptionMocks.uploadMeetingFromAudioChunked,
   uploadRealtimeSessionTask: transcriptionMocks.uploadRealtimeSessionTask,
+  MEETING_DIRECT_UPLOAD_LIMIT: 150 * 1024 * 1024,
 }))
 
 vi.mock('./useInjector', () => ({

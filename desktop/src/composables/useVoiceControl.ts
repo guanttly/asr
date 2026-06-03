@@ -18,12 +18,18 @@ export interface SegmentHandleResult {
 // silently swallow every spoken segment until the user's command times out.
 const COMMAND_FAILURE_LIMIT = 3
 const COMMAND_COUNTDOWN_TICK_MS = 200
+// After a successful scene switch we exit command mode immediately, but the
+// spoken command is often split across several ASR segments. Suppress any
+// trailing segments that arrive shortly after the switch so they are not
+// written to history / injected as dictation.
+const POST_SWITCH_SUPPRESS_MS = 1500
 
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let commandDeadline = 0
 let previousScene: SceneMode | null = null
 let pendingProcessing = 0
 let consecutiveFailures = 0
+let postSwitchSuppressUntil = 0
 
 function getAppStore() {
   return useAppStore()
@@ -149,6 +155,12 @@ export function useVoiceControl() {
     if (!appStore.voiceControl.enabled)
       return { swallow: false }
 
+    if (!appStore.voiceCommandActive && Date.now() < postSwitchSuppressUntil) {
+      // Trailing segment from a command we already acted on — keep it out of history.
+      void debugLog('voice.command', 'suppress residual segment after switch', { text })
+      return { swallow: true }
+    }
+
     if (appStore.voiceCommandActive) {
       // Already waiting for a command — bypass wake detection and only classify the command intent.
       setProcessing(true)
@@ -168,6 +180,7 @@ export function useVoiceControl() {
             appStore.invalidateWorkflowBindings()
           }
           exitCommandMode('switched')
+          postSwitchSuppressUntil = Date.now() + POST_SWITCH_SUPPRESS_MS
           return { swallow: true, switched: true }
         }
       }
@@ -204,6 +217,7 @@ export function useVoiceControl() {
           appStore.invalidateWorkflowBindings()
         }
         exitCommandMode('switched')
+        postSwitchSuppressUntil = Date.now() + POST_SWITCH_SUPPRESS_MS
         return { swallow: true, switched: true, enteredCommandMode: true }
       }
       return { swallow: true, enteredCommandMode: true }

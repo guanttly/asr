@@ -722,7 +722,7 @@ async function loadWorkflowOptions() {
 async function loadTasks(options?: { silent?: boolean }) {
   loading.value = true
   try {
-    const result = await getTranscriptionTasks({ offset: 0, limit: 100, type: TRANSCRIPTION_TASK_TYPES.BATCH })
+    const result = await getTranscriptionTasks({ offset: 0, limit: 100, type: TRANSCRIPTION_TASK_TYPES.BATCH, scope: 'all' })
     tasks.value = result.data.items
     await loadExecutionSummaries(result.data.items)
   }

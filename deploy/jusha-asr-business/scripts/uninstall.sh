@@ -75,7 +75,7 @@ find_cleanup_image() {
 }
 
 purge_runtime_data() {
-  if rm -rf runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads backups 2>/dev/null; then
+  if rm -rf runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/logs backups 2>/dev/null; then
     return 0
   fi
 
@@ -91,7 +91,7 @@ purge_runtime_data() {
     -v "$SCRIPT_DIR:/cleanup-root" \
     --entrypoint sh \
     "$CLEANUP_IMAGE" \
-    -lc 'rm -rf /cleanup-root/runtime/mysql /cleanup-root/runtime/certs /cleanup-root/runtime/downloads /cleanup-root/runtime/tmp /cleanup-root/runtime/uploads /cleanup-root/backups'
+    -lc 'rm -rf /cleanup-root/runtime/mysql /cleanup-root/runtime/certs /cleanup-root/runtime/downloads /cleanup-root/runtime/tmp /cleanup-root/runtime/uploads /cleanup-root/runtime/logs /cleanup-root/backups'
 }
 
 echo "停止并移除服务..."

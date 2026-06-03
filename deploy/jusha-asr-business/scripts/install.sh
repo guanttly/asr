@@ -119,7 +119,8 @@ assert_existing_runtime_matches_install_dir() {
   for MOUNT_PAIR in \
     "/var/lib/asr/mysql:runtime/mysql:MySQL 数据目录" \
     "/var/lib/asr/uploads:runtime/uploads:上传文件目录" \
-    "/var/lib/asr/term-catalog:runtime/term-catalog:影像术语库目录"
+    "/var/lib/asr/term-catalog:runtime/term-catalog:影像术语库目录" \
+    "/var/log/asr:runtime/logs:日志目录"
   do
     CONTAINER_DEST=$(printf '%s\n' "$MOUNT_PAIR" | cut -d: -f1)
     LOCAL_REL=$(printf '%s\n' "$MOUNT_PAIR" | cut -d: -f2)
@@ -790,7 +791,7 @@ rollback_previous_release() {
 
 cd "$SCRIPT_DIR"
 
-mkdir -p runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/term-catalog
+mkdir -p runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/term-catalog runtime/logs
 chmod 1777 runtime/tmp
 
 ENV_CREATED=0

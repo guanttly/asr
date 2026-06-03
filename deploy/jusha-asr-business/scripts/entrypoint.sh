@@ -27,6 +27,7 @@ export ASR_TMP_DIR="${ASR_TMP_DIR:-/var/lib/asr/tmp}"
 export ASR_UPLOAD_DIR="${ASR_UPLOAD_DIR:-/var/lib/asr/uploads}"
 export ASR_CATALOG_DIR="${ASR_CATALOG_DIR:-/var/lib/asr/term-catalog}"
 export ASR_CATALOG_SEED_DIR="${ASR_CATALOG_SEED_DIR:-/opt/asr/term-catalog-default}"
+export ASR_LEGACY_ACCESS_LOG_PATH="${ASR_LEGACY_ACCESS_LOG_PATH:-/var/log/asr/legacy-access.log}"
 export ASR_GATEWAY_ASR_API="${ASR_GATEWAY_ASR_API:-http://127.0.0.1:10011}"
 export ASR_GATEWAY_ADMIN_API="${ASR_GATEWAY_ADMIN_API:-http://127.0.0.1:10012}"
 export ASR_GATEWAY_NLP_API="${ASR_GATEWAY_NLP_API:-http://127.0.0.1:10013}"
@@ -36,7 +37,9 @@ require_env ASR_MYSQL_ROOT_PASSWORD
 require_env ASR_BOOTSTRAP_ADMIN_PASSWORD
 require_env ASR_JWT_SECRET
 
-mkdir -p "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${ASR_TMP_DIR}" "${ASR_UPLOAD_DIR}" "${ASR_CATALOG_DIR}" /run/mysqld /var/log/supervisor /var/log/nginx
+ASR_LEGACY_ACCESS_LOG_DIR=$(dirname "${ASR_LEGACY_ACCESS_LOG_PATH}")
+
+mkdir -p "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${ASR_TMP_DIR}" "${ASR_UPLOAD_DIR}" "${ASR_CATALOG_DIR}" "${ASR_LEGACY_ACCESS_LOG_DIR}" /run/mysqld /var/log/supervisor /var/log/nginx
 chown -R mysql:mysql "${ASR_MYSQL_DATA_DIR}" /run/mysqld
 chmod 1777 "${ASR_TMP_DIR}"
 

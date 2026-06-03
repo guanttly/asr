@@ -25,6 +25,7 @@ services:
       ASR_SERVICES_ASR_STREAM: ${ASR_SERVICES_ASR_STREAM:-}
       ASR_SERVICES_SPEAKER_SERVICE_URL: ${ASR_SERVICES_SPEAKER_SERVICE_URL:-http://jusha-asr-speaker:8100}
       ASR_SERVICES_SUMMARY_MODEL: ${ASR_SERVICES_SUMMARY_MODEL:-qwen3-4b}
+      ASR_LEGACY_ACCESS_LOG_PATH: ${ASR_LEGACY_ACCESS_LOG_PATH:-/var/log/asr/legacy-access.log}
     volumes:
       - ./runtime/mysql:/var/lib/asr/mysql
       - ./runtime/certs:/var/lib/asr/certs
@@ -32,6 +33,7 @@ services:
       - ./runtime/tmp:/var/lib/asr/tmp
       - ./runtime/uploads:/var/lib/asr/uploads
       - ./runtime/term-catalog:/var/lib/asr/term-catalog
+      - ./runtime/logs:/var/log/asr
     networks:
       - asr-internal
     healthcheck:
@@ -40,6 +42,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 240s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 networks:
   asr-internal:

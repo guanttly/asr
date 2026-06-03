@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="语音转写系统">
+  <rect width="64" height="64" rx="14" fill="#128071"/>
+  <g fill="#fff">
+    <rect x="8" y="25" width="5" height="18" rx="2.5"/>
+    <rect x="19" y="18" width="5" height="32" rx="2.5"/>
+    <rect x="30" y="12" width="5" height="44" rx="2.5"/>
+    <rect x="41" y="18" width="5" height="32" rx="2.5"/>
+    <rect x="52" y="25" width="5" height="18" rx="2.5"/>
+  </g>
+</svg>

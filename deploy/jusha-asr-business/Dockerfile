@@ -74,7 +74,7 @@ COPY deploy/jusha-asr-business/scripts /app/scripts
 COPY docs/terms /opt/asr/term-catalog-default
 
 RUN chmod +x /app/scripts/*.sh /app/bin/* \
- && mkdir -p /var/log/supervisor /var/log/nginx /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog
+ && mkdir -p /var/log/supervisor /var/log/nginx /var/log/asr /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog
 
 # Runtime secrets are injected via compose/.env during install time; do not
 # bake placeholder passwords or secrets into image metadata.
@@ -92,12 +92,13 @@ ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_UPLOAD_DIR=/var/lib/asr/uploads \
     ASR_CATALOG_DIR=/var/lib/asr/term-catalog \
     ASR_CATALOG_SEED_DIR=/opt/asr/term-catalog-default \
+    ASR_LEGACY_ACCESS_LOG_PATH=/var/log/asr/legacy-access.log \
     ASR_BOOTSTRAP_ADMIN_USERNAME=admin \
     ASR_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员 \
     ASR_SERVICES_SUMMARY_MODEL=qwen3-4b
 
 EXPOSE 80 443
 
-VOLUME ["/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs", "/var/lib/asr/term-catalog"]
+VOLUME ["/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs", "/var/lib/asr/term-catalog", "/var/log/asr"]
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]

@@ -938,7 +938,7 @@ preserve_target_entry() {
 
 preserve_runtime_entry() {
   case "$1" in
-    mysql|uploads|tmp|certs|term-catalog)
+    mysql|uploads|tmp|certs|term-catalog|logs)
       return 0
       ;;
   esac
@@ -1000,7 +1000,7 @@ sync_runtime_dir() {
   find "$SRC_RUNTIME_DIR" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
     ENTRY_NAME=$(basename "$INCOMING_PATH")
     case "$ENTRY_NAME" in
-      mysql|uploads|tmp|term-catalog)
+      mysql|uploads|tmp|term-catalog|logs)
         mkdir -p "$DEST_RUNTIME_DIR/$ENTRY_NAME"
         if [ "$ENTRY_NAME" = "tmp" ]; then
           chmod 1777 "$DEST_RUNTIME_DIR/$ENTRY_NAME" 2>/dev/null || true
@@ -1016,7 +1016,7 @@ sync_runtime_dir() {
     esac
   done
 
-  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs" "$DEST_RUNTIME_DIR/term-catalog"
+  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs" "$DEST_RUNTIME_DIR/term-catalog" "$DEST_RUNTIME_DIR/logs"
   chmod 1777 "$DEST_RUNTIME_DIR/tmp" 2>/dev/null || true
 }
 
@@ -1246,7 +1246,7 @@ done
 
 BUILD_WORK_ROOT=$(mktemp -d "$OUTPUT_ROOT/.${PACKAGE_NAME}.staging.XXXXXX")
 STAGING_DIR="$BUILD_WORK_ROOT/$PACKAGE_ROOT_NAME"
-mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog"
+mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog" "$STAGING_DIR/runtime/logs"
 
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
 cp "$DEPLOY_DIR/README.md" "$STAGING_DIR/README.md"
@@ -1278,6 +1278,7 @@ ASR_SERVICES_ASR=$ASR_SERVICE_URL
 ASR_SERVICES_ASR_STREAM=
 ASR_SERVICES_SPEAKER_SERVICE_URL=$SPEAKER_SERVICE_URL
 ASR_SERVICES_SUMMARY_MODEL=qwen3-4b
+ASR_LEGACY_ACCESS_LOG_PATH=/var/log/asr/legacy-access.log
 EOF
 
 cp "$STAGING_DIR/.env" "$STAGING_DIR/.env.example"

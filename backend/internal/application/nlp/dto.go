@@ -15,7 +15,7 @@ type CorrectResponse struct {
 
 // SummarizeRequest is the DTO for summary generation.
 type SummarizeRequest struct {
-	Text string `json:"text" binding:"required"`
+	Text string `json:"text" form:"text" binding:"required"`
 }
 
 // SummarizeResponse contains the generated summary.

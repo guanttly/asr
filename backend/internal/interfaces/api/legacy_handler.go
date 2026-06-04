@@ -96,6 +96,22 @@ func legacyLanguageForm(c *gin.Context) string {
 	return language
 }
 
+// legacyAudioFieldName returns the first multipart field name that carries an
+// uploaded file. It lets legacy endpoints accept multiple documented field
+// names (e.g. both "audio_file" and "file") and falls back to the first
+// candidate so the downstream "missing audio file" error stays consistent.
+func legacyAudioFieldName(c *gin.Context, candidates ...string) string {
+	for _, name := range candidates {
+		if _, err := c.FormFile(name); err == nil {
+			return name
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
 func legacyHotwordsForm(c *gin.Context) []string {
 	raw := strings.TrimSpace(c.PostForm("hotwords"))
 	if raw == "" {
@@ -152,6 +168,10 @@ func (h *LegacyASRHandler) RecognizeVAD(c *gin.Context) {
 
 func (h *LegacyASRHandler) recognize(c *gin.Context, useVAD bool) {
 	language := legacyLanguageForm(c)
+	if !appasr.IsSupportedLanguage(language) {
+		legacyError(c, http.StatusBadRequest, fmt.Sprintf("不支持的语言: %s", language))
+		return
+	}
 	useITN := legacyBoolForm(c, "use_itn", true)
 	hotwords := legacyHotwordsForm(c)
 
@@ -204,6 +224,10 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 	enableCorrection := legacyBoolForm(c, "enable_correction", true)
 	enableSpeaker := legacyBoolForm(c, "enable_speaker", false)
 	language := legacyLanguageForm(c)
+	if !appasr.IsSupportedLanguage(language) {
+		legacyError(c, http.StatusBadRequest, fmt.Sprintf("不支持的语言: %s", language))
+		return
+	}
 	useITN := legacyBoolForm(c, "use_itn", true)
 	callbackURL := legacyCallbackURLForm(c)
 	if callbackURL != "" && !isValidLegacyCallbackURL(callbackURL) {
@@ -211,7 +235,8 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 		return
 	}
 
-	audioFile, err := savePermanentUploadedAudio(c, "audio_file", h.uploadDir, "audio", h.maxAudioSizeMB)
+	audioField := legacyAudioFieldName(c, "audio_file", "file")
+	audioFile, err := savePermanentUploadedAudio(c, audioField, h.uploadDir, "audio", h.maxAudioSizeMB)
 	if err != nil {
 		status, messageText := resolveAudioUploadError(err)
 		legacyError(c, status, messageText)
@@ -264,7 +289,7 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 func (h *LegacyASRHandler) GetTask(c *gin.Context) {
 	taskID, err := parseOpenTaskID(c.Param("task_id"))
 	if err != nil {
-		legacyError(c, http.StatusBadRequest, "invalid task_id")
+		legacyError(c, http.StatusNotFound, "任务不存在或已完成")
 		return
 	}
 	result, err := h.asrService.GetTask(c.Request.Context(), legacyOwnerID, taskID)
@@ -395,7 +420,7 @@ func (h *LegacyNLPHandler) Register(group *gin.RouterGroup) {
 
 func (h *LegacyNLPHandler) MeetingSummary(c *gin.Context) {
 	var req appnlp.SummarizeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBind(&req); err != nil {
 		legacyError(c, http.StatusBadRequest, err.Error())
 		return
 	}

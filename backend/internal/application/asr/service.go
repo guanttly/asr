@@ -188,6 +188,21 @@ func NormalizeLanguage(value string) (string, error) {
 	return language, nil
 }
 
+// IsSupportedLanguage reports whether value is a language code the ASR engine accepts.
+// An empty value falls back to the default language and is considered valid.
+func IsSupportedLanguage(value string) bool {
+	language := strings.TrimSpace(value)
+	if language == "" {
+		return true
+	}
+	switch strings.ToLower(strings.ReplaceAll(language, "_", "-")) {
+	case "auto", "zh-cn", "zh-hans", "zh", "en-us", "en-gb", "en":
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeHotwords(values []string) []string {
 	return mergeHotwords(nil, values)
 }

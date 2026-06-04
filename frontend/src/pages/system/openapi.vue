@@ -4,7 +4,7 @@ import type { DataTableColumns } from 'naive-ui'
 import type { OpenPlatformApp, OpenPlatformCallLog, OpenPlatformCapability, OpenPlatformCreateAppPayload, OpenPlatformCreateAppResponse } from '@/api/openplatform'
 
 import MarkdownIt from 'markdown-it'
-import { NButton, NTag, useMessage } from 'naive-ui'
+import { NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 import { computed, h, nextTick, reactive, ref, watch } from 'vue'
 
 import {
@@ -38,6 +38,8 @@ const initializing = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const keyword = ref('')
+const statusFilter = ref<'all' | OpenPlatformApp['status']>('all')
+const capabilityFilter = ref('all')
 const activeTab = ref('apps')
 const docsLoading = ref(false)
 const docsContent = ref('')
@@ -56,6 +58,10 @@ const callsVisible = ref(false)
 const callsLoading = ref(false)
 const callsTitle = ref('')
 const callLogs = ref<OpenPlatformCallLog[]>([])
+const appPagination = reactive({
+  page: 1,
+  pageSize: 10,
+})
 
 const form = reactive({
   name: '',
@@ -131,6 +137,50 @@ const revokedCount = computed(() => apps.value.filter(item => item.status === 'r
 const selectedCapabilityCount = computed(() => form.allowed_caps.length)
 const modalTitle = computed(() => editingAppId.value ? '编辑 OpenAPI 应用' : '新增 OpenAPI 应用')
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: false })
+
+const statusRank: Record<OpenPlatformApp['status'], number> = {
+  active: 0,
+  disabled: 1,
+  revoked: 2,
+}
+
+const sortedApps = computed(() => [...apps.value].sort((a, b) => {
+  const statusDiff = statusRank[a.status] - statusRank[b.status]
+  if (statusDiff !== 0)
+    return statusDiff
+
+  const updatedA = Date.parse(a.updated_at || a.created_at || '')
+  const updatedB = Date.parse(b.updated_at || b.created_at || '')
+  const timeA = Number.isNaN(updatedA) ? 0 : updatedA
+  const timeB = Number.isNaN(updatedB) ? 0 : updatedB
+  if (timeA !== timeB)
+    return timeB - timeA
+
+  return b.id - a.id
+}))
+
+const capabilityCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of apps.value) {
+    for (const capability of item.allowed_caps)
+      counts.set(capability, (counts.get(capability) || 0) + 1)
+  }
+  return counts
+})
+
+const statusFilterOptions = computed(() => [
+  { label: '全部应用', value: 'all' as const, count: apps.value.length, type: 'default' as const },
+  { label: '启用中', value: 'active' as const, count: activeCount.value, type: 'success' as const },
+  { label: '已停用', value: 'disabled' as const, count: disabledCount.value, type: 'warning' as const },
+  { label: '已撤销', value: 'revoked' as const, count: revokedCount.value, type: 'error' as const },
+])
+
+const capabilityFilterOptions = computed(() => [
+  { label: '全部能力', value: 'all', count: apps.value.length },
+  ...capabilities.value
+    .map(item => ({ label: item.display_name || item.id, value: item.id, count: capabilityCounts.value.get(item.id) || 0 }))
+    .filter(item => item.count > 0),
+])
 
 const defaultHeadingOpen = markdown.renderer.rules.heading_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options))
 markdown.renderer.rules.heading_open = (tokens, idx, options, env, self) => {
@@ -225,21 +275,41 @@ const docsMatchCount = computed(() => {
 
 const filteredApps = computed(() => {
   const value = keyword.value.trim().toLowerCase()
-  if (!value)
-    return apps.value
-
-  return apps.value.filter((item) => {
+  return sortedApps.value.filter((item) => {
+    if (statusFilter.value !== 'all' && item.status !== statusFilter.value)
+      return false
+    if (capabilityFilter.value !== 'all' && !item.allowed_caps.includes(capabilityFilter.value))
+      return false
+    if (!value)
+      return true
     const caps = item.allowed_caps.map(capabilityLabel).join(' ')
     return item.name.toLowerCase().includes(value)
       || item.app_id.toLowerCase().includes(value)
       || (item.description || '').toLowerCase().includes(value)
       || item.status.toLowerCase().includes(value)
+      || statusMeta(item.status).label.includes(value)
       || caps.toLowerCase().includes(value)
   })
 })
 
 function capabilityLabel(capability: string) {
   return capabilityMap.value.get(capability)?.display_name || capability
+}
+
+function compactCapabilityLabels(capabilities: string[], maxVisible = 2) {
+  const labels = capabilities.map(capabilityLabel)
+  return {
+    visible: labels.slice(0, maxVisible),
+    hidden: labels.slice(maxVisible),
+  }
+}
+
+function appTooltipContent(row: OpenPlatformApp) {
+  return h('div', { class: 'openapi-app-tooltip grid gap-1' }, [
+    h('div', { class: 'font-600' }, row.name),
+    h('div', { class: 'text-xs opacity-80' }, row.app_id),
+    row.description ? h('div', { class: 'text-xs opacity-80' }, row.description) : null,
+  ])
 }
 
 function workflowLabel(capability: string, workflowId?: number) {
@@ -598,25 +668,44 @@ async function openCallLogs(item: OpenPlatformApp) {
   }
 }
 
+function updateAppPage(page: number) {
+  appPagination.page = page
+}
+
+function httpStatusType(status: number) {
+  if (status < 400)
+    return 'success'
+  if (status < 500)
+    return 'warning'
+  return 'error'
+}
+
+function logErrorText(value?: string) {
+  return value?.trim() || '无错误码'
+}
+
 const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
   {
     title: '应用',
     key: 'name',
-    minWidth: 240,
-    render: (row) => {
-      const lines = [
-        h('div', { class: 'text-sm font-600 text-ink' }, row.name),
-        h('div', { class: 'text-xs text-slate break-all' }, row.app_id),
-      ]
-      if (row.description)
-        lines.push(h('div', { class: 'text-xs text-slate line-clamp-2' }, row.description))
-      return h('div', { class: 'grid gap-1' }, lines)
-    },
+    width: 248,
+    render: row => h(
+      NTooltip,
+      { placement: 'top-start', delay: 300 },
+      {
+        trigger: () => h('div', { class: 'openapi-app-cell min-w-0' }, [
+          h('div', { class: 'truncate text-sm font-600 text-ink' }, row.name),
+          h('div', { class: 'truncate text-xs text-slate' }, row.app_id),
+          row.description ? h('div', { class: 'truncate text-xs text-slate' }, row.description) : null,
+        ]),
+        default: () => appTooltipContent(row),
+      },
+    ),
   },
   {
     title: '状态',
     key: 'status',
-    width: 92,
+    width: 82,
     render: (row) => {
       const meta = statusMeta(row.status)
       return h(NTag, { size: 'small', round: true, bordered: false, type: meta.type }, { default: () => meta.label })
@@ -625,120 +714,97 @@ const appColumns = computed<DataTableColumns<OpenPlatformApp>>(() => [
   {
     title: '能力授权',
     key: 'allowed_caps',
-    minWidth: 280,
-    render: row => h(
-      'div',
-      { class: 'flex flex-wrap gap-1.5' },
-      row.allowed_caps.map(capability => h(NTag, { size: 'small', round: true, bordered: false }, { default: () => capabilityLabel(capability) })),
-    ),
+    width: 194,
+    render: (row) => {
+      const labels = compactCapabilityLabels(row.allowed_caps)
+      const children = labels.visible.map(label => h(NTag, { size: 'small', round: true, bordered: false }, { default: () => label }))
+      if (labels.hidden.length > 0) {
+        children.push(h(
+          NTooltip,
+          { placement: 'top', delay: 300 },
+          {
+            trigger: () => h(NTag, { size: 'small', round: true, bordered: false }, { default: () => `+${labels.hidden.length}` }),
+            default: () => labels.hidden.join(' / '),
+          },
+        ))
+      }
+      return h('div', { class: 'flex min-w-0 flex-wrap gap-1.5' }, children)
+    },
   },
   {
     title: '默认工作流',
     key: 'default_workflows',
-    minWidth: 260,
+    width: 184,
     render: (row) => {
       const labels = defaultWorkflowLabels(row)
       if (labels.length === 0)
         return '-'
-      return h('div', { class: 'grid gap-1' }, labels.map(label => h('div', { class: 'text-xs text-slate' }, label)))
+      const [first, second, ...rest] = labels
+      const children = [
+        h('div', { class: 'truncate text-xs text-slate' }, first),
+      ]
+      if (second)
+        children.push(h('div', { class: 'truncate text-xs text-slate' }, second))
+      if (rest.length > 0)
+        children.push(h('div', { class: 'text-xs text-slate/80' }, `+${rest.length}`))
+      return h(
+        NTooltip,
+        { placement: 'top-start', delay: 300 },
+        {
+          trigger: () => h('div', { class: 'grid min-w-0 gap-1' }, children),
+          default: () => labels.join('\n'),
+        },
+      )
     },
   },
   {
     title: '限流',
     key: 'rate_limit_per_sec',
-    width: 90,
+    width: 72,
     render: row => `${row.rate_limit_per_sec}/s`,
   },
   {
     title: '密钥提示',
     key: 'secret_hint',
-    minWidth: 180,
+    width: 132,
     render: row => h('div', { class: 'grid gap-1' }, [
-      h('div', { class: 'text-xs text-slate break-all' }, row.secret_hint || '仅创建或重置后显示完整密钥'),
+      h('div', { class: 'truncate text-xs text-slate' }, row.secret_hint || '仅创建或重置后显示完整密钥'),
       h('div', { class: 'text-xs text-slate/80' }, `版本 v${row.secret_version}`),
     ]),
   },
   {
     title: '更新时间',
     key: 'updated_at',
-    width: 168,
+    width: 152,
     render: row => formatDateTime(row.updated_at),
   },
   {
     title: '操作',
     key: 'actions',
-    minWidth: 360,
+    width: 166,
     render: (row) => {
-      const children = [
+      const primaryActions = [
         h(NButton, { quaternary: true, size: 'tiny', onClick: () => openEditModal(row) }, { default: () => '编辑' }),
         h(NButton, { quaternary: true, size: 'tiny', onClick: () => void openCallLogs(row) }, { default: () => '日志' }),
       ]
+      const secondaryActions: typeof primaryActions = []
       if (row.status !== 'revoked') {
-        children.push(h(NButton, { quaternary: true, size: 'tiny', onClick: () => void handleRotateSecret(row) }, { default: () => '重置密钥' }))
-        children.push(h(NButton, { quaternary: true, size: 'tiny', type: 'error', onClick: () => void handleRevoke(row) }, { default: () => '撤销' }))
+        secondaryActions.push(h(NButton, { quaternary: true, size: 'tiny', onClick: () => void handleRotateSecret(row) }, { default: () => '重置密钥' }))
       }
       if (row.status === 'active')
-        children.push(h(NButton, { quaternary: true, size: 'tiny', type: 'warning', onClick: () => void handleToggleStatus(row) }, { default: () => '停用' }))
+        secondaryActions.push(h(NButton, { quaternary: true, size: 'tiny', type: 'warning', onClick: () => void handleToggleStatus(row) }, { default: () => '停用' }))
       if (row.status === 'disabled')
-        children.push(h(NButton, { quaternary: true, size: 'tiny', type: 'success', onClick: () => void handleToggleStatus(row) }, { default: () => '启用' }))
-      return h('div', { class: 'flex flex-wrap gap-1.5' }, children)
+        secondaryActions.push(h(NButton, { quaternary: true, size: 'tiny', type: 'success', onClick: () => void handleToggleStatus(row) }, { default: () => '启用' }))
+      if (row.status !== 'revoked')
+        secondaryActions.push(h(NButton, { quaternary: true, size: 'tiny', type: 'error', onClick: () => void handleRevoke(row) }, { default: () => '撤销' }))
+
+      return h('div', { class: 'openapi-action-cell' }, [
+        h('div', { class: 'openapi-action-row' }, primaryActions),
+        h('div', { class: 'openapi-action-row openapi-action-row-secondary' }, secondaryActions),
+      ])
     },
   },
 ])
-
-const callColumns: DataTableColumns<OpenPlatformCallLog> = [
-  {
-    title: '时间',
-    key: 'created_at',
-    width: 168,
-    render: row => formatDateTime(row.created_at),
-  },
-  {
-    title: '能力',
-    key: 'capability',
-    width: 132,
-    render: row => capabilityLabel(row.capability),
-  },
-  {
-    title: '路径',
-    key: 'route',
-    minWidth: 220,
-    render: row => h('div', { class: 'text-xs break-all text-slate' }, row.route),
-  },
-  {
-    title: '状态',
-    key: 'http_status',
-    width: 90,
-    render: row => h(
-      NTag,
-      {
-        size: 'small',
-        round: true,
-        bordered: false,
-        type: row.http_status < 400 ? 'success' : row.http_status < 500 ? 'warning' : 'error',
-      },
-      { default: () => String(row.http_status) },
-    ),
-  },
-  {
-    title: '耗时',
-    key: 'latency_ms',
-    width: 88,
-    render: row => `${row.latency_ms} ms`,
-  },
-  {
-    title: '错误码',
-    key: 'err_code',
-    width: 120,
-    render: row => row.err_code || '-',
-  },
-  {
-    title: '请求 ID',
-    key: 'request_id',
-    minWidth: 240,
-    render: row => h('div', { class: 'text-xs break-all text-slate' }, row.request_id),
-  },
-]
 
 watch(
   isAdmin,
@@ -748,6 +814,10 @@ watch(
   },
   { immediate: true },
 )
+
+watch([keyword, statusFilter, capabilityFilter], () => {
+  appPagination.page = 1
+})
 
 watch(activeTab, (tab) => {
   if (tab === 'docs' && !docsContent.value && !docsLoading.value)
@@ -761,13 +831,13 @@ watch(activeTab, (tab) => {
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col min-h-0 gap-5">
+  <div class="h-full min-h-0 min-w-0 flex flex-col gap-5 overflow-hidden">
     <NAlert v-if="!isAdmin" type="warning" title="仅管理员可访问" class="card-main">
       OpenAPI 应用管理接口受管理员角色保护，当前账号无法查看或修改开放平台应用。
     </NAlert>
 
     <template v-else>
-      <NCard class="card-main flex flex-col min-h-0 flex-1" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
+      <NCard class="card-main min-w-0 flex flex-col min-h-0 flex-1 overflow-hidden" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <NTabs v-model:value="activeTab" type="line" animated class="openapi-tabs flex-1 min-h-0 flex flex-col">
           <NTabPane name="apps" tab="应用管理" display-directive="show">
             <template #tab>
@@ -829,14 +899,46 @@ watch(activeTab, (tab) => {
                 </div>
               </div>
 
+              <div class="grid gap-2 shrink-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-600 text-slate/80">状态</span>
+                  <NTag
+                    v-for="item in statusFilterOptions"
+                    :key="item.value"
+                    size="small"
+                    round
+                    :bordered="statusFilter !== item.value"
+                    :type="statusFilter === item.value ? item.type : 'default'"
+                    class="openapi-filter-tag"
+                    @click="statusFilter = item.value"
+                  >
+                    {{ item.label }} {{ item.count }}
+                  </NTag>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-600 text-slate/80">能力</span>
+                  <NTag
+                    v-for="item in capabilityFilterOptions"
+                    :key="item.value"
+                    size="small"
+                    round
+                    :bordered="capabilityFilter !== item.value"
+                    :type="capabilityFilter === item.value ? 'info' : 'default'"
+                    class="openapi-filter-tag"
+                    @click="capabilityFilter = item.value"
+                  >
+                    {{ item.label }} {{ item.count }}
+                  </NTag>
+                </div>
+              </div>
+
               <NDataTable
                 flex-height
                 class="flex-1 min-h-0"
                 :columns="appColumns"
                 :data="filteredApps"
                 :loading="loading"
-                :pagination="{ pageSize: 10 }"
-                :scroll-x="1680"
+                :pagination="{ page: appPagination.page, pageSize: appPagination.pageSize, onUpdatePage: updateAppPage }"
                 size="small"
               />
             </div>
@@ -1080,12 +1182,91 @@ watch(activeTab, (tab) => {
         </div>
       </NModal>
 
-      <NModal v-model:show="callsVisible" preset="card" title="最近调用日志" class="modal-card max-w-240">
-        <div class="grid gap-3">
-          <div class="text-xs text-slate">
-            {{ callsTitle }}
+      <NModal
+        v-model:show="callsVisible"
+        preset="card"
+        title="最近调用日志"
+        class="modal-card openapi-call-log-modal"
+        size="small"
+        :style="{ width: 'min(680px, calc(100vw - 48px))', maxWidth: 'calc(100vw - 48px)' }"
+        content-style="padding: 10px 16px 14px;"
+      >
+        <div class="grid min-w-0 gap-2.5">
+          <div class="flex min-w-0 items-center justify-between gap-2">
+            <NTooltip placement="top-start" :delay="300">
+              <template #trigger>
+                <div class="min-w-0 truncate text-[11px] text-slate">
+                  {{ callsTitle }}
+                </div>
+              </template>
+              <div class="openapi-text-tooltip">
+                {{ callsTitle }}
+              </div>
+            </NTooltip>
+            <NTag size="small" round :bordered="false" type="info">
+              {{ callLogs.length }} 条
+            </NTag>
           </div>
-          <NDataTable :columns="callColumns" :data="callLogs" :loading="callsLoading" :pagination="{ pageSize: 8 }" :scroll-x="1280" size="small" />
+
+          <NSpin :show="callsLoading">
+            <div v-if="!callsLoading && callLogs.length === 0" class="openapi-call-log-empty">
+              暂无调用日志
+            </div>
+            <div v-else class="openapi-call-log-list">
+              <div v-for="item in callLogs" :key="item.id" class="openapi-call-log-item">
+                <div class="openapi-call-log-main">
+                  <div class="openapi-call-log-time">
+                    {{ formatDateTime(item.created_at) }}
+                  </div>
+                  <NTag size="small" round :bordered="false" :type="httpStatusType(item.http_status)">
+                    {{ item.http_status }}
+                  </NTag>
+                  <div class="openapi-call-log-duration">
+                    {{ item.latency_ms }} ms
+                  </div>
+                </div>
+
+                <div class="openapi-call-log-path-row">
+                  <NTooltip placement="top-start" :delay="300">
+                    <template #trigger>
+                      <div class="openapi-call-log-path">
+                        {{ item.route }}
+                      </div>
+                    </template>
+                    <div class="openapi-text-tooltip">
+                      {{ item.route }}
+                    </div>
+                  </NTooltip>
+                </div>
+
+                <div class="openapi-call-log-meta">
+                  <NTag size="small" round :bordered="false">
+                    {{ capabilityLabel(item.capability) }}
+                  </NTag>
+                  <NTooltip placement="top-start" :delay="300">
+                    <template #trigger>
+                      <span class="openapi-call-log-chip is-error">
+                        {{ logErrorText(item.err_code) }}
+                      </span>
+                    </template>
+                    <div class="openapi-text-tooltip">
+                      {{ logErrorText(item.err_code) }}
+                    </div>
+                  </NTooltip>
+                  <NTooltip placement="top-start" :delay="300">
+                    <template #trigger>
+                      <span class="openapi-call-log-chip">
+                        {{ item.request_id }}
+                      </span>
+                    </template>
+                    <div class="openapi-text-tooltip">
+                      {{ item.request_id }}
+                    </div>
+                  </NTooltip>
+                </div>
+              </div>
+            </div>
+          </NSpin>
         </div>
       </NModal>
     </template>
@@ -1094,11 +1275,170 @@ watch(activeTab, (tab) => {
 
 <style scoped>
 .openapi-tabs :deep(.n-tabs-content),
+.openapi-tabs :deep(.n-tabs-pane-wrapper),
 .openapi-tabs :deep(.n-tab-pane) {
   min-height: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+.openapi-app-cell {
+  max-width: 100%;
+}
+
+.openapi-app-tooltip {
+  max-width: 360px;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.openapi-text-tooltip {
+  max-width: 420px;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.openapi-action-cell {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.openapi-action-row {
+  display: flex;
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.openapi-action-row-secondary {
+  color: #64748b;
+}
+
+.openapi-action-cell :deep(.n-button) {
+  padding: 0 3px;
+}
+
+.openapi-call-log-modal {
+  width: min(680px, calc(100vw - 48px));
+}
+
+.openapi-call-log-modal :deep(.n-card__content) {
+  overflow: hidden;
+}
+
+.openapi-call-log-empty {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
+  color: #64748b;
+  font-size: 12px;
+}
+
+.openapi-call-log-list {
+  display: grid;
+  max-height: min(420px, calc(100vh - 240px));
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.openapi-call-log-item {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  border: 1px solid rgba(203, 213, 225, 0.62);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  padding: 9px 10px;
+}
+
+.openapi-call-log-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.openapi-call-log-time {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openapi-call-log-duration {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.openapi-call-log-path-row {
+  min-width: 0;
+}
+
+.openapi-call-log-path {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.04);
+  padding: 4px 7px;
+  color: #1e293b;
+  font-family: "JetBrains Mono", "Fira Code", "Menlo", monospace;
+  font-size: 11.5px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openapi-call-log-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.openapi-call-log-chip {
+  display: inline-flex;
+  max-width: 220px;
+  min-width: 0;
+  overflow: hidden;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.92);
+  padding: 2px 7px;
+  color: #475569;
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openapi-call-log-chip.is-error {
+  max-width: 180px;
+}
+
+.openapi-filter-tag {
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.openapi-filter-tag:hover {
+  border-color: rgba(15, 118, 110, 0.4);
+  color: #0f766e;
 }
 
 .docs-layout {

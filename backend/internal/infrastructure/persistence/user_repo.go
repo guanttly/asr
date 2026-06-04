@@ -16,7 +16,7 @@ import (
 // UserModel is the persistence model for users.
 type UserModel struct {
 	ID           uint64 `gorm:"primaryKey;autoIncrement"`
-	Username     string `gorm:"type:varchar(64);uniqueIndex;not null"`
+	Username     string `gorm:"type:varchar(255);uniqueIndex;not null"`
 	PasswordHash string `gorm:"type:varchar(255);not null"`
 	DisplayName  string `gorm:"type:varchar(128)"`
 	Role         string `gorm:"type:varchar(20);not null;default:'user'"`

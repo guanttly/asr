@@ -521,18 +521,25 @@ function renderProgressCell(row: TaskItem) {
   ])
 }
 
+function renderTaskTextTooltip(text: string, className = 'truncate text-sm text-ink') {
+  return h(NTooltip, { placement: 'top-start', delay: 300 }, {
+    trigger: () => h('div', { class: className }, text),
+    default: () => h('div', { class: 'task-table-tooltip' }, text),
+  })
+}
+
 const columns = [
-  { title: 'ID', key: 'id', width: 64 },
+  { title: 'ID', key: 'id', width: 56 },
   {
     title: '类型',
     key: 'type',
-    width: 72,
+    width: 64,
     render: (row: TaskItem) => formatTaskType(row.type),
   },
   {
     title: '状态',
     key: 'status',
-    width: 88,
+    width: 78,
     render: (row: TaskItem) => {
       const map: Record<string, { type: string, text: string }> = {
         pending: { type: 'default', text: '待处理' },
@@ -547,13 +554,13 @@ const columns = [
   {
     title: '工作流',
     key: 'workflow_id',
-    width: 160,
+    width: 118,
     render: (row: TaskItem) => workflowLabel(row.workflow_id),
   },
   {
     title: '执行摘要',
     key: 'execution_status',
-    width: 120,
+    width: 102,
     render: (row: TaskItem) => {
       if (!row.workflow_id)
         return '-'
@@ -566,17 +573,14 @@ const columns = [
   {
     title: '备注',
     key: 'result_text',
-    width: 280,
+    width: 236,
     render: (row: TaskItem) => {
       const content = getRemarkContent(row)
       if (!content)
         return '-'
 
       return h('div', { class: 'min-w-0' }, [
-        h('div', {
-          class: 'truncate text-sm text-ink',
-          title: content.length <= 80 ? content : undefined,
-        }, content),
+        renderTaskTextTooltip(content),
         h(NButton, {
           text: true,
           type: 'primary',
@@ -590,7 +594,7 @@ const columns = [
   {
     title: '后处理',
     key: 'post_process_status',
-    width: 88,
+    width: 78,
     render: (row: TaskItem) => {
       const s = row.post_process_status || '-'
       const map: Record<string, { type: string, text: string }> = {
@@ -608,59 +612,68 @@ const columns = [
   {
     title: '进度',
     key: 'progress_percent',
-    width: 220,
+    width: 196,
     render: (row: TaskItem) => renderProgressCell(row),
   },
-  { title: '音频时长', key: 'duration', width: 120, render: (row: TaskItem) => formatDuration(row.duration) },
-  { title: '处理耗时', key: 'elapsed', width: 120, render: (row: TaskItem) => taskElapsedText(row) },
+  { title: '音频时长', key: 'duration', width: 84, render: (row: TaskItem) => formatDuration(row.duration) },
+  { title: '处理耗时', key: 'elapsed', width: 108, render: (row: TaskItem) => taskElapsedText(row) },
   {
     title: '创建时间',
     key: 'createdAt',
-    width: 160,
+    width: 142,
     render: (row: TaskItem) => formatDateTime(row.createdAt || row.created_at),
   },
   {
     title: '操作',
     key: 'actions',
-    width: 200,
-    render: (row: TaskItem) => h('div', { class: 'flex items-center gap-1' }, [
-      h(NButton, {
-        text: true,
-        type: 'primary',
-        size: 'small',
-        onClick: () => handleShowDetail(row.id),
-      }, { default: () => '详情' }),
-      row.audio_url
-        ? h(NButton, {
-            text: true,
-            size: 'small',
-            onClick: () => handleDownloadAudio(row),
-          }, { default: () => '音频' })
-        : null,
-      row.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)
-        ? h(NButton, {
-            text: true,
-            size: 'small',
-            onClick: () => void router.push({ name: 'meeting-detail', params: { id: String(row.meeting_id) } }),
-          }, { default: () => '会议' })
-        : null,
-      h(NButton, {
+    width: 154,
+    render: (row: TaskItem) => {
+      const primaryActions = [
+        h(NButton, {
+          text: true,
+          type: 'primary',
+          size: 'small',
+          onClick: () => handleShowDetail(row.id),
+        }, { default: () => '详情' }),
+      ]
+      if (row.audio_url) {
+        primaryActions.push(h(NButton, {
+          text: true,
+          size: 'small',
+          onClick: () => handleDownloadAudio(row),
+        }, { default: () => '音频' }))
+      }
+
+      const secondaryActions: typeof primaryActions = []
+      if (row.meeting_id && appStore.hasCapability(PRODUCT_FEATURE_KEYS.MEETING)) {
+        secondaryActions.push(h(NButton, {
+          text: true,
+          size: 'small',
+          onClick: () => void router.push({ name: 'meeting-detail', params: { id: String(row.meeting_id) } }),
+        }, { default: () => '会议' }))
+      }
+      secondaryActions.push(h(NButton, {
         text: true,
         size: 'small',
         loading: syncingIds.value.includes(row.id),
         disabled: row.type !== TRANSCRIPTION_TASK_TYPES.BATCH || !isTaskActive(row),
         onClick: () => handleSyncSingle(row.id),
-      }, { default: () => '同步' }),
-      isTaskDeletable(row)
-        ? h(NButton, {
-            text: true,
-            size: 'small',
-            type: 'error',
-            loading: deletingTaskId.value === row.id,
-            onClick: () => handleDeleteTask(row),
-          }, { default: () => '删除' })
-        : null,
-    ]),
+      }, { default: () => '同步' }))
+      if (isTaskDeletable(row)) {
+        secondaryActions.push(h(NButton, {
+          text: true,
+          size: 'small',
+          type: 'error',
+          loading: deletingTaskId.value === row.id,
+          onClick: () => handleDeleteTask(row),
+        }, { default: () => '删除' }))
+      }
+
+      return h('div', { class: 'task-action-cell' }, [
+        h('div', { class: 'task-action-row' }, primaryActions),
+        h('div', { class: 'task-action-row task-action-row-secondary' }, secondaryActions),
+      ])
+    },
   },
 ]
 
@@ -1178,7 +1191,7 @@ onBeforeUnmount(() => {
         :data="filteredTasks"
         :loading="loading"
         :pagination="{ pageSize: 10 }"
-        :scroll-x="900"
+        :scroll-x="1416"
         size="small"
       />
     </NCard>
@@ -1390,5 +1403,41 @@ onBeforeUnmount(() => {
 }
 .task-list-card :deep(.n-card__content) {
   flex: 1;
+  overflow: hidden;
+}
+.task-list-card :deep(.n-data-table) {
+  min-width: 0;
+}
+.task-list-card :deep(.n-data-table-base-table-body) {
+  overflow-x: auto;
+}
+
+.task-table-tooltip {
+  max-width: 360px;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.task-action-cell {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.task-action-row {
+  display: flex;
+  min-width: 0;
+  height: 22px;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.task-action-row-secondary {
+  color: #64748b;
+}
+
+.task-action-cell :deep(.n-button) {
+  padding: 0 2px;
 }
 </style>

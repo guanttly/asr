@@ -136,6 +136,18 @@ func (r *termEntryRepoStub) Delete(_ context.Context, id uint64) error {
 	return nil
 }
 
+func (r *termEntryRepoStub) DeleteByDict(_ context.Context, dictID uint64) (int64, error) {
+	var count int64
+	for id, item := range r.items {
+		if item.DictID == dictID {
+			delete(r.items, id)
+			r.deleted = append(r.deleted, id)
+			count++
+		}
+	}
+	return count, nil
+}
+
 type termRuleRepoStub struct {
 	nextID  uint64
 	items   map[uint64]domain.CorrectionRule
@@ -188,6 +200,18 @@ func (r *termRuleRepoStub) Delete(_ context.Context, id uint64) error {
 	delete(r.items, id)
 	r.deleted = append(r.deleted, id)
 	return nil
+}
+
+func (r *termRuleRepoStub) DeleteByDict(_ context.Context, dictID uint64) (int64, error) {
+	var count int64
+	for id, item := range r.items {
+		if item.DictID == dictID {
+			delete(r.items, id)
+			r.deleted = append(r.deleted, id)
+			count++
+		}
+	}
+	return count, nil
 }
 
 func TestEnsureSeedDataKeepsExistingDeprecatedDictionaries(t *testing.T) {

@@ -43,6 +43,7 @@ func (repo stubRuleRepo) ListByDict(context.Context, uint64) ([]domain.Correctio
 }
 func (repo stubRuleRepo) Update(context.Context, *domain.CorrectionRule) error { return nil }
 func (repo stubRuleRepo) Delete(context.Context, uint64) error                 { return nil }
+func (repo stubRuleRepo) DeleteByDict(context.Context, uint64) (int64, error)  { return 0, nil }
 
 func TestCorrectorAppliesRulesBeforeTermEntries(t *testing.T) {
 	dictID := uint64(1)

@@ -119,3 +119,89 @@ func TestDeleteEntryReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected ErrFillerEntryNotFound, got %v", err)
 	}
 }
+
+type entryStoreStub struct {
+	items  map[uint64]domain.Entry
+	nextID uint64
+}
+
+func (r *entryStoreStub) Create(_ context.Context, entry *domain.Entry) error {
+	if r.items == nil {
+		r.items = map[uint64]domain.Entry{}
+	}
+	r.nextID++
+	entry.ID = r.nextID
+	r.items[entry.ID] = *entry
+	return nil
+}
+
+func (r *entryStoreStub) GetByID(_ context.Context, id uint64) (*domain.Entry, error) {
+	if item, ok := r.items[id]; ok {
+		copyItem := item
+		return &copyItem, nil
+	}
+	return nil, nil
+}
+
+func (r *entryStoreStub) ListByDict(_ context.Context, dictID uint64) ([]domain.Entry, error) {
+	items := make([]domain.Entry, 0, len(r.items))
+	for _, item := range r.items {
+		if item.DictID == dictID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (r *entryStoreStub) ListAppliedByDict(_ context.Context, _ uint64) ([]domain.Entry, error) {
+	return nil, nil
+}
+func (r *entryStoreStub) Update(_ context.Context, entry *domain.Entry) error {
+	r.items[entry.ID] = *entry
+	return nil
+}
+func (r *entryStoreStub) Delete(_ context.Context, id uint64) error {
+	delete(r.items, id)
+	return nil
+}
+
+type refCheckerStub struct {
+	count int
+}
+
+func (r refCheckerStub) CountFillerDictReferences(_ context.Context, _ uint64) (int, error) {
+	return r.count, nil
+}
+
+func TestCreateDictRejectsInvalidName(t *testing.T) {
+	service := NewService(&dictRepoStub{items: map[uint64]*domain.Dict{}}, &entryRepoStub{}, nil)
+
+	_, err := service.CreateDict(context.Background(), &CreateDictRequest{Name: "测试@#$", Scene: "通用"})
+	if !errors.Is(err, ErrFillerDictNameInvalid) {
+		t.Fatalf("expected ErrFillerDictNameInvalid, got %v", err)
+	}
+}
+
+func TestCreateEntryRejectsDuplicate(t *testing.T) {
+	dicts := &dictRepoStub{items: map[uint64]*domain.Dict{1: {ID: 1, Name: "场景库"}}}
+	entries := &entryStoreStub{items: map[uint64]domain.Entry{
+		1: {ID: 1, DictID: 1, Word: "嗯", Enabled: true},
+	}, nextID: 1}
+	service := NewService(dicts, entries, nil)
+
+	_, err := service.CreateEntry(context.Background(), &CreateEntryRequest{DictID: 1, Word: " 嗯 ", Enabled: true})
+	if !errors.Is(err, ErrFillerEntryDuplicate) {
+		t.Fatalf("expected ErrFillerEntryDuplicate, got %v", err)
+	}
+}
+
+func TestDeleteDictRejectsReferencedDict(t *testing.T) {
+	dicts := &dictRepoStub{items: map[uint64]*domain.Dict{1: {ID: 1, Name: "场景库"}}}
+	service := NewService(dicts, &entryStoreStub{}, nil)
+	service.SetReferenceChecker(refCheckerStub{count: 2})
+
+	err := service.DeleteDict(context.Background(), 1)
+	if !errors.Is(err, ErrFillerDictInUse) {
+		t.Fatalf("expected ErrFillerDictInUse, got %v", err)
+	}
+}

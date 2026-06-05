@@ -84,26 +84,12 @@ func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequ
 
 // DeleteDict deletes a terminology dictionary and its related entries and rules.
 func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
-	entries, err := s.entryRepo.ListByDict(ctx, id)
-	if err != nil {
+	if _, err := s.entryRepo.DeleteByDict(ctx, id); err != nil {
 		return err
 	}
-	for i := range entries {
-		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
-			return err
-		}
-	}
-
-	rules, err := s.ruleRepo.ListByDict(ctx, id)
-	if err != nil {
+	if _, err := s.ruleRepo.DeleteByDict(ctx, id); err != nil {
 		return err
 	}
-	for i := range rules {
-		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
-			return err
-		}
-	}
-
 	return s.dictRepo.Delete(ctx, id)
 }
 
@@ -212,16 +198,11 @@ func (s *Service) DeleteEntry(ctx context.Context, id uint64) error {
 
 // ClearEntries removes every term entry from one dictionary.
 func (s *Service) ClearEntries(ctx context.Context, dictID uint64) (int, error) {
-	entries, err := s.entryRepo.ListByDict(ctx, dictID)
+	deleted, err := s.entryRepo.DeleteByDict(ctx, dictID)
 	if err != nil {
 		return 0, err
 	}
-	for i := range entries {
-		if err := s.entryRepo.Delete(ctx, entries[i].ID); err != nil {
-			return i, err
-		}
-	}
-	return len(entries), nil
+	return int(deleted), nil
 }
 
 // GetDictRules returns all correction rules of a dictionary.
@@ -380,16 +361,11 @@ func (s *Service) DeleteRule(ctx context.Context, id uint64) error {
 
 // ClearRules removes every correction rule from one dictionary.
 func (s *Service) ClearRules(ctx context.Context, dictID uint64) (int, error) {
-	rules, err := s.ruleRepo.ListByDict(ctx, dictID)
+	deleted, err := s.ruleRepo.DeleteByDict(ctx, dictID)
 	if err != nil {
 		return 0, err
 	}
-	for i := range rules {
-		if err := s.ruleRepo.Delete(ctx, rules[i].ID); err != nil {
-			return i, err
-		}
-	}
-	return len(rules), nil
+	return int(deleted), nil
 }
 
 // EnsureSeedData creates default terminology dictionaries only for an empty

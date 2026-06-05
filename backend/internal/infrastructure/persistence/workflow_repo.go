@@ -279,6 +279,32 @@ func (r *WorkflowNodeRepo) DeleteByWorkflow(ctx context.Context, workflowID uint
 	return r.db.WithContext(ctx).Where("workflow_id = ?", workflowID).Delete(&WorkflowNodeModel{}).Error
 }
 
+// CountConfigDictReferences returns how many workflow nodes of the given type
+// reference dictID through their config "dict_id" field. The config is stored
+// as a JSON string, so it is parsed in Go to stay database-agnostic.
+func (r *WorkflowNodeRepo) CountConfigDictReferences(ctx context.Context, nodeType string, dictID uint64) (int, error) {
+	var models []WorkflowNodeModel
+	if err := r.db.WithContext(ctx).Where("node_type = ?", nodeType).Find(&models).Error; err != nil {
+		return 0, err
+	}
+	count := 0
+	for i := range models {
+		if models[i].Config == "" {
+			continue
+		}
+		var cfg struct {
+			DictID uint64 `json:"dict_id"`
+		}
+		if err := json.Unmarshal([]byte(models[i].Config), &cfg); err != nil {
+			continue
+		}
+		if cfg.DictID == dictID {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // ─── NodeDefaultRepo ───────────────────────────────────
 
 type WorkflowNodeDefaultRepo struct {

@@ -17,6 +17,16 @@ import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 
 const message = useMessage()
 const confirmDelete = useDeleteConfirmDialog()
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  const messageText = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+  if (typeof messageText === 'string' && messageText.trim())
+    return messageText.trim()
+  return fallback
+}
+
+// 词库名称仅支持中文、字母、数字、下划线和短横线
+const dictNamePattern = /^[\u4E00-\u9FA5\w\- ]+$/
 const loading = ref(false)
 const entryLoading = ref(false)
 const dictSaving = ref(false)
@@ -248,6 +258,10 @@ async function handleSubmitDict() {
     message.warning('请填写词库名称和场景')
     return
   }
+  if (!dictNamePattern.test(dictForm.name.trim())) {
+    message.warning('名称包含非法字符，仅支持中文、字母、数字、下划线和短横线')
+    return
+  }
 
   dictSaving.value = true
   try {
@@ -271,10 +285,8 @@ async function handleSubmitDict() {
     resetDictForm()
     await loadDicts()
   }
-  catch {
-    message.error(editingDictId.value ? '语气词库更新失败' : '语气词库创建失败')
-    if (editingDictId.value || dictForm.isBase)
-      message.warning('若提示基础库冲突，请直接编辑现有基础语气词库，而不是再创建一个新的基础库。')
+  catch (error) {
+    message.error(extractErrorMessage(error, editingDictId.value ? '语气词库更新失败' : '语气词库创建失败'))
   }
   finally {
     dictSaving.value = false
@@ -300,10 +312,8 @@ async function handleDeleteDict(row: FillerDictItem) {
     }
     await loadDicts()
   }
-  catch {
-    message.error('语气词库删除失败')
-    if (row.is_base)
-      message.warning('基础语气词库受保护，不允许删除。')
+  catch (error) {
+    message.error(extractErrorMessage(error, '语气词库删除失败'))
   }
   finally {
     deletingDictId.value = null
@@ -315,15 +325,21 @@ async function handleSubmitEntry() {
     message.warning('请先选择词库')
     return
   }
-  if (!entryForm.word.trim()) {
+  const word = entryForm.word.trim()
+  if (!word) {
     message.warning('请填写语气词')
+    return
+  }
+  const duplicated = entries.value.some(item => item.word.trim() === word && item.id !== editingEntryId.value)
+  if (duplicated) {
+    message.warning(`语气词「${word}」已存在`)
     return
   }
 
   entrySaving.value = true
   try {
     const payload = {
-      word: entryForm.word.trim(),
+      word,
       enabled: entryForm.enabled,
     }
 
@@ -340,8 +356,8 @@ async function handleSubmitEntry() {
     resetEntryForm()
     await selectDict(currentDictId.value)
   }
-  catch {
-    message.error(editingEntryId.value ? '语气词更新失败' : '语气词创建失败')
+  catch (error) {
+    message.error(extractErrorMessage(error, editingEntryId.value ? '语气词更新失败' : '语气词创建失败'))
   }
   finally {
     entrySaving.value = false

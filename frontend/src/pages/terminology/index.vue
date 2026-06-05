@@ -636,8 +636,10 @@ async function handleClearEntries() {
     message.success(`已清空 ${result.data.deleted} 条词条`)
     await loadEntries(currentDictId.value)
   }
-  catch {
-    message.error('词条清空失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || '词条清空失败，请稍后刷新页面确认删除进度后再重试')
+    await loadEntries(currentDictId.value)
   }
   finally {
     clearingEntries.value = false
@@ -723,8 +725,10 @@ async function handleClearRules() {
     message.success(`已清空 ${result.data.deleted} 条纠错规则`)
     await loadRules(currentDictId.value)
   }
-  catch {
-    message.error('纠错规则清空失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || '纠错规则清空失败，请稍后刷新页面确认删除进度后再重试')
+    await loadRules(currentDictId.value)
   }
   finally {
     clearingRules.value = false

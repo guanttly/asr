@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,6 +14,10 @@ import (
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// usernamePattern restricts manually created usernames to Chinese characters,
+// letters, digits, and underscores.
+var usernamePattern = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_]+$`)
 
 // Service orchestrates user use cases.
 type Service struct {
@@ -62,6 +67,9 @@ func (s *Service) CreateUser(ctx context.Context, req *CreateUserRequest) (*User
 	}
 	if runeCount(username) > maxUsernameLength {
 		return nil, &ValidationError{message: "用户名长度范围为 1-64 个字符"}
+	}
+	if !usernamePattern.MatchString(username) {
+		return nil, &ValidationError{message: "用户名仅支持中文字母数字下划线"}
 	}
 	if req.Password == "" || runeCount(req.Password) > maxPasswordLength {
 		return nil, &ValidationError{message: "密码长度范围为 1-128 个字符"}

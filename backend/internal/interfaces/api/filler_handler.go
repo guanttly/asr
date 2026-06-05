@@ -165,7 +165,10 @@ func (h *FillerHandler) writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, appfiller.ErrFillerDictNotFound), errors.Is(err, appfiller.ErrFillerEntryNotFound):
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
-	case errors.Is(err, appfiller.ErrFillerBaseDictProtected), errors.Is(err, appfiller.ErrFillerBaseDictConflict):
+	case errors.Is(err, appfiller.ErrFillerBaseDictProtected),
+		errors.Is(err, appfiller.ErrFillerBaseDictConflict),
+		errors.Is(err, appfiller.ErrFillerEntryDuplicate),
+		errors.Is(err, appfiller.ErrFillerDictInUse):
 		response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
 	default:
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())

@@ -98,6 +98,10 @@ func TestCreateUserValidatesLengthRangesAndTrimsUsername(t *testing.T) {
 			req:  &CreateUserRequest{Username: strings.Repeat("用", 65), Password: "secret", Role: string(userdomain.RoleUser)},
 		},
 		{
+			name: "username with illegal characters",
+			req:  &CreateUserRequest{Username: "alice@#", Password: "secret", Role: string(userdomain.RoleUser)},
+		},
+		{
 			name: "empty password",
 			req:  &CreateUserRequest{Username: "alice", Password: "", Role: string(userdomain.RoleUser)},
 		},

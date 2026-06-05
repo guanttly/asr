@@ -98,6 +98,10 @@ async function handleCreateUser() {
     message.warning('用户名长度范围为 1-64 个字符')
     return
   }
+  if (!/^[\u4E00-\u9FA5\w]+$/.test(username)) {
+    message.warning('用户名仅支持中文字母数字下划线')
+    return
+  }
   if (password.length > 128) {
     message.warning('密码长度范围为 1-128 个字符')
     return

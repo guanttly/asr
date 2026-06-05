@@ -36,6 +36,16 @@ type batchEngineAdapter struct {
 	client *asrengine.Client
 }
 
+// fillerDictReferenceChecker adapts the workflow node repository to report how
+// many workflow nodes still reference a filler dictionary.
+type fillerDictReferenceChecker struct {
+	nodeRepo *persistence.WorkflowNodeRepo
+}
+
+func (c fillerDictReferenceChecker) CountFillerDictReferences(ctx context.Context, dictID uint64) (int, error) {
+	return c.nodeRepo.CountConfigDictReferences(ctx, string(domain.NodeFillerFilter), dictID)
+}
+
 func (a *batchEngineAdapter) SubmitBatch(ctx context.Context, req appasr.BatchSubmitRequest) (*appasr.BatchSubmitResult, error) {
 	result, err := a.client.SubmitBatch(ctx, asrengine.BatchTranscribeRequest{
 		AudioURL:      req.AudioURL,
@@ -150,6 +160,7 @@ func main() {
 		fillerEntryRepo,
 		persistence.NewSeedStateRepo(db),
 	)
+	fillerService.SetReferenceChecker(fillerDictReferenceChecker{nodeRepo: persistence.NewWorkflowNodeRepo(db)})
 	if err := fillerService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
 	}

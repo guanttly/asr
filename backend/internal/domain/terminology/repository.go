@@ -18,6 +18,9 @@ type EntryRepository interface {
 	ListByDict(ctx context.Context, dictID uint64) ([]TermEntry, error)
 	Update(ctx context.Context, entry *TermEntry) error
 	Delete(ctx context.Context, id uint64) error
+	// DeleteByDict removes every entry of a dictionary in a single operation and
+	// returns the number of deleted rows.
+	DeleteByDict(ctx context.Context, dictID uint64) (int64, error)
 }
 
 // RuleRepository manages correction rules.
@@ -28,6 +31,9 @@ type RuleRepository interface {
 	ListByDict(ctx context.Context, dictID uint64) ([]CorrectionRule, error)
 	Update(ctx context.Context, rule *CorrectionRule) error
 	Delete(ctx context.Context, id uint64) error
+	// DeleteByDict removes every rule of a dictionary in a single operation and
+	// returns the number of deleted rows.
+	DeleteByDict(ctx context.Context, dictID uint64) (int64, error)
 }
 
 // SeedStateRepository tracks one-time initialization state for terminology seed data.

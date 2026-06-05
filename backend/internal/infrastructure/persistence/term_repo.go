@@ -239,6 +239,11 @@ func (r *EntryRepo) Delete(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Delete(&EntryModel{}, id).Error
 }
 
+func (r *EntryRepo) DeleteByDict(ctx context.Context, dictID uint64) (int64, error) {
+	res := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Delete(&EntryModel{})
+	return res.RowsAffected, res.Error
+}
+
 type RuleRepo struct {
 	db *gorm.DB
 }
@@ -339,6 +344,11 @@ func (r *RuleRepo) Update(ctx context.Context, rule *domain.CorrectionRule) erro
 		"conflict_group": rule.ConflictGroup,
 		"updated_at":     time.Now(),
 	}).Error
+}
+
+func (r *RuleRepo) DeleteByDict(ctx context.Context, dictID uint64) (int64, error) {
+	res := r.db.WithContext(ctx).Where("dict_id = ?", dictID).Delete(&RuleModel{})
+	return res.RowsAffected, res.Error
 }
 
 func normalizeRuleMatchType(value domain.RuleMatchType) domain.RuleMatchType {

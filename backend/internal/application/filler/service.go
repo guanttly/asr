@@ -3,11 +3,22 @@ package filler
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/filler"
 	termdomain "github.com/lgt/asr/internal/domain/terminology"
 )
+
+// dictNamePattern restricts filler dictionary names to Chinese characters,
+// letters, digits, underscores, hyphens and spaces.
+var dictNamePattern = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_\- ]+$`)
+
+// DictReferenceChecker reports how many workflow nodes still reference a
+// filler dictionary, so deletion can be blocked while it is in use.
+type DictReferenceChecker interface {
+	CountFillerDictReferences(ctx context.Context, dictID uint64) (int, error)
+}
 
 type seedDictionary struct {
 	Name        string
@@ -19,9 +30,10 @@ type seedDictionary struct {
 
 // Service orchestrates filler dictionary management.
 type Service struct {
-	dictRepo  domain.DictRepository
-	entryRepo domain.EntryRepository
-	seedRepo  termdomain.SeedStateRepository
+	dictRepo   domain.DictRepository
+	entryRepo  domain.EntryRepository
+	seedRepo   termdomain.SeedStateRepository
+	refChecker DictReferenceChecker
 }
 
 const fillerSeedStateKey = "filler_seed_initialized_v1"
@@ -32,12 +44,32 @@ func NewService(dictRepo domain.DictRepository, entryRepo domain.EntryRepository
 	return &Service{dictRepo: dictRepo, entryRepo: entryRepo, seedRepo: seedRepo}
 }
 
+// SetReferenceChecker wires an optional checker used to block deletion of a
+// dictionary that is still referenced by workflow nodes.
+func (s *Service) SetReferenceChecker(checker DictReferenceChecker) {
+	s.refChecker = checker
+}
+
+func validateDictName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: 词库名称不能为空", ErrFillerDictNameInvalid)
+	}
+	if !dictNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: 名称包含非法字符，仅支持中文、字母、数字、下划线和短横线", ErrFillerDictNameInvalid)
+	}
+	return nil
+}
+
 func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*DictResponse, error) {
+	name := strings.TrimSpace(req.Name)
+	if err := validateDictName(name); err != nil {
+		return nil, err
+	}
 	if err := s.validateBaseDictConstraint(ctx, 0, req.IsBase); err != nil {
 		return nil, err
 	}
 	dict := &domain.Dict{
-		Name: strings.TrimSpace(req.Name), Scene: strings.TrimSpace(req.Scene), Description: strings.TrimSpace(req.Description), IsBase: req.IsBase,
+		Name: name, Scene: strings.TrimSpace(req.Scene), Description: strings.TrimSpace(req.Description), IsBase: req.IsBase,
 	}
 	if err := s.dictRepo.Create(ctx, dict); err != nil {
 		return nil, err
@@ -53,10 +85,14 @@ func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequ
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrFillerDictNotFound, id)
 	}
+	name := strings.TrimSpace(req.Name)
+	if err := validateDictName(name); err != nil {
+		return nil, err
+	}
 	if err := s.validateBaseDictConstraint(ctx, id, req.IsBase); err != nil {
 		return nil, err
 	}
-	dict.Name = strings.TrimSpace(req.Name)
+	dict.Name = name
 	dict.Scene = strings.TrimSpace(req.Scene)
 	dict.Description = strings.TrimSpace(req.Description)
 	dict.IsBase = req.IsBase
@@ -76,6 +112,15 @@ func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
 	}
 	if dict.IsBase {
 		return fmt.Errorf("%w: 基础语气词库不允许删除，请直接编辑内容", ErrFillerBaseDictProtected)
+	}
+	if s.refChecker != nil {
+		count, err := s.refChecker.CountFillerDictReferences(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: 该语气词库仍被 %d 个工作流节点引用，请先解除引用后再删除", ErrFillerDictInUse, count)
+		}
 	}
 	entries, err := s.entryRepo.ListByDict(ctx, id)
 	if err != nil {
@@ -128,7 +173,11 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrFillerDictNotFound, req.DictID)
 	}
-	entry := &domain.Entry{DictID: req.DictID, Word: strings.TrimSpace(req.Word), Enabled: req.Enabled}
+	word := strings.TrimSpace(req.Word)
+	if err := s.ensureWordUnique(ctx, req.DictID, word, 0); err != nil {
+		return nil, err
+	}
+	entry := &domain.Entry{DictID: req.DictID, Word: word, Enabled: req.Enabled}
 	if err := s.entryRepo.Create(ctx, entry); err != nil {
 		return nil, err
 	}
@@ -150,13 +199,35 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 	if entry == nil {
 		return nil, fmt.Errorf("%w: %d", ErrFillerEntryNotFound, req.ID)
 	}
+	word := strings.TrimSpace(req.Word)
+	if err := s.ensureWordUnique(ctx, req.DictID, word, req.ID); err != nil {
+		return nil, err
+	}
 	entry.DictID = req.DictID
-	entry.Word = strings.TrimSpace(req.Word)
+	entry.Word = word
 	entry.Enabled = req.Enabled
 	if err := s.entryRepo.Update(ctx, entry); err != nil {
 		return nil, err
 	}
 	return toEntryResponse(entry), nil
+}
+
+// ensureWordUnique rejects a filler word that already exists in the same
+// dictionary, ignoring the entry currently being edited (excludeID).
+func (s *Service) ensureWordUnique(ctx context.Context, dictID uint64, word string, excludeID uint64) error {
+	existing, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for i := range existing {
+		if existing[i].ID == excludeID {
+			continue
+		}
+		if strings.TrimSpace(existing[i].Word) == word {
+			return fmt.Errorf("%w: 语气词「%s」已存在", ErrFillerEntryDuplicate, word)
+		}
+	}
+	return nil
 }
 
 func (s *Service) DeleteEntry(ctx context.Context, id uint64) error {

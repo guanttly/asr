@@ -55,13 +55,13 @@ export function importTermEntries(dictId: string | number, payload: FormData) {
 export function exportTermEntries(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/export`, {
     responseType: 'blob',
-  })
+  }) as unknown as Promise<Blob>
 }
 
 export function downloadTermImportTemplate() {
   return request.get('/api/admin/term-dicts/import-template', {
     responseType: 'blob',
-  })
+  }) as unknown as Promise<Blob>
 }
 
 export function getTermRules(dictId: string | number) {
@@ -80,7 +80,13 @@ export function importTermRules(dictId: string | number, payload: FormData) {
 export function exportTermRules(dictId: string | number) {
   return request.get(`/api/admin/term-dicts/${dictId}/rules/export`, {
     responseType: 'blob',
-  })
+  }) as unknown as Promise<Blob>
+}
+
+export function downloadTermRulesImportTemplate() {
+  return request.get('/api/admin/term-dicts/rules/import-template', {
+    responseType: 'blob',
+  }) as unknown as Promise<Blob>
 }
 
 export function createTermRule(dictId: string | number, payload: { match_type: string, pattern: string, replacement: string, enabled: boolean, sort_order: number, priority?: number, conflict_group?: string }) {

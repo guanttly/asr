@@ -353,7 +353,7 @@ func (r *RuleRepo) DeleteByDict(ctx context.Context, dictID uint64) (int64, erro
 
 func normalizeRuleMatchType(value domain.RuleMatchType) domain.RuleMatchType {
 	switch value {
-	case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize:
+	case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize, domain.RuleMatchHallucinationTrim:
 		return value
 	}
 	return domain.RuleMatchLiteral

@@ -21,6 +21,38 @@ const form = reactive({
 
 const loading = ref(false)
 
+function resolveLoginError(error: unknown) {
+  const axiosError = error as AxiosError<{ message?: string }>
+  const status = axiosError.response?.status
+  const responseMessage = axiosError.response?.data?.message
+
+  if (!status) {
+    return {
+      type: 'error' as const,
+      text: '系统服务连接失败，请稍后再试或联系管理员',
+    }
+  }
+
+  if (status === 401 || status === 403) {
+    return {
+      type: 'warning' as const,
+      text: '登录失败，请检查用户名或密码',
+    }
+  }
+
+  if (status >= 500) {
+    return {
+      type: 'error' as const,
+      text: '系统服务异常，请稍后再试或联系管理员',
+    }
+  }
+
+  return {
+    type: 'warning' as const,
+    text: responseMessage || '登录失败，请稍后再试',
+  }
+}
+
 function openDownloads() {
   router.push('/downloads')
 }
@@ -37,8 +69,8 @@ async function handleLogin() {
     router.push('/dashboard')
   }
   catch (error) {
-    const responseMessage = (error as AxiosError<{ message?: string }>)?.response?.data?.message
-    message.warning(responseMessage || '登录失败，请检查用户名或密码')
+    const loginError = resolveLoginError(error)
+    message[loginError.type](loginError.text)
   }
   finally {
     loading.value = false

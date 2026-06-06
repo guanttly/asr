@@ -275,13 +275,16 @@ func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string,
 	if typeValue == "" {
 		typeValue = domain.RuleMatchLiteral
 	}
-	if typeValue != domain.RuleMatchLiteral && typeValue != domain.RuleMatchRegex && typeValue != domain.RuleMatchNumberNormalize {
+	if typeValue != domain.RuleMatchLiteral &&
+		typeValue != domain.RuleMatchRegex &&
+		typeValue != domain.RuleMatchNumberNormalize &&
+		typeValue != domain.RuleMatchHallucinationTrim {
 		return nil, fmt.Errorf("invalid match_type: %s", matchType)
 	}
 
 	pattern = strings.TrimSpace(pattern)
 	replacement = strings.TrimSpace(replacement)
-	if typeValue != domain.RuleMatchNumberNormalize && pattern == "" {
+	if typeValue != domain.RuleMatchNumberNormalize && typeValue != domain.RuleMatchHallucinationTrim && pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
 	if typeValue == domain.RuleMatchRegex {
@@ -289,7 +292,7 @@ func normalizeRuleRequest(dictID uint64, matchType, pattern, replacement string,
 			return nil, fmt.Errorf("invalid regex pattern: %w", err)
 		}
 	}
-	if typeValue == domain.RuleMatchNumberNormalize {
+	if typeValue == domain.RuleMatchNumberNormalize || typeValue == domain.RuleMatchHallucinationTrim {
 		pattern = ""
 		replacement = ""
 	}

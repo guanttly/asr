@@ -55,6 +55,7 @@ func (h *TermHandler) Register(group *gin.RouterGroup) {
 	group.GET("/term-dicts", h.ListDicts)
 	group.POST("/term-dicts", h.CreateDict)
 	group.GET("/term-dicts/import-template", h.DownloadImportTemplate)
+	group.GET("/term-dicts/rules/import-template", h.DownloadRulesImportTemplate)
 	group.PUT("/term-dicts/:id", h.UpdateDict)
 	group.DELETE("/term-dicts/:id", h.DeleteDict)
 	group.GET("/term-dicts/:id/entries", h.ListEntries)
@@ -416,13 +417,13 @@ func (h *TermHandler) ExportRules(c *gin.Context) {
 	}
 
 	wb := xlsxio.NewWorkbook("纠错规则")
-	wb.AppendRow("pattern", "replacement", "match_type", "priority", "conflict_group", "enabled")
+	appendRuleWorkbookHeader(wb)
 	for _, rule := range rules {
 		enabled := "否"
 		if rule.Enabled {
 			enabled = "是"
 		}
-		wb.AppendRow(rule.Pattern, rule.Replacement, rule.MatchType, strconv.Itoa(rule.Priority), rule.ConflictGroup, enabled)
+		appendRuleWorkbookRow(wb, rule.Pattern, rule.Replacement, rule.MatchType, rule.Priority, rule.ConflictGroup, enabled, "", "", "", "", "")
 	}
 
 	var buf bytes.Buffer
@@ -433,6 +434,48 @@ func (h *TermHandler) ExportRules(c *gin.Context) {
 	filename := fmt.Sprintf("term-dict-%d-rules.xlsx", dictID)
 	c.Header("Content-Disposition", "attachment; filename="+filename)
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+}
+
+// DownloadRulesImportTemplate serves a blank rules xlsx with the same columns
+// accepted by ImportRules and rules-catalog exports.
+func (h *TermHandler) DownloadRulesImportTemplate(c *gin.Context) {
+	wb := xlsxio.NewWorkbook("纠错规则")
+	appendRuleWorkbookHeader(wb)
+	appendRuleWorkbookRow(wb, "舒张亚", "舒张压", "literal", 100, "fixed_text", "是", "固定错词", "患者舒张亚偏高 -> 患者舒张压偏高", "固定文字替换", "", "")
+	appendRuleWorkbookRow(wb, `血压(\d+)/(\d+)`, "血压$1-$2", "regex", 80, "vital_sign", "是", "格式规范", "血压120/80 -> 血压120-80", "正则分组替换", "", "")
+	appendRuleWorkbookRow(wb, "", "", "number_normalize", 30, "number", "是", "自动规范", "大小十二乘二十三毫米 -> 大小12x23mm", "无需填写 pattern/replacement", "", "")
+	appendRuleWorkbookRow(wb, "", "", "hallucination_trim", 20, "cleanup", "是", "重复清理", "重复尾句会被裁剪", "无需填写 pattern/replacement", "", "")
+
+	var buf bytes.Buffer
+	if err := wb.Encode(&buf); err != nil {
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		return
+	}
+	c.Header("Content-Disposition", "attachment; filename=term-dict-rules-import-template.xlsx")
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+}
+
+func appendRuleWorkbookHeader(wb *xlsxio.Workbook) {
+	wb.AppendRow(
+		"pattern", "replacement", "match_type", "priority", "conflict_group", "enabled",
+		"category", "example", "notes", "subsection_title", "source_path",
+	)
+}
+
+func appendRuleWorkbookRow(wb *xlsxio.Workbook, pattern, replacement, matchType string, priority int, conflictGroup, enabled, category, example, notes, subsectionTitle, sourcePath string) {
+	wb.AppendRow(
+		pattern,
+		replacement,
+		matchType,
+		strconv.Itoa(priority),
+		conflictGroup,
+		enabled,
+		category,
+		example,
+		notes,
+		subsectionTitle,
+		sourcePath,
+	)
 }
 
 func (h *TermHandler) BatchImport(c *gin.Context) {

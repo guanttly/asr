@@ -227,7 +227,7 @@ func ruleImportRowsToRules(rows [][]string) ([]domain.CorrectionRule, error) {
 		matchType := normaliseRuleMatchTypeStr(cellAt(row, idxMatchType))
 		pattern := normalizeRuleImportPattern(cellAt(row, idxPattern), matchType)
 		replacement := cellAt(row, idxReplacement)
-		if pattern == "" && matchType != string(domain.RuleMatchNumberNormalize) {
+		if pattern == "" && matchType != string(domain.RuleMatchNumberNormalize) && matchType != string(domain.RuleMatchHallucinationTrim) {
 			continue
 		}
 		priority := parseIntCell(cellAt(row, idxPriority), 100)
@@ -270,6 +270,8 @@ func normaliseRuleMatchTypeStr(v string) string {
 		return "regex"
 	case "number_normalize", "number-normalize", "数值归一", "数字归一", "数字格式自动规范":
 		return "number_normalize"
+	case "hallucination_trim", "hallucination-trim", "幻觉裁剪", "幻觉去尾", "重复裁剪":
+		return "hallucination_trim"
 	}
 	return "literal"
 }
@@ -286,11 +288,11 @@ func normalizeRuleImportPattern(pattern string, matchType string) string {
 func validateRuleImportRules(rules []domain.CorrectionRule) error {
 	for i, rule := range rules {
 		switch rule.MatchType {
-		case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize:
+		case domain.RuleMatchLiteral, domain.RuleMatchRegex, domain.RuleMatchNumberNormalize, domain.RuleMatchHallucinationTrim:
 		default:
 			return fmt.Errorf("第 %d 条规则的匹配方式无效: %s", i+1, rule.MatchType)
 		}
-		if rule.MatchType != domain.RuleMatchNumberNormalize && strings.TrimSpace(rule.Pattern) == "" {
+		if rule.MatchType != domain.RuleMatchNumberNormalize && rule.MatchType != domain.RuleMatchHallucinationTrim && strings.TrimSpace(rule.Pattern) == "" {
 			return fmt.Errorf("第 %d 条规则缺少错误模式", i+1)
 		}
 		if rule.MatchType == domain.RuleMatchRegex {

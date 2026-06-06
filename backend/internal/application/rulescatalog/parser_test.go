@@ -30,11 +30,11 @@ func TestEmbeddedRulesCatalogParsesCleanly(t *testing.T) {
 	}
 
 	for _, rule := range rules {
-		if rule.Pattern == "" {
+		if rule.Pattern == "" && !ruleMatchTypeAllowsEmptyPattern(rule.MatchType) {
 			t.Errorf("rule in %s has empty pattern", rule.SourcePath)
 			break
 		}
-		if rule.MatchType != "literal" && rule.MatchType != "regex" && rule.MatchType != "number_normalize" {
+		if rule.MatchType != "literal" && rule.MatchType != "regex" && rule.MatchType != "number_normalize" && rule.MatchType != "hallucination_trim" {
 			t.Errorf("rule %q has invalid match_type %q", rule.Pattern, rule.MatchType)
 			break
 		}
@@ -108,13 +108,14 @@ func TestParseMarkdownBodyRulesTable(t *testing.T) {
 | 单位归一 | 毫米 | mm | literal | 70 | unit-normalize | 是 | 5毫米→5mm | 测试 |
 | 乘号 | (\d)[xX乘]\s*(\d) | $1×$2 | regex | 80 | dimension | 否 | 12x13→12×13 |  |
 | 分级 | (?i)stage\s*([Ⅰ-Ⅳ]\|[1-4])(a\|b\|c)? | Stage $1$2 | regex | 50 | grading | 是 | stage iiia → Stage IIIA | 表格转义 |
+| 幻觉 |  |  | hallucination_trim | 29 | hallucination | 是 | 重复尾段裁剪 |  |
 `
 	title, rules := parseMarkdownBody("test.md", []byte(body))
 	if title != "规则测试" {
 		t.Errorf("title = %q, want 规则测试", title)
 	}
-	if len(rules) != 3 {
-		t.Fatalf("len(rules) = %d, want 3", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("len(rules) = %d, want 4", len(rules))
 	}
 	if rules[0].Pattern != "毫米" || rules[0].Replacement != "mm" {
 		t.Errorf("rule[0] = %+v", rules[0])
@@ -127,6 +128,9 @@ func TestParseMarkdownBodyRulesTable(t *testing.T) {
 	}
 	if rules[2].Pattern != `(?i)stage\s*([Ⅰ-Ⅳ]|[1-4])(a|b|c)?` || rules[2].MatchType != "regex" {
 		t.Errorf("rule[2] = %+v", rules[2])
+	}
+	if rules[3].Pattern != "" || rules[3].MatchType != "hallucination_trim" {
+		t.Errorf("rule[3] = %+v", rules[3])
 	}
 }
 

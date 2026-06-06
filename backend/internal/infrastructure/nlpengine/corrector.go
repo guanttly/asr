@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
 	"gorm.io/gorm"
@@ -121,9 +122,12 @@ func applyCorrectionRule(text string, rule domain.CorrectionRule) (string, []str
 		if len(matches) == 0 {
 			return text, nil, nil
 		}
-		return compiled.ReplaceAllString(text, rule.Replacement), []string{rule.Pattern + "=>" + rule.Replacement + "(" + strconv.Itoa(len(matches)) + ")"}, nil
+		replacement := normalizeRegexReplacement(rule.Replacement)
+		return compiled.ReplaceAllString(text, replacement), []string{rule.Pattern + "=>" + rule.Replacement + "(" + strconv.Itoa(len(matches)) + ")"}, nil
 	case domain.RuleMatchNumberNormalize:
 		return normalizeSpokenNumbers(text)
+	case domain.RuleMatchHallucinationTrim:
+		return trimHallucinatedTranscript(text)
 	default:
 		if rule.Pattern == "" || !strings.Contains(text, rule.Pattern) {
 			return text, nil, nil
@@ -160,6 +164,257 @@ func normalizeSpokenNumbers(text string) (string, []string, error) {
 	}
 
 	return builder.String(), applied, nil
+}
+
+func normalizeRegexReplacement(replacement string) string {
+	runes := []rune(replacement)
+	var builder strings.Builder
+	for index := 0; index < len(runes); {
+		if runes[index] != '$' || index+1 >= len(runes) || !isASCIIDigitRune(runes[index+1]) {
+			builder.WriteRune(runes[index])
+			index++
+			continue
+		}
+
+		digitStart := index + 1
+		digitEnd := digitStart
+		for digitEnd < len(runes) && isASCIIDigitRune(runes[digitEnd]) {
+			digitEnd++
+		}
+		if digitEnd < len(runes) && (unicode.IsLetter(runes[digitEnd]) || runes[digitEnd] == '_') {
+			builder.WriteString("${")
+			builder.WriteString(string(runes[digitStart:digitEnd]))
+			builder.WriteRune('}')
+			index = digitEnd
+			continue
+		}
+
+		builder.WriteString(string(runes[index:digitEnd]))
+		index = digitEnd
+	}
+	return builder.String()
+}
+
+func isASCIIDigitRune(value rune) bool {
+	return value >= '0' && value <= '9'
+}
+
+func trimHallucinatedTranscript(text string) (string, []string, error) {
+	corrected := text
+	applied := []string{}
+
+	if next, ok := trimRepeatedBoilerplate(corrected); ok {
+		corrected = next
+		applied = append(applied, "hallucination_trim:boilerplate_tail")
+	}
+	if next, ok := trimRepeatedClosingTail(corrected); ok {
+		corrected = next
+		applied = append(applied, "hallucination_trim:repeated_tail")
+	}
+	if next, dropped := dropRunawayRepeatedClauses(corrected); dropped > 0 {
+		corrected = next
+		applied = append(applied, "hallucination_trim:repeated_clauses("+strconv.Itoa(dropped)+")")
+	}
+
+	if corrected == text {
+		return text, nil, nil
+	}
+	return corrected, applied, nil
+}
+
+func trimRepeatedBoilerplate(text string) (string, bool) {
+	anchors := []string{
+		"本报告为急诊夜班临时报告",
+		"如有重要变更，我们会及时告知，请确认就诊登记电话号码正确",
+	}
+	endings := []string{
+		"保持手机通畅。",
+		"保持手机通畅！",
+		"保持手机通畅",
+		"以正式报告为准！",
+		"以正式报告为准。",
+		"以正式报告为准",
+	}
+
+	for _, anchor := range anchors {
+		first := strings.Index(text, anchor)
+		if first < 0 {
+			continue
+		}
+		secondRelative := strings.Index(text[first+len(anchor):], anchor)
+		if secondRelative < 0 {
+			continue
+		}
+		second := first + len(anchor) + secondRelative
+		trimEnd := first + len(anchor)
+		for _, ending := range endings {
+			endingRelative := strings.Index(text[first:], ending)
+			if endingRelative < 0 {
+				continue
+			}
+			candidateEnd := first + endingRelative + len(ending)
+			if candidateEnd <= second {
+				trimEnd = candidateEnd
+				break
+			}
+		}
+		if trimEnd < len(text) {
+			return strings.TrimSpace(text[:trimEnd]), true
+		}
+	}
+	return text, false
+}
+
+func trimRepeatedClosingTail(text string) (string, bool) {
+	textRunes := []rune(text)
+	if len(textRunes) < 80 {
+		return text, false
+	}
+
+	maxSuffixLen := len(textRunes) / 2
+	if maxSuffixLen > 240 {
+		maxSuffixLen = 240
+	}
+	for suffixLen := maxSuffixLen; suffixLen >= 32; suffixLen-- {
+		suffix := string(textRunes[len(textRunes)-suffixLen:])
+		if !looksLikeClosingTail(suffix) {
+			continue
+		}
+		prefix := string(textRunes[:len(textRunes)-suffixLen])
+		previous := strings.LastIndex(prefix, suffix)
+		if previous < 0 {
+			continue
+		}
+		keepEnd := previous + len(suffix)
+		if keepEnd >= len(prefix) {
+			continue
+		}
+		return strings.TrimSpace(prefix[:keepEnd]), true
+	}
+	return text, false
+}
+
+func looksLikeClosingTail(value string) bool {
+	anchors := []string{
+		"请结合临床",
+		"随诊复查",
+		"临床随诊",
+		"以正式报告为准",
+		"保持手机通畅",
+	}
+	for _, anchor := range anchors {
+		if strings.Contains(value, anchor) {
+			return true
+		}
+	}
+	return false
+}
+
+func dropRunawayRepeatedClauses(text string) (string, int) {
+	segments := splitTranscriptSegments(text)
+	if len(segments) < 8 {
+		return text, 0
+	}
+
+	counts := make(map[string]int)
+	for _, segment := range segments {
+		normalized := normalizeRepeatedClause(segment)
+		if normalized == "" {
+			continue
+		}
+		counts[normalized]++
+	}
+
+	var builder strings.Builder
+	seen := make(map[string]int)
+	dropped := 0
+	for _, segment := range segments {
+		normalized := normalizeRepeatedClause(segment)
+		if shouldDropRepeatedClause(normalized, counts[normalized], seen[normalized]) {
+			seen[normalized]++
+			dropped++
+			continue
+		}
+		if normalized != "" {
+			seen[normalized]++
+		}
+		builder.WriteString(segment)
+	}
+	if dropped == 0 {
+		return text, 0
+	}
+	return strings.TrimSpace(builder.String()), dropped
+}
+
+func splitTranscriptSegments(text string) []string {
+	segments := []string{}
+	start := 0
+	for index, value := range text {
+		if !isTranscriptSegmentDelimiter(value) {
+			continue
+		}
+		end := index + len(string(value))
+		segments = append(segments, text[start:end])
+		start = end
+	}
+	if start < len(text) {
+		segments = append(segments, text[start:])
+	}
+	return segments
+}
+
+func isTranscriptSegmentDelimiter(value rune) bool {
+	switch value {
+	case '。', '；', ';', '\n':
+		return true
+	}
+	return false
+}
+
+var leadingClauseNumberPattern = regexp.MustCompile(`^[第]?[零〇一二三四五六七八九十百千万两\d]+[、.．，,：:]+`)
+
+func normalizeRepeatedClause(segment string) string {
+	normalized := strings.TrimSpace(segment)
+	normalized = strings.Trim(normalized, " \t\r\n，,。；;：:、.．")
+	for {
+		next := leadingClauseNumberPattern.ReplaceAllString(normalized, "")
+		if next == normalized {
+			break
+		}
+		normalized = strings.TrimSpace(next)
+	}
+
+	var builder strings.Builder
+	for _, value := range normalized {
+		if isIgnorableClauseRune(value) {
+			continue
+		}
+		builder.WriteRune(value)
+	}
+	normalized = builder.String()
+	if len([]rune(normalized)) < 8 {
+		return ""
+	}
+	return normalized
+}
+
+func isIgnorableClauseRune(value rune) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n', '，', ',', '。', '；', ';', '：', ':', '、', '.', '．':
+		return true
+	}
+	return false
+}
+
+func shouldDropRepeatedClause(normalized string, totalCount, seenCount int) bool {
+	if normalized == "" || seenCount == 0 {
+		return false
+	}
+	length := len([]rune(normalized))
+	if length >= 12 && totalCount >= 4 {
+		return true
+	}
+	return length >= 8 && totalCount >= 6
 }
 
 func parseDimensionExpression(textRunes []rune, startIndex int) (string, int, bool) {

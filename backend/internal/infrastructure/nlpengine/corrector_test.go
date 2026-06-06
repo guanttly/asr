@@ -84,6 +84,23 @@ func TestCorrectorRegexRule(t *testing.T) {
 	}
 }
 
+func TestCorrectorRegexReplacementKeepsAdjacentLiteralText(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
+		stubEntryRepo{},
+		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchRegex, Pattern: `(\d+)\s*毫米`, Replacement: `$1mm`, Enabled: true}}},
+	)
+
+	result, _, err := corrector.Correct(context.Background(), &dictID, "大小8毫米")
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	if result != "大小8mm" {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+}
+
 func TestCorrectorNumberNormalizeRule(t *testing.T) {
 	dictID := uint64(1)
 	corrector := NewCorrector(
@@ -97,6 +114,72 @@ func TestCorrectorNumberNormalizeRule(t *testing.T) {
 		t.Fatalf("Correct returned error: %v", err)
 	}
 	expected := "大小12x23mm，血钾2.3，第二点保持原样"
+	if result != expected {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+}
+
+func TestCorrectorSeparatesShangPhraseFromUpperLobe(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
+		stubEntryRepo{},
+		stubRuleRepo{rules: []domain.CorrectionRule{
+			{MatchType: domain.RuleMatchRegex, Pattern: `([左右])肺上[页业液]`, Replacement: `$1肺上叶`, Enabled: true},
+			{MatchType: domain.RuleMatchRegex, Pattern: `(度|小|态|界|廓|限)上(可|清|对称)([\s，。；,;、]|$)`, Replacement: `$1尚$2$3`, Enabled: true},
+		}},
+	)
+
+	result, _, err := corrector.Correct(context.Background(), &dictID, "左肺上页见结节，边界上清。")
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	expected := "左肺上叶见结节，边界尚清。"
+	if result != expected {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+}
+
+func TestCorrectorHallucinationTrimRemovesRepeatedClosingTail(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
+		stubEntryRepo{},
+		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchHallucinationTrim, Enabled: true}}},
+	)
+
+	closing := "较2024年5月13日片，左肾囊肿切除术后，术区少许渗出新见，请结合临床随诊复查。"
+	input := "结论：左肾术后改变。" + closing + "总总总总。无意义长串继续转写。" + closing
+	result, corrections, err := corrector.Correct(context.Background(), &dictID, input)
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	expected := "结论：左肾术后改变。" + closing
+	if result != expected {
+		t.Fatalf("unexpected corrected text: %s", result)
+	}
+	if len(corrections["rules"]) != 1 {
+		t.Fatalf("expected one hallucination correction, got %+v", corrections)
+	}
+}
+
+func TestCorrectorHallucinationTrimCollapsesRunawayClauseLoop(t *testing.T) {
+	dictID := uint64(1)
+	corrector := NewCorrector(
+		stubDictRepo{dicts: map[uint64]*domain.TermDict{dictID: {RuleProcessingEnabled: true, TextReplacementEnabled: true}}},
+		stubEntryRepo{},
+		stubRuleRepo{rules: []domain.CorrectionRule{{MatchType: domain.RuleMatchHallucinationTrim, Enabled: true}}},
+	)
+
+	input := "开始。经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙。" +
+		"经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙。" +
+		"经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙。" +
+		"经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙。结束。"
+	result, _, err := corrector.Correct(context.Background(), &dictID, input)
+	if err != nil {
+		t.Fatalf("Correct returned error: %v", err)
+	}
+	expected := "开始。经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙。结束。"
 	if result != expected {
 		t.Fatalf("unexpected corrected text: %s", result)
 	}

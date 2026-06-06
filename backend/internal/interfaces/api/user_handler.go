@@ -53,7 +53,11 @@ func (h *UserHandler) Login(c *gin.Context) {
 
 	user, err := h.service.Authenticate(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
-		response.Error(c, http.StatusUnauthorized, errcode.CodeUnauthorized, err.Error())
+		if errors.Is(err, appuser.ErrInvalidCredentials) {
+			response.Error(c, http.StatusUnauthorized, errcode.CodeUnauthorized, "用户名或密码错误")
+			return
+		}
+		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, "系统服务异常，请稍后再试")
 		return
 	}
 

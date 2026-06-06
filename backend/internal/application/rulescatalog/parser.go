@@ -167,7 +167,7 @@ func rowToRule(sourcePath string, idx int, cells []string, subsection string) (S
 		SubsectionTitle: subsection,
 		SourcePath:      sourcePath,
 	}
-	if rule.Pattern == "" {
+	if rule.Pattern == "" && !ruleMatchTypeAllowsEmptyPattern(rule.MatchType) {
 		return SectionRule{}, false
 	}
 	// Skip self-referential placeholder rows like "占位无修改" where pattern == replacement
@@ -179,6 +179,10 @@ func rowToRule(sourcePath string, idx int, cells []string, subsection string) (S
 		rule.Priority = 100
 	}
 	return rule, true
+}
+
+func ruleMatchTypeAllowsEmptyPattern(matchType string) bool {
+	return matchType == "number_normalize" || matchType == "hallucination_trim"
 }
 
 func normalizeRuleCatalogPattern(pattern string, matchType string) string {
@@ -226,6 +230,8 @@ func normaliseMatchType(value string) string {
 		return "regex"
 	case "number_normalize", "number-normalize", "数字归一", "数值归一":
 		return "number_normalize"
+	case "hallucination_trim", "hallucination-trim", "幻觉裁剪", "幻觉去尾", "重复裁剪":
+		return "hallucination_trim"
 	case "", "literal", "字面", "exact", "原文":
 		return "literal"
 	}

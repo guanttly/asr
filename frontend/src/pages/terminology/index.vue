@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton, NTag, useMessage } from 'naive-ui'
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 
 import {
   clearTermEntries,
@@ -12,6 +12,7 @@ import {
   deleteTermEntry,
   deleteTermRule,
   downloadTermImportTemplate,
+  downloadTermRulesImportTemplate,
   exportTermEntries,
   exportTermRules,
   getTermDicts,
@@ -51,7 +52,7 @@ interface RuleItem {
   conflict_group?: string
 }
 
-type RuleMatchType = 'literal' | 'regex' | 'number_normalize'
+type RuleMatchType = 'literal' | 'regex' | 'number_normalize' | 'hallucination_trim'
 
 interface RuleMatchMeta {
   label: string
@@ -73,6 +74,8 @@ interface RuleExample {
 }
 
 interface RulePreviewState {
+  beforeLabel: string
+  afterLabel: string
   before: string
   after: string
   hint: string
@@ -98,6 +101,7 @@ const showDictModal = ref(false)
 const showEntryModal = ref(false)
 const showRuleModal = ref(false)
 const showImportModal = ref(false)
+const showRuleImportModal = ref(false)
 const editingDictId = ref<number | null>(null)
 const editingEntryId = ref<number | null>(null)
 const editingRuleId = ref<number | null>(null)
@@ -105,6 +109,7 @@ const currentDictId = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
 const ruleImportFileInput = ref<HTMLInputElement | null>(null)
 const lastImportResult = ref<{ imported: number, skipped: number } | null>(null)
+const lastRuleImportResult = ref<{ imported: number } | null>(null)
 const detailTab = ref<'entries' | 'rules'>('entries')
 const dicts = ref<DictItem[]>([])
 const entries = ref<EntryItem[]>([])
@@ -123,12 +128,16 @@ const ruleForm = reactive<{
   matchType: RuleMatchType
   pattern: string
   replacement: string
+  enabled: boolean
   sortOrder: number
+  previewSource: string
 }>({
   matchType: 'regex',
   pattern: '',
   replacement: '',
+  enabled: true,
   sortOrder: 100,
+  previewSource: '',
 })
 
 const currentDict = computed(() => dicts.value.find(item => item.id === currentDictId.value) || null)
@@ -138,7 +147,7 @@ const ruleModalTitle = computed(() => editingRuleId.value ? '编辑纠错规则'
 const ruleConflictWarnings = computed(() => {
   const groups = new Map<string, RuleItem[]>()
   for (const rule of rules.value) {
-    if (!rule.enabled || rule.match_type === 'number_normalize')
+    if (!rule.enabled || rule.match_type === 'number_normalize' || rule.match_type === 'hallucination_trim')
       continue
     const pattern = rule.pattern.trim()
     if (!pattern)
@@ -162,31 +171,41 @@ const ruleConflictWarnings = computed(() => {
 
 const ruleMatchMeta: Record<RuleMatchType, RuleMatchMeta> = {
   literal: {
-    label: '词条替换（旧）',
-    badge: '已迁移',
-    summary: '固定错词由术语词条的误写变体承接。',
-    detail: '旧规则仍会继续执行，新增规则不再提供固定错词配置。',
+    label: '固定文本替换',
+    badge: '可编辑',
+    summary: '把明确的错误文字替换为正确写法。',
+    detail: '适合少量固定错词；大量术语误写仍建议放到术语词条里统一维护。',
     patternLabel: '错误文字',
-    patternPlaceholder: '',
+    patternPlaceholder: '如：舒张亚',
     replacementLabel: '正确文字',
-    replacementPlaceholder: '',
+    replacementPlaceholder: '如：舒张压',
   },
   number_normalize: {
     label: '数字格式自动规范',
-    badge: '默认规则',
+    badge: '可启停',
     summary: '按词库场景自动整理口语数字、尺寸和小数。',
-    detail: '这类规则由系统默认写入数据库，可在列表里启停或调整执行顺序。',
+    detail: '这类规则不需要匹配式，可在列表里启停或调整执行顺序。',
+    patternLabel: '',
+    patternPlaceholder: '',
+    replacementLabel: '',
+    replacementPlaceholder: '',
+  },
+  hallucination_trim: {
+    label: '重复尾句裁剪',
+    badge: '可启停',
+    summary: '裁剪识别结果末尾重复套话或异常复读片段。',
+    detail: '这类规则不需要匹配式，主要用于清理长文本末尾的重复内容。',
     patternLabel: '',
     patternPlaceholder: '',
     replacementLabel: '',
     replacementPlaceholder: '',
   },
   regex: {
-    label: '高级匹配',
-    badge: '唯一可新增',
+    label: '正则替换',
+    badge: '可编辑',
     summary: '用于成批调整复杂格式，由匹配式和替换结果组成。',
-    detail: '新增规则只维护高级匹配；常见数字规范和场景格式已随默认词库写入数据库。',
-    patternLabel: '高级匹配式',
+    detail: '适合格式、分组、锚定场景；可在下方输入测试原文即时查看预览。',
+    patternLabel: '正则匹配式',
     patternPlaceholder: '如：血压(\\d+)/(\\d+)',
     replacementLabel: '替换结果',
     replacementPlaceholder: '如：血压$1-$2',
@@ -195,16 +214,30 @@ const ruleMatchMeta: Record<RuleMatchType, RuleMatchMeta> = {
 
 const ruleExamples: Record<RuleMatchType, RuleExample[]> = {
   literal: [
-    { title: '旧版错词', pattern: '舒张亚', replacement: '舒张压', before: '患者舒张亚偏高', after: '患者舒张压偏高' },
+    { title: '固定错词', pattern: '舒张亚', replacement: '舒张压', before: '患者舒张亚偏高', after: '患者舒张压偏高' },
   ],
   number_normalize: [
     { title: '尺寸和小数', before: '大小十二乘二十三毫米，血钾二点三', after: '大小12x23mm，血钾2.3' },
+  ],
+  hallucination_trim: [
+    {
+      title: '重复套话',
+      before: '本报告为急诊夜班临时报告，以正式报告为准。本报告为急诊夜班临时报告，以正式报告为准。',
+      after: '本报告为急诊夜班临时报告，以正式报告为准。',
+    },
   ],
   regex: [
     { title: '血压格式', pattern: '血压(\\d+)/(\\d+)', replacement: '血压$1-$2', before: '血压120/80', after: '血压120-80' },
     { title: '时间格式', pattern: '([0-2]?[0-9])点([0-5]?[0-9])分?', replacement: '$1:$2', before: '会议3点20分开始', after: '会议3:20开始' },
   ],
 }
+
+const ruleMatchOptions = [
+  { label: ruleMatchMeta.regex.label, value: 'regex' },
+  { label: ruleMatchMeta.literal.label, value: 'literal' },
+  { label: ruleMatchMeta.number_normalize.label, value: 'number_normalize' },
+  { label: ruleMatchMeta.hallucination_trim.label, value: 'hallucination_trim' },
+]
 
 const currentRuleMatch = computed(() => ruleMatchMeta[ruleForm.matchType] || ruleMatchMeta.regex)
 const currentRuleExamples = computed(() => ruleExamples[ruleForm.matchType])
@@ -218,14 +251,42 @@ function normalizeRuleMatchType(value: string): RuleMatchType {
   return value in ruleMatchMeta ? value as RuleMatchType : 'regex'
 }
 
+function ruleNeedsPattern(matchType: RuleMatchType) {
+  return matchType === 'regex' || matchType === 'literal'
+}
+
+function buildPreviewRegExp(pattern: string, global = false) {
+  let source = pattern
+  const flags = new Set(global ? ['g'] : [])
+  const inlineFlags = source.match(/^\(\?([ims]+)\)/i)
+  if (inlineFlags) {
+    source = source.slice(inlineFlags[0].length)
+    for (const flag of inlineFlags[1].toLowerCase()) {
+      if (flag === 'i' || flag === 'm' || flag === 's')
+        flags.add(flag)
+    }
+  }
+  return new RegExp(source, Array.from(flags).join(''))
+}
+
 function applyRegexPreview(pattern: string, replacement: string, source: string) {
   try {
-    const matcher = new RegExp(pattern, 'g')
+    const matcher = buildPreviewRegExp(pattern, true)
     const next = source.replace(matcher, replacement)
     return next === source ? null : next
   }
   catch {
     return null
+  }
+}
+
+function regexCompiles(pattern: string) {
+  try {
+    void buildPreviewRegExp(pattern)
+    return true
+  }
+  catch {
+    return false
   }
 }
 
@@ -246,6 +307,33 @@ function guessRulePreviewSource(pattern: string) {
   return ''
 }
 
+function deriveRegexPreviewSource(pattern: string) {
+  let value = pattern.trim()
+  if (!value)
+    return ''
+
+  value = value
+    .replace(/^\(\?[a-z-]+\)/i, '')
+    .replace(/\\d\+/g, '12')
+    .replace(/\\d\*/g, '12')
+    .replace(/\\d/g, '1')
+    .replace(/\\s\*/g, '')
+    .replace(/\\s\+/g, ' ')
+    .replace(/\\s/g, ' ')
+    .replace(/\((?:\?:)?([^()|]+)\|[^)]*\)\?/g, '$1')
+    .replace(/\((?:\?:)?([^()|]+)\|[^)]*\)/g, '$1')
+    .replace(/\[([^\]^-])[^\]]*\]\?/g, '$1')
+    .replace(/\[([^\]^-])[^\]]*\]\*/g, '$1')
+    .replace(/\[([^\]^-])[^\]]*\]\+/g, '$1')
+    .replace(/\[([^\]^-])[^\]]*\]/g, '$1')
+    .replace(/[?+*]/g, '')
+    .replace(/[()^$]/g, '')
+    .replace(/\\(.)/g, '$1')
+
+  value = value.trim()
+  return value && regexCompiles(pattern) && buildPreviewRegExp(pattern).test(value) ? value : ''
+}
+
 function formatRulePreviewText(text: string) {
   const showInvisible = (value: string) => value
     .replace(/ /g, '[space]')
@@ -257,57 +345,94 @@ function formatRulePreviewText(text: string) {
     .replace(/\s+$/, showInvisible)
 }
 
-function resolveRulePreview(matchType: RuleMatchType, pattern: string, replacement: string): RulePreviewState {
+function expressionPreview(pattern: string, replacement: string, hint = '暂未自动生成真实命中示例，编辑时可输入测试原文查看完整效果。'): RulePreviewState {
+  return {
+    beforeLabel: '匹配',
+    afterLabel: '替换',
+    before: pattern || '无需匹配式',
+    after: replacement || '无需替换文本',
+    hint,
+  }
+}
+
+function resolveRulePreview(matchType: RuleMatchType, pattern: string, replacement: string, previewSource = ''): RulePreviewState {
   const examples = ruleExamples[matchType] || ruleExamples.regex
   const fallback = examples[0] || ruleExamples.regex[0]
   const trimmedPattern = pattern.trim()
   const trimmedReplacement = replacement.trim()
+  const trimmedPreviewSource = previewSource.trim()
 
-  if (matchType === 'number_normalize') {
+  if (matchType === 'number_normalize' || matchType === 'hallucination_trim') {
     return {
+      beforeLabel: '原文',
+      afterLabel: '结果',
       before: fallback.before,
       after: fallback.after,
-      hint: '这类规则由默认配置提供，不需要维护错词。',
+      hint: '这类规则不需要维护匹配式，可通过启用状态和执行顺序控制。',
     }
   }
 
   if (matchType === 'literal') {
     if (!trimmedPattern || !trimmedReplacement) {
       return {
+        beforeLabel: '原文',
+        afterLabel: '结果',
         before: fallback.before,
         after: fallback.after,
-        hint: '旧版固定错词规则仍会执行，新增请使用术语词条或高级匹配。',
+        hint: '填写错误文字和正确文字后，这里会展示固定替换效果。',
       }
     }
 
-    const before = fallback.before.includes(trimmedPattern)
+    const before = trimmedPreviewSource || (fallback.before.includes(trimmedPattern)
       ? fallback.before
-      : `患者${trimmedPattern}待复核`
+      : `患者${trimmedPattern}待复核`)
+    const after = before.split(trimmedPattern).join(trimmedReplacement)
 
     return {
+      beforeLabel: '原文',
+      afterLabel: '结果',
       before,
-      after: before.split(trimmedPattern).join(trimmedReplacement),
-      hint: '预览仅用于辅助核对，最终以后端保存校验为准。',
+      after,
+      hint: after === before ? '测试原文未命中当前错误文字。' : '预览仅用于辅助核对，最终以后端保存校验为准。',
     }
   }
 
-  if (!trimmedPattern || !trimmedReplacement) {
+  if (!trimmedPattern) {
     return {
+      beforeLabel: '原文',
+      afterLabel: '结果',
       before: fallback.before,
       after: fallback.after,
-      hint: '填写上方两项后，这里会展示高级匹配效果。',
+      hint: '填写正则匹配式后，这里会展示规则效果。',
+    }
+  }
+
+  if (!regexCompiles(trimmedPattern))
+    return expressionPreview(trimmedPattern, trimmedReplacement, '当前正则表达式语法无效，请修正后再保存。')
+
+  if (trimmedPreviewSource) {
+    const after = applyRegexPreview(trimmedPattern, trimmedReplacement, trimmedPreviewSource)
+    return {
+      beforeLabel: '原文',
+      afterLabel: '结果',
+      before: trimmedPreviewSource,
+      after: after || trimmedPreviewSource,
+      hint: after ? '预览仅用于辅助核对，最终以后端保存校验为准。' : '测试原文未命中当前正则。',
     }
   }
 
   const previewSources = Array.from(new Set([
     ...examples.map(item => item.before),
     guessRulePreviewSource(trimmedPattern),
+    deriveRegexPreviewSource(trimmedPattern),
   ].filter(Boolean)))
 
   for (const source of previewSources) {
     const after = applyRegexPreview(trimmedPattern, trimmedReplacement, source)
     if (after) {
       return {
+        beforeLabel: '原文',
+        afterLabel: '结果',
         before: source,
         after,
         hint: '预览仅用于辅助核对，最终以后端保存校验为准。',
@@ -315,15 +440,11 @@ function resolveRulePreview(matchType: RuleMatchType, pattern: string, replaceme
     }
   }
 
-  return {
-    before: '实际命中的原文片段',
-    after: '会按当前规则替换成对应结果',
-    hint: '这条规则暂时无法自动生成可靠示例，请在编辑弹窗中校对。',
-  }
+  return expressionPreview(trimmedPattern, trimmedReplacement)
 }
 
 function buildRulePreview() {
-  return resolveRulePreview(ruleForm.matchType, ruleForm.pattern, ruleForm.replacement)
+  return resolveRulePreview(ruleForm.matchType, ruleForm.pattern, ruleForm.replacement, ruleForm.previewSource)
 }
 
 function renderRulePreview(row: RuleItem) {
@@ -331,11 +452,11 @@ function renderRulePreview(row: RuleItem) {
 
   return h('div', { class: 'grid min-w-0 gap-2 py-1' }, [
     h('div', { class: 'rounded-3 bg-[#f8fafc] px-3 py-2' }, [
-      h('div', { class: 'text-[12px] leading-4 text-slate' }, '原文'),
+      h('div', { class: 'text-[12px] leading-4 text-slate' }, preview.beforeLabel),
       h('div', { class: 'mt-1 break-all text-[13px] leading-5 text-ink font-600' }, formatRulePreviewText(preview.before)),
     ]),
     h('div', { class: 'rounded-3 bg-[#f0fdfa] px-3 py-2' }, [
-      h('div', { class: 'text-[12px] leading-4 text-slate' }, '结果'),
+      h('div', { class: 'text-[12px] leading-4 text-slate' }, preview.afterLabel),
       h('div', { class: 'mt-1 break-all text-[13px] leading-5 text-teal-700 font-600' }, formatRulePreviewText(preview.after)),
     ]),
   ])
@@ -436,24 +557,20 @@ const ruleColumns = [
     title: '操作',
     key: 'actions',
     width: 140,
-    render: (row: RuleItem) => {
-      const actions = []
-      if (row.match_type !== 'literal') {
-        actions.push(h(NButton, {
-          text: true,
-          size: 'small',
-          onClick: () => openEditRuleModal(row),
-        }, { default: () => '编辑' }))
-      }
-      actions.push(h(NButton, {
+    render: (row: RuleItem) => h('div', { class: 'flex items-center gap-2' }, [
+      h(NButton, {
+        text: true,
+        size: 'small',
+        onClick: () => openEditRuleModal(row),
+      }, { default: () => '编辑' }),
+      h(NButton, {
         text: true,
         type: 'error',
         size: 'small',
         loading: deletingRuleId.value === row.id,
         onClick: () => handleDeleteRule(row),
-      }, { default: () => '删除' }))
-      return h('div', { class: 'flex items-center gap-2' }, actions)
-    },
+      }, { default: () => '删除' }),
+    ]),
   },
 ]
 
@@ -476,15 +593,18 @@ function resetRuleForm() {
   ruleForm.matchType = 'regex'
   ruleForm.pattern = ''
   ruleForm.replacement = ''
+  ruleForm.enabled = true
   ruleForm.sortOrder = 100
+  ruleForm.previewSource = ''
 }
 
 function applyRuleExample(example: RuleExample) {
-  if (ruleForm.matchType !== 'regex')
+  if (!ruleNeedsPattern(ruleForm.matchType))
     return
 
   ruleForm.pattern = example.pattern || ''
   ruleForm.replacement = example.replacement || ''
+  ruleForm.previewSource = example.before
 }
 
 async function loadDicts() {
@@ -547,6 +667,15 @@ function openImportModal() {
   showImportModal.value = true
 }
 
+function openRuleImportModal() {
+  if (!currentDictId.value) {
+    message.warning('请先选择词库')
+    return
+  }
+  lastRuleImportResult.value = null
+  showRuleImportModal.value = true
+}
+
 function chooseImportFile() {
   importFileInput.value?.click()
 }
@@ -557,6 +686,8 @@ async function handleImportFileSelected(event: Event) {
     return
   if (file.size > 5 * 1024 * 1024) {
     message.warning('导入文件不能超过 5MB')
+    if (importFileInput.value)
+      importFileInput.value.value = ''
     return
   }
   const formData = new FormData()
@@ -581,10 +712,7 @@ async function handleImportFileSelected(event: Event) {
 
 async function downloadImportTemplate() {
   try {
-    const result = await downloadTermImportTemplate()
-    const blob = result.data instanceof Blob
-      ? result.data
-      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const blob = await downloadTermImportTemplate()
     triggerBlobDownload(blob, 'term-dict-import-template.xlsx')
   }
   catch {
@@ -598,10 +726,7 @@ async function handleExportEntries() {
     return
   }
   try {
-    const result = await exportTermEntries(currentDictId.value)
-    const blob = result.data instanceof Blob
-      ? result.data
-      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const blob = await exportTermEntries(currentDictId.value)
     const safeName = currentDict.value.name.replace(/[\\/:*?"<>|]/g, '_')
     triggerBlobDownload(blob, `${safeName}.xlsx`)
   }
@@ -660,6 +785,8 @@ async function handleRuleImportFileSelected(event: Event) {
     return
   if (file.size > 5 * 1024 * 1024) {
     message.warning('导入文件不能超过 5MB')
+    if (ruleImportFileInput.value)
+      ruleImportFileInput.value.value = ''
     return
   }
   const formData = new FormData()
@@ -667,6 +794,7 @@ async function handleRuleImportFileSelected(event: Event) {
   importingRules.value = true
   try {
     const result = await importTermRules(currentDictId.value, formData)
+    lastRuleImportResult.value = result.data
     message.success(`已导入 ${result.data.imported} 条纠错规则`)
     await loadRules(currentDictId.value)
   }
@@ -681,16 +809,23 @@ async function handleRuleImportFileSelected(event: Event) {
   }
 }
 
+async function downloadRuleImportTemplate() {
+  try {
+    const blob = await downloadTermRulesImportTemplate()
+    triggerBlobDownload(blob, 'term-dict-rules-import-template.xlsx')
+  }
+  catch {
+    message.error('规则模板下载失败')
+  }
+}
+
 async function handleExportRules() {
   if (!currentDictId.value || !currentDict.value) {
     message.warning('请先选择词库')
     return
   }
   try {
-    const result = await exportTermRules(currentDictId.value)
-    const blob = result.data instanceof Blob
-      ? result.data
-      : new Blob([result.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const blob = await exportTermRules(currentDictId.value)
     const safeName = currentDict.value.name.replace(/[\\/:*?"<>|]/g, '_')
     triggerBlobDownload(blob, `${safeName}-纠错规则.xlsx`)
   }
@@ -801,7 +936,12 @@ function openEditRuleModal(row: RuleItem) {
   ruleForm.matchType = normalizeRuleMatchType(row.match_type)
   ruleForm.pattern = row.pattern || ''
   ruleForm.replacement = row.replacement || ''
+  ruleForm.enabled = row.enabled !== false
   ruleForm.sortOrder = row.sort_order || 100
+  const preview = resolveRulePreview(ruleForm.matchType, ruleForm.pattern, ruleForm.replacement)
+  ruleForm.previewSource = preview.beforeLabel === '原文'
+    ? preview.before
+    : ''
   showRuleModal.value = true
 }
 
@@ -919,23 +1059,24 @@ async function handleSubmitRule() {
     return
   }
 
-  if (ruleForm.matchType === 'regex' && !ruleForm.pattern.trim()) {
-    message.warning('请填写高级匹配式')
+  if (ruleNeedsPattern(ruleForm.matchType) && !ruleForm.pattern.trim()) {
+    message.warning(`请填写${currentRuleMatch.value.patternLabel}`)
     return
   }
 
-  if (ruleForm.matchType === 'regex' && !ruleForm.replacement.trim()) {
-    message.warning('请填写替换结果')
+  if (ruleForm.matchType === 'literal' && !ruleForm.replacement.trim()) {
+    message.warning('请填写正确文字')
     return
   }
 
   ruleSaving.value = true
   try {
+    const structuredRule = !ruleNeedsPattern(ruleForm.matchType)
     const payload = {
       match_type: ruleForm.matchType,
-      pattern: ruleForm.matchType === 'number_normalize' ? '' : ruleForm.pattern.trim(),
-      replacement: ruleForm.matchType === 'number_normalize' ? '' : ruleForm.replacement.trim(),
-      enabled: true,
+      pattern: structuredRule ? '' : ruleForm.pattern.trim(),
+      replacement: structuredRule ? '' : ruleForm.replacement.trim(),
+      enabled: ruleForm.enabled,
       sort_order: ruleForm.sortOrder || 100,
       priority: ruleForm.sortOrder || 100,
     }
@@ -953,8 +1094,9 @@ async function handleSubmitRule() {
     resetRuleForm()
     await loadRules(currentDictId.value)
   }
-  catch {
-    message.error(editingRuleId.value ? '规则更新失败' : '规则创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingRuleId.value ? '规则更新失败' : '规则创建失败'))
   }
   finally {
     ruleSaving.value = false
@@ -1012,6 +1154,20 @@ async function handleDeleteEntry(row: EntryItem) {
     deletingEntryId.value = null
   }
 }
+
+watch(
+  () => ruleForm.matchType,
+  (matchType) => {
+    if (!ruleNeedsPattern(matchType)) {
+      ruleForm.pattern = ''
+      ruleForm.replacement = ''
+      ruleForm.previewSource = ''
+      return
+    }
+    if (!ruleForm.previewSource)
+      ruleForm.previewSource = ruleExamples[matchType][0]?.before || ''
+  },
+)
 
 onMounted(loadDicts)
 </script>
@@ -1082,11 +1238,10 @@ onMounted(loadDicts)
               </NAlert>
             </div>
             <div class="mb-3 flex justify-end gap-2 shrink-0">
-              <input ref="ruleImportFileInput" type="file" accept=".xlsx" class="hidden" @change="handleRuleImportFileSelected">
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && loadRules(currentDictId)">
                 刷新
               </NButton>
-              <NButton :disabled="!currentDictId" quaternary size="small" :loading="importingRules" @click="chooseRuleImportFile">
+              <NButton :disabled="!currentDictId" quaternary size="small" :loading="importingRules" @click="openRuleImportModal">
                 批量导入
               </NButton>
               <NButton :disabled="!currentDictId" quaternary size="small" @click="handleExportRules">
@@ -1169,6 +1324,29 @@ onMounted(loadDicts)
       </div>
     </NModal>
 
+    <NModal v-model:show="showRuleImportModal" preset="card" title="批量导入纠错规则" class="modal-card max-w-150">
+      <div class="grid gap-4 text-sm leading-7 text-slate">
+        <NAlert type="info" :show-icon="false">
+          支持 Excel（.xlsx）文件，单次最多 5000 条规则且文件不超过 5MB。表头可使用 pattern、replacement、match_type、priority、conflict_group、enabled；也兼容规则库下载 Excel。可点击「下载模板」获取标准模板。
+        </NAlert>
+        <input ref="ruleImportFileInput" type="file" accept=".xlsx" class="hidden" @change="handleRuleImportFileSelected">
+        <div v-if="lastRuleImportResult" class="rounded-2 bg-mist/70 px-3 py-2 text-xs text-slate">
+          已导入 {{ lastRuleImportResult.imported }} 条纠错规则。
+        </div>
+        <div class="modal-footer-row">
+          <NButton @click="downloadRuleImportTemplate">
+            下载模板
+          </NButton>
+          <NButton @click="showRuleImportModal = false">
+            关闭
+          </NButton>
+          <NButton type="primary" color="#0f766e" :loading="importingRules" @click="chooseRuleImportFile">
+            选择文件导入
+          </NButton>
+        </div>
+      </div>
+    </NModal>
+
     <NModal v-model:show="showEntryModal" preset="card" :title="entryModalTitle" class="modal-card max-w-160">
       <NForm :model="entryForm" label-placement="top">
         <NFormItem label="所属词库">
@@ -1202,6 +1380,9 @@ onMounted(loadDicts)
         <NFormItem label="所属词库">
           <NInput :value="currentDict?.name || ''" disabled />
         </NFormItem>
+        <NFormItem label="规则类型">
+          <NSelect v-model:value="ruleForm.matchType" :options="ruleMatchOptions" />
+        </NFormItem>
 
         <div class="rule-guide">
           <div class="rule-guide-head">
@@ -1220,21 +1401,30 @@ onMounted(loadDicts)
           </div>
         </div>
 
-        <template v-if="ruleForm.matchType === 'regex'">
+        <template v-if="ruleNeedsPattern(ruleForm.matchType)">
           <div class="rule-input-grid">
             <NFormItem :show-feedback="false" :label="currentRuleMatch.patternLabel">
               <NInput v-model:value="ruleForm.pattern" :maxlength="1000" :placeholder="currentRuleMatch.patternPlaceholder" />
               <div class="rule-field-tip">
-                这项用于复杂格式，现场不确定时请使用下方示例或联系技术支持。
+                正则规则支持分组；固定文本替换会按原文逐字匹配。
               </div>
             </NFormItem>
             <NFormItem :show-feedback="false" :label="currentRuleMatch.replacementLabel">
               <NInput v-model:value="ruleForm.replacement" :maxlength="1000" :placeholder="currentRuleMatch.replacementPlaceholder" />
               <div class="rule-field-tip">
-                可使用 $1、$2 这类占位结果，请按技术人员提供的内容填写。
+                正则规则可使用 $1、$2 这类分组结果；留空表示删除命中内容。
               </div>
             </NFormItem>
           </div>
+          <NFormItem :show-feedback="false" label="测试原文">
+            <NInput
+              v-model:value="ruleForm.previewSource"
+              :maxlength="1000"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="输入一段原文查看当前规则效果"
+            />
+          </NFormItem>
         </template>
 
         <div v-if="currentRuleExamples.length" class="rule-examples">
@@ -1247,7 +1437,7 @@ onMounted(loadDicts)
               :key="example.title"
               type="button"
               class="rule-example-card"
-              :disabled="ruleForm.matchType !== 'regex'"
+              :disabled="!ruleNeedsPattern(ruleForm.matchType)"
               @click="applyRuleExample(example)"
             >
               <span class="rule-example-title">{{ example.title }}</span>
@@ -1263,11 +1453,11 @@ onMounted(loadDicts)
           </div>
           <div class="rule-preview-lines">
             <div class="rule-preview-line">
-              <span>原文</span>
+              <span>{{ rulePreview.beforeLabel }}</span>
               <strong>{{ formatRulePreviewText(rulePreview.before) }}</strong>
             </div>
             <div class="rule-preview-line is-result">
-              <span>结果</span>
+              <span>{{ rulePreview.afterLabel }}</span>
               <strong>{{ formatRulePreviewText(rulePreview.after) }}</strong>
             </div>
           </div>
@@ -1281,6 +1471,19 @@ onMounted(loadDicts)
             <NInputNumber v-model:value="ruleForm.sortOrder" :min="1" :step="10" class="w-full" />
             <div class="rule-field-tip">
               数字越小越先执行，一般保持 100 即可。
+            </div>
+          </NFormItem>
+          <NFormItem :show-feedback="false" label="启用状态">
+            <NSwitch v-model:value="ruleForm.enabled">
+              <template #checked>
+                启用
+              </template>
+              <template #unchecked>
+                停用
+              </template>
+            </NSwitch>
+            <div class="rule-field-tip">
+              停用后规则会保留配置，但不会参与纠错。
             </div>
           </NFormItem>
         </div>

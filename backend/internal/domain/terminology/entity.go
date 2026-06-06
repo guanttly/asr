@@ -26,9 +26,10 @@ type TermEntry struct {
 type RuleMatchType string
 
 const (
-	RuleMatchLiteral         RuleMatchType = "literal"
-	RuleMatchRegex           RuleMatchType = "regex"
-	RuleMatchNumberNormalize RuleMatchType = "number_normalize"
+	RuleMatchLiteral           RuleMatchType = "literal"
+	RuleMatchRegex             RuleMatchType = "regex"
+	RuleMatchNumberNormalize   RuleMatchType = "number_normalize"
+	RuleMatchHallucinationTrim RuleMatchType = "hallucination_trim"
 )
 
 // CorrectionRule defines a specific correction rule.

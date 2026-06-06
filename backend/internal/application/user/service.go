@@ -19,6 +19,9 @@ import (
 // letters, digits, and underscores.
 var usernamePattern = regexp.MustCompile(`^[\p{Han}A-Za-z0-9_]+$`)
 
+// ErrInvalidCredentials means the username/password pair is not valid.
+var ErrInvalidCredentials = errors.New("invalid credentials")
+
 // Service orchestrates user use cases.
 type Service struct {
 	userRepo     domain.UserRepository
@@ -132,11 +135,14 @@ func comparePassword(hash, password string) error {
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*domain.User, error) {
 	user, err := s.userRepo.GetByUsername(ctx, username)
 	if err != nil {
-		return nil, errors.New("invalid credentials")
+		if errors.Is(err, domain.ErrUserNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("load user by username: %w", err)
 	}
 
 	if err := comparePassword(user.PasswordHash, password); err != nil {
-		return nil, errors.New("invalid credentials")
+		return nil, ErrInvalidCredentials
 	}
 
 	return user, nil

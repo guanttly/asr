@@ -12,14 +12,15 @@ import (
 )
 
 type userRepoStub struct {
-	user        *userdomain.User
-	users       []*userdomain.User
-	identity    *userdomain.DeviceIdentity
-	bindings    *userdomain.WorkflowBindings
-	bindingsMap map[uint64]*userdomain.WorkflowBindings
-	created     *userdomain.User
-	saved       *userdomain.WorkflowBindings
-	upserted    *userdomain.DeviceIdentity
+	user             *userdomain.User
+	users            []*userdomain.User
+	identity         *userdomain.DeviceIdentity
+	bindings         *userdomain.WorkflowBindings
+	bindingsMap      map[uint64]*userdomain.WorkflowBindings
+	getByUsernameErr error
+	created          *userdomain.User
+	saved            *userdomain.WorkflowBindings
+	upserted         *userdomain.DeviceIdentity
 }
 
 func (r *userRepoStub) Create(_ context.Context, user *userdomain.User) error {
@@ -35,6 +36,9 @@ func (r *userRepoStub) GetByID(_ context.Context, id uint64) (*userdomain.User, 
 	return r.user, nil
 }
 func (r *userRepoStub) GetByUsername(_ context.Context, username string) (*userdomain.User, error) {
+	if r.getByUsernameErr != nil {
+		return nil, r.getByUsernameErr
+	}
 	if r.user != nil && r.user.Username == username {
 		return r.user, nil
 	}
@@ -141,6 +145,19 @@ func TestCreateUserValidatesLengthRangesAndTrimsUsername(t *testing.T) {
 	}
 	if authenticated == nil || authenticated.Username != "alice" {
 		t.Fatalf("expected authenticated alice, got %+v", authenticated)
+	}
+}
+
+func TestAuthenticateSeparatesCredentialAndLookupErrors(t *testing.T) {
+	service := NewService(&userRepoStub{}, nil)
+	if _, err := service.Authenticate(context.Background(), "missing", "secret"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials for missing user, got %v", err)
+	}
+
+	lookupErr := errors.New("database unavailable")
+	service = NewService(&userRepoStub{getByUsernameErr: lookupErr}, nil)
+	if _, err := service.Authenticate(context.Background(), "admin", "secret"); !errors.Is(err, lookupErr) {
+		t.Fatalf("expected lookup error to be preserved, got %v", err)
 	}
 }
 

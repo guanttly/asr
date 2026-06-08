@@ -174,18 +174,30 @@ const router = createRouter({
   routes,
 })
 
+// 仅管理员可访问的路由前缀；普通用户只能使用“应用”相关页面。
+const ADMIN_PATH_PREFIXES = ['/dashboard', '/workflows', '/terminology', '/system']
+
+function isAdminOnlyPath(path: string) {
+  return ADMIN_PATH_PREFIXES.some(prefix => path === prefix || path.startsWith(`${prefix}/`))
+}
+
 router.beforeEach((to) => {
   const userStore = useUserStore()
   const appStore = useAppStore()
+  const isAdmin = userStore.profile?.role === 'admin'
+  const homePath = isAdmin ? '/dashboard' : '/realtime'
   if (to.meta.public && userStore.token && !to.meta.allowAuthenticated)
-    return '/dashboard'
+    return homePath
   if (to.meta.public)
     return true
   if (!userStore.token)
     return '/login'
+  // 已加载用户资料且非管理员时，拦截管理员专属页面。
+  if (userStore.profile && !isAdmin && isAdminOnlyPath(to.path))
+    return '/realtime'
   const requiredFeature = to.meta.requiredFeature
   if (isProductFeatureKey(requiredFeature) && !appStore.hasCapability(requiredFeature))
-    return '/dashboard'
+    return homePath
   return true
 })
 

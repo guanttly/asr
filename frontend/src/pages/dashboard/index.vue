@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton, NTag, useMessage } from 'naive-ui'
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { clearDashboardRetryHistory, deleteDashboardRetryHistoryItem, getDashboardOverview, retryDashboardPostProcessTasks, syncDashboardTask } from '@/api/dashboard'
@@ -152,6 +152,11 @@ const retryableAlertIds = computed(() => {
   return filteredAlerts.value
     .filter(item => item.alert_reason === 'post_process_failed')
     .map(item => item.task_id)
+})
+
+const alertPagination = reactive({ page: 1, pageSize: 5 })
+watch([alertReasonFilter, retryableOnly, filteredAlerts], () => {
+  alertPagination.page = 1
 })
 
 const failedPostProcessAlertCount = computed(() => {
@@ -337,8 +342,9 @@ async function handleSyncTask(taskId: number) {
     message.success('任务已触发同步')
     await loadOverview()
   }
-  catch {
-    message.error('任务同步失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage ? `任务同步失败：${responseMessage}` : '任务同步失败')
   }
   finally {
     syncingIds.value = syncingIds.value.filter(id => id !== taskId)
@@ -645,8 +651,12 @@ async function loadOverview() {
     retryHistory.value = history
     syncSelectedRetryHistory(selectedRetryHistoryKey.value)
   }
-  catch {
-    message.error('看板概览加载失败')
+  catch (error) {
+    const status = (error as { response?: { status?: number } })?.response?.status
+    if (status === 403)
+      message.error('您没有数据看板的访问权限，请使用管理员账号登录')
+    else
+      message.error('看板概览加载失败')
   }
   finally {
     loading.value = false
@@ -672,8 +682,8 @@ onMounted(loadOverview)
       </NCard>
     </section>
 
-    <section class="flex-1 min-h-0 grid min-w-0 grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.28fr)]">
-      <NCard class="card-main min-w-0 flex flex-col min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
+    <section class="flex-1 min-h-0 grid min-w-0 grid-cols-1 gap-5 overflow-y-auto 2xl:overflow-visible 2xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.28fr)]">
+      <NCard class="card-main min-w-0 flex flex-col min-h-[460px] 2xl:min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-sm font-600">系统态势</span>
@@ -755,7 +765,7 @@ onMounted(loadOverview)
         </div>
       </NCard>
 
-      <NCard class="card-main min-w-0 flex flex-col min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
+      <NCard class="card-main min-w-0 flex flex-col min-h-[460px] 2xl:min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <span class="text-sm font-600">风险告警</span>
@@ -781,7 +791,7 @@ onMounted(loadOverview)
           按筛选结果快速查看异常任务，并直接重试后处理、跳转任务或会议详情。
         </div>
 
-        <div v-if="lastRetryResult" class="mb-4 min-w-0 rounded-2.5 bg-mist/60 p-4 text-sm text-slate">
+        <div v-if="lastRetryResult" class="mb-4 min-w-0 max-h-[42vh] overflow-y-auto rounded-2.5 bg-mist/60 p-4 text-sm text-slate">
           <div class="grid gap-2 text-ink sm:grid-cols-2 xl:grid-cols-4">
             <div class="rounded-2 bg-white/70 px-3 py-2">
               <div class="text-[11px] text-slate/70">
@@ -871,9 +881,10 @@ onMounted(loadOverview)
             :columns="alertColumns"
             :data="filteredAlerts"
             :loading="loading"
-            :pagination="{ pageSize: 5 }"
+            :pagination="alertPagination"
             :scroll-x="820"
             size="small"
+            @update:page="(page: number) => (alertPagination.page = page)"
           />
         </div>
       </NCard>

@@ -3,6 +3,7 @@ package voicecommand
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	termdomain "github.com/lgt/asr/internal/domain/terminology"
@@ -31,15 +32,20 @@ func NewService(dictRepo domain.DictRepository, entryRepo domain.EntryRepository
 }
 
 func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*DictResponse, error) {
-	groupKey, err := normalizeBuiltinGroupKey(req.GroupKey)
+	groupKey, isBuiltin, err := normalizeGroupKeyInput(req.GroupKey)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateBaseDictConstraint(ctx, 0, req.IsBase); err != nil {
+	isBase := req.IsBase
+	if !isBuiltin {
+		// 自定义控制指令组只能是扩展组，基础组由内置注册表维护。
+		isBase = false
+	}
+	if err := s.validateBaseDictConstraint(ctx, 0, isBase); err != nil {
 		return nil, err
 	}
 	dict := &domain.Dict{
-		Name: strings.TrimSpace(req.Name), GroupKey: groupKey, Description: strings.TrimSpace(req.Description), IsBase: req.IsBase,
+		Name: strings.TrimSpace(req.Name), GroupKey: groupKey, Description: strings.TrimSpace(req.Description), IsBase: isBase,
 	}
 	if err := s.dictRepo.Create(ctx, dict); err != nil {
 		return nil, err
@@ -55,17 +61,21 @@ func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequ
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrVoiceCommandDictNotFound, id)
 	}
-	groupKey, err := normalizeBuiltinGroupKey(req.GroupKey)
+	groupKey, isBuiltin, err := normalizeGroupKeyInput(req.GroupKey)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateBaseDictConstraint(ctx, id, req.IsBase); err != nil {
+	isBase := req.IsBase
+	if !isBuiltin {
+		isBase = false
+	}
+	if err := s.validateBaseDictConstraint(ctx, id, isBase); err != nil {
 		return nil, err
 	}
 	dict.Name = strings.TrimSpace(req.Name)
 	dict.GroupKey = groupKey
 	dict.Description = strings.TrimSpace(req.Description)
-	dict.IsBase = req.IsBase
+	dict.IsBase = isBase
 	if err := s.dictRepo.Update(ctx, dict); err != nil {
 		return nil, err
 	}
@@ -134,7 +144,7 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrVoiceCommandDictNotFound, req.DictID)
 	}
-	intentKey, err := normalizeBuiltinIntentKey(dict.GroupKey, req.Intent)
+	intentKey, err := normalizeIntentKeyInput(dict.GroupKey, req.Intent)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +165,7 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrVoiceCommandDictNotFound, req.DictID)
 	}
-	intentKey, err := normalizeBuiltinIntentKey(dict.GroupKey, req.Intent)
+	intentKey, err := normalizeIntentKeyInput(dict.GroupKey, req.Intent)
 	if err != nil {
 		return nil, err
 	}
@@ -325,26 +335,41 @@ func (s *Service) ensureBuiltinGroupEntries(ctx context.Context, dictID uint64, 
 	return nil
 }
 
-func normalizeBuiltinGroupKey(groupKey string) (string, error) {
+var voiceCommandCustomKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,62}$`)
+
+// normalizeGroupKeyInput 接受内置组键或自定义 slug。
+// 返回归一化后的键以及它是否为内置组。
+func normalizeGroupKeyInput(groupKey string) (string, bool, error) {
 	trimmed := strings.TrimSpace(groupKey)
-	group, ok := domain.BuiltinGroupByKey(trimmed)
-	if !ok || group.Key != trimmed {
-		return "", fmt.Errorf("unsupported voice command group key: %s", strings.TrimSpace(groupKey))
+	if trimmed == "" {
+		return "", false, fmt.Errorf("控制指令组键不能为空")
 	}
-	return group.Key, nil
+	if group, ok := domain.BuiltinGroupByKey(trimmed); ok {
+		return group.Key, true, nil
+	}
+	if !voiceCommandCustomKeyPattern.MatchString(trimmed) {
+		return "", false, fmt.Errorf("自定义控制指令组键仅支持小写字母、数字和下划线，且需以字母开头：%s", trimmed)
+	}
+	return trimmed, false, nil
 }
 
-func normalizeBuiltinIntentKey(groupKey string, intentKey string) (string, error) {
-	canonicalGroupKey, ok := domain.NormalizeGroupKey(groupKey)
-	if !ok {
-		return "", fmt.Errorf("unsupported voice command group key: %s", strings.TrimSpace(groupKey))
-	}
+// normalizeIntentKeyInput 对内置组沿用注册表意图校验，对自定义组接受 slug 形式的意图值。
+func normalizeIntentKeyInput(groupKey string, intentKey string) (string, error) {
 	trimmed := strings.TrimSpace(intentKey)
-	intent, ok := domain.BuiltinIntentByKey(canonicalGroupKey, trimmed)
-	if !ok || intent.Key != trimmed {
-		return "", fmt.Errorf("unsupported voice command intent key %s for group %s", strings.TrimSpace(intentKey), canonicalGroupKey)
+	if trimmed == "" {
+		return "", fmt.Errorf("意图值不能为空")
 	}
-	return intent.Key, nil
+	if canonicalGroupKey, ok := domain.NormalizeGroupKey(groupKey); ok {
+		intent, ok := domain.BuiltinIntentByKey(canonicalGroupKey, trimmed)
+		if !ok || intent.Key != trimmed {
+			return "", fmt.Errorf("unsupported voice command intent key %s for group %s", trimmed, canonicalGroupKey)
+		}
+		return intent.Key, nil
+	}
+	if !voiceCommandCustomKeyPattern.MatchString(trimmed) {
+		return "", fmt.Errorf("自定义意图值仅支持小写字母、数字和下划线，且需以字母开头：%s", trimmed)
+	}
+	return trimmed, nil
 }
 
 func (s *Service) validateBaseDictConstraint(ctx context.Context, currentID uint64, nextIsBase bool) error {

@@ -128,7 +128,11 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	if dict == nil {
 		return nil, fmt.Errorf("%w: %d", ErrSensitiveDictNotFound, req.DictID)
 	}
-	entry := &domain.Entry{DictID: req.DictID, Word: strings.TrimSpace(req.Word), Enabled: req.Enabled}
+	word := strings.TrimSpace(req.Word)
+	if err := s.ensureWordUnique(ctx, req.DictID, word, 0); err != nil {
+		return nil, err
+	}
+	entry := &domain.Entry{DictID: req.DictID, Word: word, Enabled: req.Enabled}
 	if err := s.entryRepo.Create(ctx, entry); err != nil {
 		return nil, err
 	}
@@ -150,8 +154,12 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 	if entry == nil {
 		return nil, fmt.Errorf("%w: %d", ErrSensitiveEntryNotFound, req.ID)
 	}
+	word := strings.TrimSpace(req.Word)
+	if err := s.ensureWordUnique(ctx, req.DictID, word, req.ID); err != nil {
+		return nil, err
+	}
 	entry.DictID = req.DictID
-	entry.Word = strings.TrimSpace(req.Word)
+	entry.Word = word
 	entry.Enabled = req.Enabled
 	if err := s.entryRepo.Update(ctx, entry); err != nil {
 		return nil, err
@@ -168,6 +176,24 @@ func (s *Service) DeleteEntry(ctx context.Context, id uint64) error {
 		return fmt.Errorf("%w: %d", ErrSensitiveEntryNotFound, id)
 	}
 	return s.entryRepo.Delete(ctx, id)
+}
+
+// ensureWordUnique rejects a sensitive word that already exists in the same
+// dictionary, ignoring the entry currently being edited (excludeID).
+func (s *Service) ensureWordUnique(ctx context.Context, dictID uint64, word string, excludeID uint64) error {
+	existing, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for i := range existing {
+		if existing[i].ID == excludeID {
+			continue
+		}
+		if strings.TrimSpace(existing[i].Word) == word {
+			return fmt.Errorf("%w: 敏感词「%s」已存在", ErrSensitiveEntryDuplicate, word)
+		}
+	}
+	return nil
 }
 
 func (s *Service) EnsureSeedData(ctx context.Context) error {

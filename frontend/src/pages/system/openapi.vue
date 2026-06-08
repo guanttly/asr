@@ -1033,7 +1033,7 @@ watch(activeTab, (tab) => {
           <NForm :model="form" label-placement="top">
             <div class="grid gap-4 md:grid-cols-2">
               <NFormItem label="应用名称" required>
-                <NInput v-model:value="form.name" :maxlength="128" placeholder="例如：第三方会议助手" />
+                <NInput v-model:value="form.name" :maxlength="64" placeholder="例如：第三方会议助手" />
               </NFormItem>
               <NFormItem label="每秒限流">
                 <NInputNumber v-model:value="form.rate_limit_per_sec" :min="1" :max="5000" class="w-full" />

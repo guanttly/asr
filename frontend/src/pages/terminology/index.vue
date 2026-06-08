@@ -26,6 +26,7 @@ import {
 } from '@/api/terminology'
 import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { validateResourceName } from '@/utils/resourceName'
 
 interface DictItem {
   id: number
@@ -159,15 +160,28 @@ const ruleConflictWarnings = computed(() => {
   }
   return Array.from(groups.entries())
     .filter(([, items]) => items.length > 1)
-    .map(([, items]) => {
+    .map(([key, items]) => {
       const sample = items[0]
       const pattern = sample.pattern.trim()
       const replacements = new Set(items.map(rule => rule.replacement.trim()))
-      if (replacements.size > 1)
-        return `匹配条件「${pattern}」存在 ${items.length} 条启用规则，且替换结果不一致，请只保留一条。`
-      return `匹配条件「${pattern}」重复启用 ${items.length} 次，可删除重复规则。`
+      const text = replacements.size > 1
+        ? `匹配条件「${pattern}」存在 ${items.length} 条启用规则，且替换结果不一致，请只保留一条。`
+        : `匹配条件「${pattern}」重复启用 ${items.length} 次，可删除重复规则。`
+      return { key, text }
     })
 })
+
+const ruleConflictFocusKey = ref('')
+
+const displayRules = computed(() => {
+  if (!ruleConflictFocusKey.value)
+    return rules.value
+  return rules.value.filter(rule => `${rule.match_type}:${rule.pattern.trim()}` === ruleConflictFocusKey.value)
+})
+
+function focusConflictRules(key: string) {
+  ruleConflictFocusKey.value = key
+}
 
 const ruleMatchMeta: Record<RuleMatchType, RuleMatchMeta> = {
   literal: {
@@ -244,11 +258,11 @@ const currentRuleExamples = computed(() => ruleExamples[ruleForm.matchType])
 const rulePreview = computed(() => buildRulePreview())
 
 function ruleMatchLabel(value: string) {
-  return ruleMatchMeta[value as RuleMatchType]?.label || value
+  return ruleMatchMeta[value as RuleMatchType]?.label || '历史规则（请编辑确认类型）'
 }
 
 function normalizeRuleMatchType(value: string): RuleMatchType {
-  return value in ruleMatchMeta ? value as RuleMatchType : 'regex'
+  return value in ruleMatchMeta ? value as RuleMatchType : 'literal'
 }
 
 function ruleNeedsPattern(matchType: RuleMatchType) {
@@ -448,9 +462,18 @@ function buildRulePreview() {
 }
 
 function renderRulePreview(row: RuleItem) {
-  const preview = resolveRulePreview(normalizeRuleMatchType(row.match_type), row.pattern || '', row.replacement || '')
+  const matchType = normalizeRuleMatchType(row.match_type)
+  const preview = resolveRulePreview(matchType, row.pattern || '', row.replacement || '')
+  const blocks: ReturnType<typeof h>[] = []
 
-  return h('div', { class: 'grid min-w-0 gap-2 py-1' }, [
+  if (matchType === 'regex' || matchType === 'literal') {
+    blocks.push(h('div', { class: 'rounded-3 bg-[#eef2ff] px-3 py-2' }, [
+      h('div', { class: 'text-[12px] leading-4 text-slate' }, matchType === 'regex' ? '正则匹配式 → 替换为' : '错误文字 → 正确文字'),
+      h('div', { class: 'mt-1 break-all text-[13px] leading-5 text-[#4338ca] font-600' }, `${row.pattern || '（空）'} → ${row.replacement || '（删除命中内容）'}`),
+    ]))
+  }
+
+  blocks.push(
     h('div', { class: 'rounded-3 bg-[#f8fafc] px-3 py-2' }, [
       h('div', { class: 'text-[12px] leading-4 text-slate' }, preview.beforeLabel),
       h('div', { class: 'mt-1 break-all text-[13px] leading-5 text-ink font-600' }, formatRulePreviewText(preview.before)),
@@ -459,7 +482,9 @@ function renderRulePreview(row: RuleItem) {
       h('div', { class: 'text-[12px] leading-4 text-slate' }, preview.afterLabel),
       h('div', { class: 'mt-1 break-all text-[13px] leading-5 text-teal-700 font-600' }, formatRulePreviewText(preview.after)),
     ]),
-  ])
+  )
+
+  return h('div', { class: 'grid min-w-0 gap-2 py-1' }, blocks)
 }
 
 const dictColumns = [
@@ -882,6 +907,7 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 }
 
 async function loadRules(dictId = currentDictId.value) {
+  ruleConflictFocusKey.value = ''
   if (!dictId) {
     rules.value = []
     return
@@ -951,6 +977,12 @@ async function handleSubmitDict() {
     return
   }
 
+  const nameError = validateResourceName(dictForm.name)
+  if (nameError) {
+    message.warning(nameError)
+    return
+  }
+
   dictSaving.value = true
   try {
     const payload = {
@@ -973,8 +1005,9 @@ async function handleSubmitDict() {
     resetDictForm()
     await loadDicts()
   }
-  catch {
-    message.error(editingDictId.value ? '词库更新失败' : '词库创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingDictId.value ? '词库更新失败' : '词库创建失败'))
   }
   finally {
     dictSaving.value = false
@@ -982,10 +1015,25 @@ async function handleSubmitDict() {
 }
 
 async function handleDeleteDict(row: DictItem) {
+  let entryCount = row.id === currentDictId.value ? entries.value.length : 0
+  if (row.id !== currentDictId.value) {
+    try {
+      const result = await getTermEntries(row.id)
+      entryCount = result.data.length
+    }
+    catch {
+      entryCount = 0
+    }
+  }
+  if (entryCount > 0) {
+    message.warning(`词库「${row.name}」下还有 ${entryCount} 条词条，请先在「词条」标签页清空词条后再删除词库`)
+    return
+  }
+
   const confirmed = await confirmDelete({
     entityType: '词库',
     entityName: row.name,
-    description: '删除后，该词库下的全部词条与纠错规则会一并删除，且无法恢复。',
+    description: '删除后，该词库及其附属纠错规则会一并删除，且无法恢复。',
   })
   if (!confirmed)
     return
@@ -1020,6 +1068,13 @@ async function handleSubmitEntry() {
     return
   }
 
+  const normalizedTerm = entryForm.correctTerm.trim()
+  const duplicate = entries.value.some(item => item.id !== editingEntryId.value && item.correct_term === normalizedTerm)
+  if (duplicate) {
+    message.warning(`标准术语「${normalizedTerm}」已存在，请勿重复创建`)
+    return
+  }
+
   const wrongVariants = entryForm.wrongVariantsText
     .split(/[\n,，]/)
     .map(item => item.trim())
@@ -1045,8 +1100,9 @@ async function handleSubmitEntry() {
     resetEntryForm()
     await selectDict(currentDictId.value)
   }
-  catch {
-    message.error(editingEntryId.value ? '词条更新失败' : '词条创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingEntryId.value ? '词条更新失败' : '词条创建失败'))
   }
   finally {
     entrySaving.value = false
@@ -1069,6 +1125,19 @@ async function handleSubmitRule() {
     return
   }
 
+  if (ruleForm.matchType === 'regex') {
+    try {
+      buildPreviewRegExp(ruleForm.pattern.trim())
+    }
+    catch {
+      message.error('正则表达式语法无效，请修正匹配式后再保存')
+      return
+    }
+  }
+
+  const normalizedSortOrder = Math.min(Math.max(Math.round(Number(ruleForm.sortOrder) || 100), 1), 9999)
+  ruleForm.sortOrder = normalizedSortOrder
+
   ruleSaving.value = true
   try {
     const structuredRule = !ruleNeedsPattern(ruleForm.matchType)
@@ -1077,8 +1146,8 @@ async function handleSubmitRule() {
       pattern: structuredRule ? '' : ruleForm.pattern.trim(),
       replacement: structuredRule ? '' : ruleForm.replacement.trim(),
       enabled: ruleForm.enabled,
-      sort_order: ruleForm.sortOrder || 100,
-      priority: ruleForm.sortOrder || 100,
+      sort_order: normalizedSortOrder,
+      priority: normalizedSortOrder,
     }
 
     if (editingRuleId.value) {
@@ -1232,10 +1301,21 @@ onMounted(loadDicts)
             <NDataTable flex-height class="flex-1 min-h-0" :columns="entryColumns" :data="entries" :loading="entryLoading" :pagination="{ pageSize: 8 }" size="small" />
           </NTabPane>
           <NTabPane name="rules" tab="纠错规则">
-            <div v-if="ruleConflictWarnings.length" class="mb-3 grid gap-2 shrink-0">
-              <NAlert v-for="warning in ruleConflictWarnings" :key="warning" type="warning" :show-icon="false">
-                {{ warning }}
+            <div v-if="ruleConflictWarnings.length || ruleConflictFocusKey" class="mb-3 grid gap-2 shrink-0">
+              <NAlert v-for="warning in ruleConflictWarnings" :key="warning.key" type="warning" :show-icon="false">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span>{{ warning.text }}</span>
+                  <NButton text type="warning" size="tiny" @click="focusConflictRules(warning.key)">
+                    定位重复规则
+                  </NButton>
+                </div>
               </NAlert>
+              <div v-if="ruleConflictFocusKey" class="flex items-center justify-between rounded-2 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+                <span>已仅显示选中的重复规则</span>
+                <NButton text size="tiny" @click="ruleConflictFocusKey = ''">
+                  显示全部规则
+                </NButton>
+              </div>
             </div>
             <div class="mb-3 flex justify-end gap-2 shrink-0">
               <NButton :disabled="!currentDictId" quaternary size="small" @click="currentDictId && loadRules(currentDictId)">
@@ -1254,7 +1334,7 @@ onMounted(loadDicts)
                 新增规则
               </NButton>
             </div>
-            <NDataTable flex-height class="flex-1 min-h-0" :columns="ruleColumns" :data="rules" :loading="ruleLoading" :pagination="{ pageSize: 8 }" size="small" />
+            <NDataTable flex-height class="flex-1 min-h-0" :columns="ruleColumns" :data="displayRules" :loading="ruleLoading" :pagination="{ pageSize: 8 }" size="small" />
           </NTabPane>
         </NTabs>
       </NCard>
@@ -1468,7 +1548,7 @@ onMounted(loadDicts)
 
         <div class="rule-settings">
           <NFormItem :show-feedback="false" label="执行顺序" class="rule-order-item">
-            <NInputNumber v-model:value="ruleForm.sortOrder" :min="1" :step="10" class="w-full" />
+            <NInputNumber v-model:value="ruleForm.sortOrder" :min="1" :max="9999" :precision="0" :step="10" class="w-full" />
             <div class="rule-field-tip">
               数字越小越先执行，一般保持 100 即可。
             </div>

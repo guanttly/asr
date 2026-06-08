@@ -142,9 +142,24 @@ func (s *Service) GetDictEntries(ctx context.Context, dictID uint64) ([]EntryRes
 
 // CreateEntry creates a single term entry under a dictionary.
 func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*EntryResponse, error) {
+	correctTerm := strings.TrimSpace(req.CorrectTerm)
+	if correctTerm == "" {
+		return nil, fmt.Errorf("标准术语不能为空")
+	}
+
+	existing, err := s.entryRepo.ListByDict(ctx, req.DictID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range existing {
+		if strings.TrimSpace(item.CorrectTerm) == correctTerm {
+			return nil, fmt.Errorf("标准术语「%s」已存在，请勿重复创建", correctTerm)
+		}
+	}
+
 	entry := domain.TermEntry{
 		DictID:        req.DictID,
-		CorrectTerm:   req.CorrectTerm,
+		CorrectTerm:   correctTerm,
 		WrongVariants: req.WrongVariants,
 	}
 	if err := s.entryRepo.BatchCreate(ctx, []domain.TermEntry{entry}); err != nil {
@@ -157,7 +172,7 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	}
 
 	for _, item := range entries {
-		if item.CorrectTerm == req.CorrectTerm {
+		if item.CorrectTerm == correctTerm {
 			return &EntryResponse{
 				ID:            item.ID,
 				CorrectTerm:   item.CorrectTerm,
@@ -167,7 +182,7 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	}
 
 	return &EntryResponse{
-		CorrectTerm:   req.CorrectTerm,
+		CorrectTerm:   correctTerm,
 		WrongVariants: req.WrongVariants,
 	}, nil
 }

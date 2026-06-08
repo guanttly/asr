@@ -37,6 +37,7 @@ const router = useRouter()
 const route = useRoute()
 const appStore = useAppStore()
 const userStore = useUserStore()
+const isAdmin = computed(() => userStore.profile?.role === 'admin')
 const { status: businessSocketStatus, subscribedTopicCount, lastPongAt } = useBusinessSocket()
 
 interface IconShape {
@@ -306,18 +307,24 @@ const menuOptions = computed<MenuOption[]>(() => {
   const termCollectionChildren = buildTermCatalogMenuOptions(termCatalogTree.value)
   const rulesCollectionChildren = buildRulesCatalogMenuOptions(rulesCatalogTree.value)
 
+  const applicationSection: MenuOption = {
+    label: '应用',
+    key: 'applications',
+    icon: renderMenuIcon('applicationsSection', '应用'),
+    children: applicationChildren,
+  }
+
+  // 普通用户仅可访问“应用”相关功能，看板 / 工作流 / 术语库 / 系统管理仅管理员可见。
+  if (!isAdmin.value)
+    return [applicationSection]
+
   return [
     {
       label: '数据看板',
       key: '/dashboard',
       icon: renderMenuIcon('dashboard', '数据看板'),
     },
-    {
-      label: '应用',
-      key: 'applications',
-      icon: renderMenuIcon('applicationsSection', '应用'),
-      children: applicationChildren,
-    },
+    applicationSection,
     {
       label: '工作流',
       key: 'workflow-center',

@@ -117,6 +117,25 @@ function emitSegment(transcribe: ReturnType<typeof useTranscribe>, amplitude = 1
     transcribe.handleChunk(createChunk(0))
 }
 
+// Repeatedly drain the microtask queue until `predicate` holds. Used to await
+// the parallel transcription pipeline reaching a known point without relying on
+// real timers.
+async function waitFor(predicate: () => boolean, max = 100) {
+  for (let i = 0; i < max; i++) {
+    if (predicate())
+      return
+    await Promise.resolve()
+  }
+  throw new Error('waitFor timed out')
+}
+
+// Drain a fixed number of microtask turns so any (incorrect) out-of-order commit
+// would have a chance to happen before we assert it did not.
+async function flushMicrotasks(times = 12) {
+  for (let i = 0; i < times; i++)
+    await Promise.resolve()
+}
+
 describe('useTranscribe realtime persistence', () => {
   beforeEach(() => {
     authMocks.authedFetch.mockReset()
@@ -229,5 +248,90 @@ describe('useTranscribe realtime persistence', () => {
     expect(authMocks.ensureMeetingWorkflowBinding).toHaveBeenCalled()
     const [formData] = transcriptionMocks.uploadMeetingFromAudio.mock.calls[0]
     expect(formData.get('workflow_id')).toBe('33')
+  })
+
+  it('preserves segment order even when a later segment is recognized first', async () => {
+    // Each ASR call parks on a gate so the test controls completion order.
+    const gates: Array<(text: string) => void> = []
+    authMocks.authedFetch.mockImplementation((url: string) => {
+      if (url !== '/api/asr/realtime-segments')
+        throw new Error(`unexpected request: ${url}`)
+      return new Promise<Response>((resolve) => {
+        gates.push((text: string) => resolve(envelope({ text })))
+      })
+    })
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    emitSegment(transcribe)
+    await waitFor(() => gates.length === 2)
+
+    // Finish the SECOND segment first; the ordered consumer must still hold its
+    // output back until the first segment is committed.
+    gates[1]('第二段')
+    await flushMicrotasks()
+    expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
+
+    gates[0]('第一段')
+    await transcribe.stopAndFlush()
+
+    expect(appStoreMocks.state.appendHistory.mock.calls.map(([t]) => t)).toEqual(['第一段', '第二段'])
+    const savedTexts = transcriptionMocks.uploadRealtimeSessionTask.mock.calls.map(([payload]) => payload.get('result_text'))
+    expect(savedTexts).toEqual(['第一段', '第二段'])
+  })
+
+  it('does not paste to the cursor after the user stops', async () => {
+    appStoreMocks.state.autoInject = true
+    let releaseAsr: (() => void) | null = null
+    authMocks.authedFetch.mockImplementation((url: string) => {
+      if (url !== '/api/asr/realtime-segments')
+        throw new Error(`unexpected request: ${url}`)
+      return new Promise<Response>((resolve) => {
+        releaseAsr = () => resolve(envelope({ text: '停止后内容' }))
+      })
+    })
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    await waitFor(() => releaseAsr !== null)
+
+    // Stop first (severs the inject link), then let the in-flight ASR finish.
+    const stopPromise = transcribe.stopAndFlush()
+    releaseAsr!()
+    await stopPromise
+
+    expect(injectorMocks.injectText).not.toHaveBeenCalled()
+    // The mid-transcription segment is still recorded to history, just not pasted.
+    expect(appStoreMocks.state.appendHistory).toHaveBeenCalledWith('停止后内容')
+  })
+
+  it('drops not-yet-started segments from the queue when the user stops', async () => {
+    let asrCallCount = 0
+    const releasers: Array<() => void> = []
+    authMocks.authedFetch.mockImplementation((url: string) => {
+      if (url !== '/api/asr/realtime-segments')
+        throw new Error(`unexpected request: ${url}`)
+      asrCallCount += 1
+      return new Promise<Response>((resolve) => {
+        releasers.push(() => resolve(envelope({ text: '内容' })))
+      })
+    })
+
+    const transcribe = useTranscribe()
+    // Emit more segments than the parallel limit so the tail stays not-started.
+    for (let i = 0; i < 5; i++)
+      emitSegment(transcribe)
+
+    // Only the concurrency-limited segments begin ASR; the rest wait in queue.
+    await waitFor(() => releasers.length === 3)
+    expect(asrCallCount).toBe(3)
+
+    const stopPromise = transcribe.stopAndFlush()
+    releasers.forEach(release => release())
+    await stopPromise
+
+    // The queued-but-not-started segments never reach ASR and are not recorded.
+    expect(asrCallCount).toBe(3)
+    expect(appStoreMocks.state.appendHistory).toHaveBeenCalledTimes(3)
   })
 })

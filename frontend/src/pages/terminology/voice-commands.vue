@@ -67,6 +67,7 @@ const dictTypeOptions = [
 ]
 const groupKeyOptions = buildVoiceCommandGroupOptions()
 const currentGroupSpec = computed(() => findBuiltinVoiceCommandGroup(currentDict.value?.group_key))
+const dictGroupIsBuiltin = computed(() => !!findBuiltinVoiceCommandGroup(dictForm.groupKey))
 const entryIntentOptions = computed(() => buildVoiceCommandIntentOptions(currentDict.value?.group_key))
 
 const filteredDicts = computed(() => {
@@ -186,7 +187,7 @@ const entryColumns = [
 function resetDictForm() {
   editingDictId.value = null
   dictForm.name = ''
-  dictForm.groupKey = groupKeyOptions[0]?.value || ''
+  dictForm.groupKey = ''
   dictForm.description = ''
   dictForm.isBase = false
 }
@@ -254,7 +255,9 @@ function openCreateDictModal() {
 function openEditDictModal(row: VoiceCommandDictItem) {
   editingDictId.value = row.id
   dictForm.name = row.name
-  dictForm.groupKey = normalizeVoiceCommandGroupKey(row.group_key)
+  dictForm.groupKey = findBuiltinVoiceCommandGroup(row.group_key)
+    ? normalizeVoiceCommandGroupKey(row.group_key)
+    : row.group_key
   dictForm.description = row.description || ''
   dictForm.isBase = row.is_base
   showDictModal.value = true
@@ -307,9 +310,10 @@ async function handleSubmitDict() {
     resetDictForm()
     await loadDicts()
   }
-  catch {
-    message.error(editingDictId.value ? '控制指令组更新失败' : '控制指令组创建失败')
-    if (editingDictId.value || dictForm.isBase)
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingDictId.value ? '控制指令组更新失败' : '控制指令组创建失败'))
+    if (!responseMessage && (editingDictId.value || dictForm.isBase))
       message.warning('若提示基础组冲突，请直接编辑现有基础控制指令组。')
   }
   finally {
@@ -489,9 +493,22 @@ onMounted(loadDicts)
           <NInput v-model:value="dictForm.name" :maxlength="128" placeholder="如：场景切换控制" />
         </NFormItem>
         <NFormItem label="分组键">
-          <NSelect v-model:value="dictForm.groupKey" :options="groupKeyOptions" placeholder="请选择系统注册的分组 key" />
+          <NSelect
+            v-if="dictGroupIsBuiltin"
+            v-model:value="dictForm.groupKey"
+            :options="groupKeyOptions"
+            :disabled="editingDictId !== null"
+            placeholder="内置注册分组"
+          />
+          <NInput
+            v-else
+            v-model:value="dictForm.groupKey"
+            :maxlength="64"
+            :disabled="editingDictId !== null"
+            placeholder="自定义分组键，如：recording_control"
+          />
           <div class="mt-2 text-xs leading-5 text-slate/70">
-            所有控制分组 key 统一由注册表维护，禁止手填魔法字符串。
+            内置分组（如场景切换）由注册表维护；自定义扩展分组的键仅支持小写字母、数字和下划线且以字母开头。创建后不可修改。
           </div>
         </NFormItem>
         <NFormItem label="说明">
@@ -524,13 +541,20 @@ onMounted(loadDicts)
         </NFormItem>
         <NFormItem label="意图值">
           <NSelect
+            v-if="currentGroupSpec"
             :value="entryForm.intent || null"
             :options="entryIntentOptions"
             placeholder="请选择系统注册的控制 handler"
             @update:value="handleIntentChange"
           />
+          <NInput
+            v-else
+            v-model:value="entryForm.intent"
+            :maxlength="64"
+            placeholder="自定义意图值，如：recording_start"
+          />
           <div class="mt-2 text-xs leading-5 text-slate/70">
-            下拉项显示的是控制 handler 中文名称；实际保存的是统一注册的接口 key，例如 scene_report_switch。
+            内置分组从注册的控制 handler 中选择；自定义分组可填写 slug 形式的意图值（小写字母、数字、下划线），由后台 voice_intent 节点按话术区配。
           </div>
         </NFormItem>
         <NFormItem label="展示名称">

@@ -165,7 +165,7 @@ func (h *SensitiveHandler) writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, appsensitive.ErrSensitiveDictNotFound), errors.Is(err, appsensitive.ErrSensitiveEntryNotFound):
 		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
-	case errors.Is(err, appsensitive.ErrSensitiveBaseDictProtected), errors.Is(err, appsensitive.ErrSensitiveBaseDictConflict):
+	case errors.Is(err, appsensitive.ErrSensitiveBaseDictProtected), errors.Is(err, appsensitive.ErrSensitiveBaseDictConflict), errors.Is(err, appsensitive.ErrSensitiveEntryDuplicate):
 		response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
 	default:
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())

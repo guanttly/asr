@@ -55,27 +55,43 @@ func (w *Workbook) Encode(out io.Writer) error {
 		return idx
 	}
 
-	var sheetBody bytes.Buffer
-	sheetBody.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
-	sheetBody.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>`)
+	var sheetData bytes.Buffer
+	maxCols := 0
+	totalStringRefs := 0
 	for rowIdx, row := range w.rows {
-		fmt.Fprintf(&sheetBody, `<row r="%d">`, rowIdx+1)
+		if len(row) > maxCols {
+			maxCols = len(row)
+		}
+		fmt.Fprintf(&sheetData, `<row r="%d">`, rowIdx+1)
 		for colIdx, value := range row {
 			ref := cellReference(colIdx, rowIdx)
 			if value == "" {
-				fmt.Fprintf(&sheetBody, `<c r="%s"/>`, ref)
+				fmt.Fprintf(&sheetData, `<c r="%s"/>`, ref)
 				continue
 			}
 			idx := internSharedString(value)
-			fmt.Fprintf(&sheetBody, `<c r="%s" t="s"><v>%d</v></c>`, ref, idx)
+			totalStringRefs++
+			fmt.Fprintf(&sheetData, `<c r="%s" t="s"><v>%d</v></c>`, ref, idx)
 		}
-		sheetBody.WriteString(`</row>`)
+		sheetData.WriteString(`</row>`)
 	}
+
+	dimensionRef := "A1"
+	if len(w.rows) > 0 && maxCols > 0 {
+		dimensionRef = "A1:" + cellReference(maxCols-1, len(w.rows)-1)
+	}
+
+	var sheetBody bytes.Buffer
+	sheetBody.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	sheetBody.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
+	fmt.Fprintf(&sheetBody, `<dimension ref="%s"/>`, dimensionRef)
+	sheetBody.WriteString(`<sheetData>`)
+	sheetBody.Write(sheetData.Bytes())
 	sheetBody.WriteString(`</sheetData></worksheet>`)
 
 	var sharedStringsXML bytes.Buffer
 	sharedStringsXML.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
-	fmt.Fprintf(&sharedStringsXML, `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="%d" uniqueCount="%d">`, len(sharedStrings), len(sharedStrings))
+	fmt.Fprintf(&sharedStringsXML, `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="%d" uniqueCount="%d">`, totalStringRefs, len(sharedStrings))
 	for _, value := range sharedStrings {
 		sharedStringsXML.WriteString(`<si><t xml:space="preserve">`)
 		if err := xml.EscapeText(&sharedStringsXML, []byte(value)); err != nil {

@@ -150,15 +150,34 @@ func (r *seedRepoStub) MarkSeeded(_ context.Context, key string) error {
 
 var _ termdomain.SeedStateRepository = (*seedRepoStub)(nil)
 
-func TestCreateDictRejectsUnknownGroupKey(t *testing.T) {
+func TestCreateDictRejectsMalformedGroupKey(t *testing.T) {
 	service := NewService(&dictRepoStub{}, &entryRepoStub{}, &seedRepoStub{})
 
 	_, err := service.CreateDict(context.Background(), &CreateDictRequest{
 		Name:     "非法分组",
-		GroupKey: "free_style_key",
+		GroupKey: "Invalid Key!",
 	})
 	if err == nil {
-		t.Fatal("expected invalid group key to be rejected")
+		t.Fatal("expected malformed group key to be rejected")
+	}
+}
+
+func TestCreateDictAcceptsCustomGroupKey(t *testing.T) {
+	service := NewService(&dictRepoStub{}, &entryRepoStub{}, &seedRepoStub{})
+
+	resp, err := service.CreateDict(context.Background(), &CreateDictRequest{
+		Name:     "录制控制",
+		GroupKey: "recording_control",
+		IsBase:   true,
+	})
+	if err != nil {
+		t.Fatalf("expected custom group key to be accepted, got %v", err)
+	}
+	if resp.GroupKey != "recording_control" {
+		t.Fatalf("unexpected group key: %s", resp.GroupKey)
+	}
+	if resp.IsBase {
+		t.Fatal("custom group should be forced to extension (non-base)")
 	}
 }
 

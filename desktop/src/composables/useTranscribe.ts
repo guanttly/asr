@@ -16,6 +16,9 @@ const PRE_ROLL_CHUNKS = 1
 const MAX_SEGMENT_CHUNKS = 60
 const REALTIME_WORKFLOW_TIMEOUT_MS = 3 * 1000
 const AUTO_INJECT_TIMEOUT_MS = 2 * 1000
+// 并行处理的断句上限。ASR 上游支持并发，提高此值可在语速较快时更快地
+// 消化堆积的断句；但提交（写历史 / 注入光标）仍严格按断句顺序进行。
+const MAX_PARALLEL_SEGMENTS = 3
 // 防止用户在会议/报告模式间误切换或者误录产生无意义任务：
 // 1) 录音时长低于 MIN_MEETING_DURATION_SECONDS 时直接丢弃；
 // 2) 没有任何识别文本时直接丢弃。
@@ -27,6 +30,26 @@ interface RealtimeSessionSegment {
   rawText: string
   duration: number
   workflowId?: number
+}
+
+// 流水线中的单个断句。`seq` 是全局递增序号，用于在并行识别之后仍能严格
+// 按时间顺序提交，避免输出“颠三倒四”。
+interface PipelineSegment {
+  seq: number
+  file: File
+  duration: number
+  workflowId?: number
+  /** ASR 识别结果（已归一化）。 */
+  rawText: string
+  /** rawText 是否含有效内容。 */
+  hasText: boolean
+  /** 推测性预跑的实时工作流结果；未预跑时为 undefined，由消费端补算。 */
+  finalText?: string
+  /** 用户停止后被丢弃的“未开始”断句，消费端直接跳过。 */
+  dropped: boolean
+  /** 并行阶段（ASR + 推测性工作流）完成后兑现。 */
+  ready: Promise<void>
+  markReady: () => void
 }
 
 export function useTranscribe() {
@@ -48,8 +71,17 @@ export function useTranscribe() {
   let activeSpeechCount = 0
   let peakLevel = 0
   let trailingSilence = 0
-  let uploadQueue: { file: File, duration: number }[] = []
-  let uploadPromise: Promise<void> | null = null
+  // 并行转写流水线状态。每个断句分配递增的 seq；ASR + 实时工作流并行执行，
+  // 但提交（写历史 / 注入光标）由单一消费协程严格按 seq 顺序进行。
+  let nextSeq = 0
+  let commitSeq = 0
+  let activeWorkers = 0
+  let workflowActiveCount = 0
+  // 用户停止后置为 true：阻断后续光标注入，并丢弃尚未开始的断句队列。
+  let pipelineAborted = false
+  let consumerPromise: Promise<void> | null = null
+  const pendingSegments: PipelineSegment[] = []
+  const segmentsBySeq = new Map<number, PipelineSegment>()
   let saveSessionPromise: Promise<void> | null = null
   const sessionAudioChunks: ArrayBuffer[] = []
   const sessionRecognizedTexts: string[] = []
@@ -136,7 +168,6 @@ export function useTranscribe() {
     if (workflowId == null)
       return text
 
-    status.value = 'processing'
     const { signal, cleanup } = createTimeoutSignal(REALTIME_WORKFLOW_TIMEOUT_MS)
     try {
       const resp = await authedFetch(`/api/admin/workflows/${workflowId}/execute`, {
@@ -185,8 +216,6 @@ export function useTranscribe() {
     }
     finally {
       cleanup()
-      if (status.value === 'processing')
-        status.value = 'uploading'
     }
   }
 
@@ -247,111 +276,240 @@ export function useTranscribe() {
     totalSegments.value += 1
     const bytes = chunks.reduce((s, c) => s + c.byteLength, 0)
     const file = createWav(chunks, `segment-${Date.now()}.wav`)
-    uploadQueue.push({ file, duration: bytes / 2 / TARGET_SAMPLE_RATE })
-    pendingCount.value = uploadQueue.length
-    void debugLog('transcribe.segment', 'queued segment for upload', { reason, chunks: chunks.length, pending: pendingCount.value })
+    enqueueSegment(file, bytes / 2 / TARGET_SAMPLE_RATE, reason)
     resetActiveSegment()
-    void flushUploadQueue()
   }
 
-  async function flushUploadQueue() {
-    if (uploadPromise)
-      return uploadPromise
+  function uncommittedCount(): number {
+    return Math.max(0, nextSeq - commitSeq)
+  }
 
-    uploadPromise = (async () => {
+  // 集中计算录音过程中的状态展示，避免多个并行任务相互覆盖状态。
+  function refreshStatus() {
+    if (activeSegmentChunks.length > 0) {
+      status.value = 'collecting'
+      return
+    }
+    if (workflowActiveCount > 0) {
+      status.value = 'processing'
+      return
+    }
+    status.value = uncommittedCount() > 0 ? 'uploading' : 'listening'
+  }
+
+  // 入队一个断句：分配 seq，立即在并发上限内启动 ASR（并行阶段），
+  // 同时确保有序消费协程在运行。
+  function enqueueSegment(file: File, duration: number, reason: 'silence' | 'limit' | 'stop') {
+    const seq = nextSeq++
+    let markReady: () => void = () => {}
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve
+    })
+    const segment: PipelineSegment = {
+      seq,
+      file,
+      duration,
+      rawText: '',
+      hasText: false,
+      dropped: false,
+      ready,
+      markReady,
+    }
+    segmentsBySeq.set(seq, segment)
+    pendingSegments.push(segment)
+    pendingCount.value = uncommittedCount()
+    void debugLog('transcribe.segment', 'queued segment for transcription', { reason, seq, pending: pendingCount.value })
+    refreshStatus()
+    pumpWorkers()
+    ensureConsumer()
+  }
+
+  // 并行阶段调度器：在 MAX_PARALLEL_SEGMENTS 内尽量多地启动 ASR worker。
+  function pumpWorkers() {
+    while (activeWorkers < MAX_PARALLEL_SEGMENTS && pendingSegments.length > 0) {
+      const segment = pendingSegments.shift()!
+      activeWorkers += 1
+      void processSegment(segment).finally(() => {
+        activeWorkers -= 1
+        pumpWorkers()
+      })
+    }
+  }
+
+  async function transcribeSegment(segment: PipelineSegment): Promise<string> {
+    const formData = new FormData()
+    formData.append('file', segment.file)
+    // Realtime workflow drives both LLM correction and (via term-correction
+    // node config) the ASR hotword/dictionary. Sending workflow_id lets the
+    // backend resolve dict_id → push hotwords to the upstream qwen3-asr call.
+    const realtimeWorkflowId = await ensureRealtimeWorkflowBinding().catch(() => appStore.realtimeWorkflowId)
+    if (realtimeWorkflowId != null)
+      formData.append('workflow_id', String(realtimeWorkflowId))
+    segment.workflowId = realtimeWorkflowId ?? undefined
+
+    await debugLog('transcribe.upload', 'uploading segment', { seq: segment.seq, duration: segment.duration, workflowId: realtimeWorkflowId })
+    const resp = await authedFetch('/api/asr/realtime-segments', {
+      method: 'POST',
+      body: formData,
+    })
+    const json = await readResponseEnvelope<{ text?: string }>(resp)
+    if (!resp.ok) {
+      lastError.value = json.message || `识别请求失败: ${resp.status}`
+      void debugLog('transcribe.error', 'segment upload failed', { seq: segment.seq, status: resp.status, message: lastError.value })
+      return ''
+    }
+    return normalizeText(json.data?.text)
+  }
+
+  async function runWorkflow(rawText: string): Promise<string> {
+    workflowActiveCount += 1
+    refreshStatus()
+    try {
+      return await applyRealtimeWorkflow(rawText)
+    }
+    finally {
+      workflowActiveCount -= 1
+      refreshStatus()
+    }
+  }
+
+  // 并行阶段：执行 ASR，并对（普通报告场景的）口述断句推测性地预跑实时
+  // 工作流，使有序消费端基本无需再等待 LLM。此处不触碰 voice control /
+  // 历史 / 注入等顺序敏感状态，结果只写入该断句自身。
+  async function processSegment(segment: PipelineSegment) {
+    try {
+      const rawText = await transcribeSegment(segment)
+      segment.rawText = rawText
+      segment.hasText = !!rawText && hasContent(rawText)
+      if (segment.hasText && !pipelineAborted
+        && appStore.sceneMode === SCENE_MODES.REPORT && !appStore.voiceCommandActive) {
+        segment.finalText = await runWorkflow(rawText)
+      }
+    }
+    catch (e) {
+      lastError.value = e instanceof Error ? e.message : '识别请求异常'
+      void debugLog('transcribe.error', 'segment processing threw', e instanceof Error ? { message: e.message, stack: e.stack } : e)
+    }
+    finally {
+      segment.markReady()
+      refreshStatus()
+    }
+  }
+
+  // 有序消费协程：严格按 seq 顺序提交结果，保证输出不“颠三倒四”。
+  function ensureConsumer() {
+    if (consumerPromise)
+      return
+    consumerPromise = (async () => {
       try {
-        while (uploadQueue.length > 0) {
-          const item = uploadQueue.shift()!
-          pendingCount.value = uploadQueue.length
-          status.value = 'uploading'
-
-          const formData = new FormData()
-          formData.append('file', item.file)
-          // Realtime workflow drives both LLM correction and (via term-correction
-          // node config) the ASR hotword/dictionary. Sending workflow_id lets the
-          // backend resolve dict_id → push hotwords to the upstream qwen3-asr call.
-          const realtimeWorkflowId = await ensureRealtimeWorkflowBinding().catch(() => appStore.realtimeWorkflowId)
-          if (realtimeWorkflowId != null)
-            formData.append('workflow_id', String(realtimeWorkflowId))
-
-          try {
-            await debugLog('transcribe.upload', 'uploading segment', { pending: uploadQueue.length, duration: item.duration, workflowId: realtimeWorkflowId })
-            const resp = await authedFetch('/api/asr/realtime-segments', {
-              method: 'POST',
-              body: formData,
-            })
-            const json = await readResponseEnvelope<{ text?: string }>(resp)
-            if (!resp.ok) {
-              lastError.value = json.message || `识别请求失败: ${resp.status}`
-              void debugLog('transcribe.error', 'segment upload failed', { status: resp.status, message: lastError.value })
-              continue
-            }
-            const rawText = normalizeText(json.data?.text)
-            if (!rawText || !hasContent(rawText)) continue
-
-            // Voice control: detect wake word / classify command. When swallowed,
-            // we skip workflow / inject / history append for this segment so the
-            // user's command words don't pollute the document.
-            const voiceResult = await voiceControl.handleSegmentText(rawText)
-            if (voiceResult.swallow) {
-              await debugLog('voice.command', 'segment swallowed', { rawText, voiceResult })
-              continue
-            }
-
-            sessionRecognizedTexts.push(rawText)
-
-            if (appStore.sceneMode !== SCENE_MODES.REPORT) {
-              lastError.value = ''
-              await debugLog('transcribe.upload', 'skip report write path outside report scene', {
-                scene: appStore.sceneMode,
-                text: rawText,
-              })
-              continue
-            }
-
-            const text = await applyRealtimeWorkflow(rawText)
-            if (!text || !hasContent(text)) {
-              await debugLog('transcribe.workflow', 'workflow produced empty segment text', { rawText })
-              continue
-            }
-
-            sessionRealtimeSegments.push({
-              file: item.file,
-              rawText,
-              duration: item.duration,
-              workflowId: realtimeWorkflowId ?? undefined,
-            })
-
-            appStore.appendHistory(text)
-            lastError.value = ''
-            await debugLog('transcribe.upload', 'received transcript text', { text })
-
-            // Auto-inject to cursor
-            if (appStore.autoInject) {
-              const result = await withTimeout(injectText(text), AUTO_INJECT_TIMEOUT_MS, () => ({
-                success: false,
-                message: '文本注入超时，已跳过本次自动粘贴',
-              }))
-              if (!result.success) {
-                lastError.value = result.message
-                void debugLog('inject.error', 'failed to inject transcript', result)
-              }
-            }
+        while (commitSeq < nextSeq) {
+          const segment = segmentsBySeq.get(commitSeq)
+          if (!segment) {
+            commitSeq += 1
+            continue
           }
-          catch (e) {
-            lastError.value = e instanceof Error ? e.message : '识别请求异常'
-            void debugLog('transcribe.error', 'segment upload threw', e instanceof Error ? { message: e.message, stack: e.stack } : e)
-          }
+          await segment.ready
+          segmentsBySeq.delete(segment.seq)
+          commitSeq += 1
+          pendingCount.value = uncommittedCount()
+          await commitSegment(segment)
+          refreshStatus()
         }
       }
       finally {
-        pendingCount.value = uploadQueue.length
-        uploadPromise = null
-        if (status.value === 'uploading' || status.value === 'processing') status.value = 'listening'
+        consumerPromise = null
+        if (commitSeq < nextSeq)
+          ensureConsumer()
+        else
+          refreshStatus()
       }
     })()
+  }
 
-    return uploadPromise
+  // 有序阶段：voice control 是有状态状态机，必须按序执行；写历史与注入光标
+  // 同样按序进行。注入受 pipelineAborted 门控——用户停止后不再粘贴。
+  async function commitSegment(segment: PipelineSegment) {
+    if (segment.dropped)
+      return
+    const rawText = segment.rawText
+    if (!rawText || !segment.hasText)
+      return
+
+    // Voice control: detect wake word / classify command. When swallowed, we
+    // skip workflow / inject / history append for this segment so the user's
+    // command words don't pollute the document.
+    const voiceResult = await voiceControl.handleSegmentText(rawText)
+    if (voiceResult.swallow) {
+      await debugLog('voice.command', 'segment swallowed', { rawText, voiceResult })
+      return
+    }
+
+    sessionRecognizedTexts.push(rawText)
+
+    if (appStore.sceneMode !== SCENE_MODES.REPORT) {
+      lastError.value = ''
+      await debugLog('transcribe.upload', 'skip report write path outside report scene', {
+        scene: appStore.sceneMode,
+        text: rawText,
+      })
+      return
+    }
+
+    // 若并行阶段因场景切换等原因未预跑工作流，则在此按序补算。
+    let text = segment.finalText
+    if (text === undefined)
+      text = await runWorkflow(rawText)
+    if (!text || !hasContent(text)) {
+      await debugLog('transcribe.workflow', 'workflow produced empty segment text', { rawText })
+      return
+    }
+
+    sessionRealtimeSegments.push({
+      file: segment.file,
+      rawText,
+      duration: segment.duration,
+      workflowId: segment.workflowId,
+    })
+
+    appStore.appendHistory(text)
+    lastError.value = ''
+    await debugLog('transcribe.upload', 'received transcript text', { text })
+
+    // Auto-inject to cursor. Once the user has stopped (pipelineAborted), the
+    // link to the cursor is severed so nothing is pasted after they release the
+    // mic, even if this segment was already mid-transcription.
+    if (appStore.autoInject && !pipelineAborted) {
+      const result = await withTimeout(injectText(text), AUTO_INJECT_TIMEOUT_MS, () => ({
+        success: false,
+        message: '文本注入超时，已跳过本次自动粘贴',
+      }))
+      if (!result.success) {
+        lastError.value = result.message
+        void debugLog('inject.error', 'failed to inject transcript', result)
+      }
+    }
+    else if (appStore.autoInject && pipelineAborted) {
+      await debugLog('inject.skip', 'injection blocked after stop', { seq: segment.seq })
+    }
+  }
+
+  // 用户停止后立即丢弃尚未开始识别的断句队列。
+  function clearPendingQueue() {
+    if (pendingSegments.length === 0)
+      return
+    const dropped = pendingSegments.splice(0, pendingSegments.length)
+    for (const segment of dropped) {
+      segment.dropped = true
+      segment.markReady()
+    }
+    void debugLog('transcribe.segment', 'cleared not-started transcription queue on stop', { dropped: dropped.length })
+    pendingCount.value = uncommittedCount()
+  }
+
+  // 等待已在识别中的断句与有序消费协程全部收尾。
+  async function drainPipeline() {
+    while (consumerPromise)
+      await consumerPromise
   }
 
   async function persistRealtimeSegment(segment: RealtimeSessionSegment) {
@@ -568,7 +726,7 @@ export function useTranscribe() {
       leadInChunks.push(copied)
       if (leadInChunks.length > PRE_ROLL_CHUNKS)
         leadInChunks.splice(0, leadInChunks.length - PRE_ROLL_CHUNKS)
-      if (status.value !== 'uploading') status.value = 'listening'
+      refreshStatus()
     }
 
     const s = appStore.recognitionSettings
@@ -583,8 +741,14 @@ export function useTranscribe() {
   }
 
   async function stopAndFlush() {
+    // 立刻阻断光标注入：用户一旦停止，正在识别中的内容也不再粘贴到光标。
+    pipelineAborted = true
+    // 先丢弃尚未开始识别的历史堆积队列，避免停止后继续处理积压内容。
+    clearPendingQueue()
+    // 再入队用户停止前的最后一段口述，确保末尾内容仍会被识别并落库（但不再注入）。
     finalizeSegment('stop')
-    await flushUploadQueue()
+    // 已在识别中的断句仍会写入历史以便落库，但不会再注入光标。
+    await drainPipeline()
     await persistRealtimeSession()
     status.value = 'idle'
   }
@@ -596,8 +760,14 @@ export function useTranscribe() {
     sessionAudioChunks.splice(0, sessionAudioChunks.length)
     sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
     sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
-    uploadQueue = []
-    uploadPromise = null
+    pendingSegments.splice(0, pendingSegments.length)
+    segmentsBySeq.clear()
+    nextSeq = 0
+    commitSeq = 0
+    activeWorkers = 0
+    workflowActiveCount = 0
+    pipelineAborted = false
+    consumerPromise = null
     saveSessionPromise = null
     appStore.invalidateWorkflowBindings()
     noiseFloorLevel.value = DEFAULT_NOISE_FLOOR

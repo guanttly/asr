@@ -1252,6 +1252,22 @@ func (s *Service) runCompletedTaskPostProcessing(ctx context.Context, task *doma
 		return false, nil
 	}
 
+	// A completed task with an empty transcription result has nothing to
+	// post-process (e.g. silent or speechless audio). Treat it as a terminal,
+	// successful no-op instead of a retryable failure, otherwise the dashboard
+	// "同步" action keeps looping forever on "empty transcription result".
+	if strings.TrimSpace(task.ResultText) == "" {
+		changed := s.recordSyncSuccess(task, now)
+		if s.markPostProcessCompleted(task, now) {
+			changed = true
+		}
+		if err := s.taskRepo.Update(ctx, task); err != nil {
+			return false, err
+		}
+		s.publishTaskUpdated(task)
+		return changed, nil
+	}
+
 	if task.PostProcessStatus != domain.PostProcessProcessing {
 		task.PostProcessStatus = domain.PostProcessProcessing
 		task.PostProcessError = ""

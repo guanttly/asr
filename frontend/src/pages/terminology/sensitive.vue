@@ -15,6 +15,7 @@ import {
 
 } from '@/api/sensitive'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
+import { validateResourceName } from '@/utils/resourceName'
 
 const message = useMessage()
 const confirmDelete = useDeleteConfirmDialog()
@@ -250,6 +251,12 @@ async function handleSubmitDict() {
     return
   }
 
+  const nameError = validateResourceName(dictForm.name)
+  if (nameError) {
+    message.warning(nameError)
+    return
+  }
+
   dictSaving.value = true
   try {
     const payload = {
@@ -272,8 +279,9 @@ async function handleSubmitDict() {
     resetDictForm()
     await loadDicts()
   }
-  catch {
-    message.error(editingDictId.value ? '敏感词库更新失败' : '敏感词库创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingDictId.value ? '敏感词库更新失败' : '敏感词库创建失败'))
     if (editingDictId.value || dictForm.isBase)
       message.warning('若提示基础库冲突，请直接编辑现有基础敏感词库，而不是再创建一个新的基础库。')
   }
@@ -341,8 +349,9 @@ async function handleSubmitEntry() {
     resetEntryForm()
     await selectDict(currentDictId.value)
   }
-  catch {
-    message.error(editingEntryId.value ? '敏感词更新失败' : '敏感词创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingEntryId.value ? '敏感词更新失败' : '敏感词创建失败'))
   }
   finally {
     entrySaving.value = false

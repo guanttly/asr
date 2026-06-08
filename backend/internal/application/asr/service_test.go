@@ -20,6 +20,7 @@ type taskRepoServiceStub struct {
 
 type completedTaskProcessorStub struct {
 	resumeErr     error
+	processErr    error
 	resumedTask   *domain.TranscriptionTask
 	processedTask *domain.TranscriptionTask
 }
@@ -60,7 +61,7 @@ func TestNormalizeLanguageMapsProductCodes(t *testing.T) {
 
 func (s *completedTaskProcessorStub) ProcessCompletedTask(_ context.Context, task *domain.TranscriptionTask) error {
 	s.processedTask = cloneTask(task)
-	return nil
+	return s.processErr
 }
 
 func (s *completedTaskProcessorStub) ResumeCompletedTaskFromFailure(_ context.Context, task *domain.TranscriptionTask) error {
@@ -415,6 +416,49 @@ func TestResumeTaskPostProcessFromFailureRejectsInvalidTask(t *testing.T) {
 	_, err := service.ResumeTaskPostProcessFromFailure(context.Background(), 7, 6)
 	if !errors.Is(err, ErrTaskResumeNotAllowed) {
 		t.Fatalf("expected ErrTaskResumeNotAllowed, got %v", err)
+	}
+}
+
+// TestAdminSyncTaskCompletesEmptyTranscription verifies that re-syncing a
+// completed batch task whose transcription result is empty resolves cleanly
+// instead of looping forever on "empty transcription result". The post
+// processor must be skipped and the task marked completed with counters reset.
+func TestAdminSyncTaskCompletesEmptyTranscription(t *testing.T) {
+	repo := &taskRepoServiceStub{tasks: map[uint64]*domain.TranscriptionTask{
+		9: {
+			ID:                9,
+			UserID:            7,
+			Type:              domain.TaskTypeBatch,
+			Status:            domain.TaskStatusCompleted,
+			ExternalTaskID:    "ext-9",
+			ResultText:        "   ",
+			PostProcessStatus: domain.PostProcessFailed,
+			PostProcessError:  "empty transcription result",
+			SyncFailCount:     11,
+		},
+	}}
+	processor := &completedTaskProcessorStub{processErr: errors.New("empty transcription result")}
+	service := NewService(repo, nil, processor, 5, nil)
+
+	result, err := service.AdminSyncTask(context.Background(), 9)
+	if err != nil {
+		t.Fatalf("AdminSyncTask returned error: %v", err)
+	}
+	if processor.processedTask != nil {
+		t.Fatalf("expected post processor to be skipped for empty transcription, got %+v", processor.processedTask)
+	}
+	if result.PostProcessStatus != domain.PostProcessCompleted {
+		t.Fatalf("expected post process status completed, got %q", result.PostProcessStatus)
+	}
+	stored, _ := repo.GetByID(context.Background(), 9)
+	if stored.PostProcessStatus != domain.PostProcessCompleted {
+		t.Fatalf("expected stored status completed, got %q", stored.PostProcessStatus)
+	}
+	if stored.PostProcessError != "" {
+		t.Fatalf("expected post process error cleared, got %q", stored.PostProcessError)
+	}
+	if stored.SyncFailCount != 0 {
+		t.Fatalf("expected sync fail count reset, got %d", stored.SyncFailCount)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	openplatformdomain "github.com/lgt/asr/internal/domain/openplatform"
@@ -365,6 +366,12 @@ func (s *Service) prepareAppPayload(ctx context.Context, name, description strin
 	}
 	if prepared.name == "" {
 		return nil, &ValidationError{message: "name is required"}
+	}
+	if utf8.RuneCountInString(prepared.name) > 64 {
+		return nil, &ValidationError{message: "应用名称长度不能超过 64 个字符"}
+	}
+	if utf8.RuneCountInString(prepared.description) > 512 {
+		return nil, &ValidationError{message: "应用描述长度不能超过 512 个字符"}
 	}
 	if len(prepared.allowedCaps) == 0 {
 		return nil, &ValidationError{message: "allowed_caps is required"}

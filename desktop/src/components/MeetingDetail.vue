@@ -733,6 +733,15 @@ onBeforeUnmount(() => {
             <div v-if="isProcessing" class="detail-progress">
               <div class="spinner" />
               <p>会议纪要正在生成，请稍候，页面会自动刷新</p>
+              <button
+                v-if="detail && detail.transcripts.length"
+                class="action-btn"
+                type="button"
+                @click="activeTab = 'transcript'"
+              >
+                先查看逐字稿
+              </button>
+              <p v-else>逐字稿转写完成后，可在上方「逐字稿」标签查看</p>
             </div>
             <div v-else-if="!summaryReady && summaryMode !== 'edit'" class="detail-empty">
               暂无会议纪要内容，可切换到“编辑”补充纪要

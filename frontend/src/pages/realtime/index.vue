@@ -82,6 +82,7 @@ const DEFAULT_NOISE_FLOOR_LEVEL = 0.004
 const DEFAULT_MIN_SPEECH_RMS_THRESHOLD = 0.018
 const MAX_SPEECH_RMS_THRESHOLD = 0.08
 const NOISE_FLOOR_SMOOTHING = 0.08
+const NOISE_FLOOR_RECALIBRATE_WINDOW_MS = 1500
 const DEFAULT_NOISE_GATE_MULTIPLIER = 2.8
 const PRE_ROLL_CHUNKS = 1
 const DEFAULT_END_SILENCE_CHUNKS = 4
@@ -191,6 +192,7 @@ const uploadQueueSize = ref(0)
 const uploadState = ref<'idle' | 'uploading'>('idle')
 const listeningLevel = ref(0)
 const noiseFloorLevel = ref(DEFAULT_NOISE_FLOOR_LEVEL)
+const noiseFloorRecalibrateUntil = ref(0)
 const realtimeSettings = ref<RealtimeRecognitionSettings>(loadRealtimeRecognitionSettings())
 const realtimeConfigPanelExpanded = ref(loadRealtimeConfigPanelExpanded())
 const totalSegmentCount = ref(0)
@@ -385,10 +387,14 @@ function saveRealtimeRecognitionSettings(value: RealtimeRecognitionSettings) {
 function resetRealtimeRecognitionSettings() {
   realtimeSettings.value = { ...DEFAULT_REALTIME_SETTINGS }
   noiseFloorLevel.value = DEFAULT_NOISE_FLOOR_LEVEL
+  noiseFloorRecalibrateUntil.value = isRecording.value ? Date.now() + NOISE_FLOOR_RECALIBRATE_WINDOW_MS : 0
 }
 
 function recalibrateNoiseFloor() {
   noiseFloorLevel.value = DEFAULT_NOISE_FLOOR_LEVEL
+  // 录音过程中底噪会被自适应平滑不断覆写，进入一个短暂重校准窗口保证重置后能回到初始值。
+  noiseFloorRecalibrateUntil.value = isRecording.value ? Date.now() + NOISE_FLOOR_RECALIBRATE_WINDOW_MS : 0
+  message.success('已重置底噪为初始值')
 }
 
 function toggleRealtimeConfigPanel() {
@@ -677,6 +683,14 @@ function enqueueLeadInChunk(chunk: ArrayBuffer) {
 }
 
 function updateNoiseFloor(rms: number) {
+  if (noiseFloorRecalibrateUntil.value > 0) {
+    if (Date.now() <= noiseFloorRecalibrateUntil.value) {
+      // 重校准窗口内保持初始底噪，避免“重置底噪”被自适应值瞬间覆盖。
+      noiseFloorLevel.value = DEFAULT_NOISE_FLOOR_LEVEL
+      return
+    }
+    noiseFloorRecalibrateUntil.value = 0
+  }
   const boundedRms = clamp(rms, 0, MAX_SPEECH_RMS_THRESHOLD)
   if (noiseFloorLevel.value <= 0)
     noiseFloorLevel.value = boundedRms
@@ -958,6 +972,7 @@ async function handleStart() {
     totalSegmentCount.value = 0
     listeningLevel.value = 0
     noiseFloorLevel.value = DEFAULT_NOISE_FLOOR_LEVEL
+    noiseFloorRecalibrateUntil.value = 0
     instantQueueSize.value = 0
     instantProcessingError.value = ''
     instantNodeResults.value = []
@@ -1257,7 +1272,7 @@ onBeforeUnmount(() => {
           <div v-if="store.processedSentences.length === 0" class="text-slate">
             开始录音后，这里会在每句说完并识别成功后，逐句显示可直接用于写报告的输出结果。
           </div>
-          <div v-for="(line, index) in store.processedSentences" :key="`${index}-${line}`" class="mb-2.5 rounded-2.5 bg-mist/60 px-4 py-3 text-sm leading-6 text-ink last:mb-0">
+          <div v-for="(line, index) in store.processedSentences" :key="store.processedSentenceBase + index" class="mb-2.5 rounded-2.5 bg-mist/60 px-4 py-3 text-sm leading-6 text-ink last:mb-0">
             {{ line }}
           </div>
         </div>

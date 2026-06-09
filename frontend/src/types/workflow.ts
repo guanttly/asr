@@ -58,6 +58,7 @@ export interface WorkflowCatalogItem {
   source_kind?: WorkflowSourceKind
   target_kind?: WorkflowTargetKind
   is_legacy?: boolean
+  is_published?: boolean
   validation_message?: string
   nodes?: WorkflowPreviewNode[]
 }

@@ -46,6 +46,10 @@ func (r *workflowRepoHandlerStub) List(_ context.Context, _ *domain.OwnerType, _
 	return r.items, int64(len(r.items)), nil
 }
 
+func (r *workflowRepoHandlerStub) ExistsByName(_ context.Context, _ domain.OwnerType, _ uint64, _ string, _ uint64) (bool, error) {
+	return false, nil
+}
+
 func (r *workflowRepoHandlerStub) ListFiltered(_ context.Context, _ *domain.OwnerType, _ *uint64, _ bool, _ domain.WorkflowListFilter, offset, limit int) ([]*domain.Workflow, int64, error) {
 	r.listFilteredCalls++
 	items := append([]*domain.Workflow(nil), r.filteredItems...)

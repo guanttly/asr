@@ -3,6 +3,7 @@ package voiceprint
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/lgt/asr/internal/infrastructure/diarization"
@@ -14,6 +15,7 @@ var (
 	ErrSpeakerNameTooLong = errors.New("说话人姓名长度范围为 1-64 个字符")
 	ErrMissingAudioFile   = errors.New("voiceprint audio file is required")
 	ErrMissingRecordID    = errors.New("voiceprint id is required")
+	ErrSpeakerNameExists  = errors.New("说话人姓名已存在")
 )
 
 const maxSpeakerNameLength = 64
@@ -93,6 +95,16 @@ func (s *Service) Enroll(ctx context.Context, req *EnrollRequest) (*Record, erro
 	audioFilePath := strings.TrimSpace(req.AudioFilePath)
 	if audioFilePath == "" {
 		return nil, ErrMissingAudioFile
+	}
+
+	existing, err := s.client.ListVoiceprints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range existing {
+		if strings.EqualFold(strings.TrimSpace(existing[i].SpeakerName), speakerName) {
+			return nil, fmt.Errorf("%w：「%s」已注册，请更换姓名或先删除原有声纹记录", ErrSpeakerNameExists, speakerName)
+		}
 	}
 
 	record, err := s.client.EnrollVoiceprint(ctx, audioFilePath, diarization.VoiceprintMetadata{

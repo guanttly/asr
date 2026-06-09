@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,6 +12,10 @@ import (
 	domain "github.com/lgt/asr/internal/domain/workflow"
 	engine "github.com/lgt/asr/internal/infrastructure/workflow"
 )
+
+// ErrWorkflowNameExists is returned when creating or renaming a workflow to a name
+// that already exists within the same owner scope.
+var ErrWorkflowNameExists = errors.New("workflow name already exists")
 
 // Service provides workflow management and execution operations.
 type Service struct {
@@ -45,12 +50,48 @@ func NewService(
 
 // CreateWorkflow creates a new workflow.
 func (s *Service) CreateWorkflow(ctx context.Context, ownerType domain.OwnerType, ownerID uint64, req *CreateWorkflowRequest) (*WorkflowResponse, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, fmt.Errorf("workflow name is required")
+	}
+	exists, err := s.workflowRepo.ExistsByName(ctx, ownerType, ownerID, name, 0)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("%w: 工作流名称「%s」已存在，请更换名称", ErrWorkflowNameExists, name)
+	}
+
 	profile, initialNodes, err := buildInitialWorkflow(req.WorkflowType)
 	if err != nil {
 		return nil, err
 	}
+
+	// 选择系统模板作为初始来源时，复制其节点链路并据此推导工作流画像。
+	if req.SourceID != nil && *req.SourceID > 0 && s.nodeRepo != nil {
+		srcNodes, err := s.nodeRepo.ListByWorkflow(ctx, *req.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		if len(srcNodes) > 0 {
+			cloned := make([]domain.Node, len(srcNodes))
+			for i, n := range srcNodes {
+				cloned[i] = domain.Node{
+					NodeType: n.NodeType,
+					Position: i + 1,
+					Config:   n.Config,
+					Enabled:  n.Enabled,
+				}
+			}
+			if derived, derr := deriveWorkflowProfile(cloned); derr == nil {
+				profile = derived
+				initialNodes = cloned
+			}
+		}
+	}
+
 	wf := &domain.Workflow{
-		Name:         req.Name,
+		Name:         name,
 		Description:  req.Description,
 		WorkflowType: profile.WorkflowType,
 		SourceKind:   profile.SourceKind,
@@ -103,7 +144,20 @@ func (s *Service) UpdateWorkflow(ctx context.Context, id uint64, req *UpdateWork
 	if err != nil {
 		return nil, err
 	}
-	wf.Name = req.Name
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, fmt.Errorf("workflow name is required")
+	}
+	if name != wf.Name {
+		exists, err := s.workflowRepo.ExistsByName(ctx, wf.OwnerType, wf.OwnerID, name, wf.ID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, fmt.Errorf("%w: 工作流名称「%s」已存在，请更换名称", ErrWorkflowNameExists, name)
+		}
+	}
+	wf.Name = name
 	wf.Description = req.Description
 	if req.IsPublished != nil {
 		wf.IsPublished = *req.IsPublished

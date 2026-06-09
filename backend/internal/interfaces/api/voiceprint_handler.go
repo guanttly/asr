@@ -105,6 +105,9 @@ func (h *VoiceprintHandler) writeError(c *gin.Context, err error) {
 	case errors.Is(err, appvoiceprint.ErrMissingSpeakerName), errors.Is(err, appvoiceprint.ErrSpeakerNameTooLong), errors.Is(err, appvoiceprint.ErrMissingAudioFile), errors.Is(err, appvoiceprint.ErrMissingRecordID):
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 		return
+	case errors.Is(err, appvoiceprint.ErrSpeakerNameExists):
+		response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+		return
 	}
 
 	if statusCode := appvoiceprint.HTTPStatusCode(err); statusCode != 0 {

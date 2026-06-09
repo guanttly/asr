@@ -156,6 +156,10 @@ func (h *WorkflowHandler) CreateWorkflow(c *gin.Context) {
 
 	result, err := h.service.CreateWorkflow(c.Request.Context(), ownerType, userID, &req)
 	if err != nil {
+		if errors.Is(err, appwf.ErrWorkflowNameExists) {
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
@@ -201,6 +205,10 @@ func (h *WorkflowHandler) UpdateWorkflow(c *gin.Context) {
 
 	result, err := h.service.UpdateWorkflow(c.Request.Context(), id, &req)
 	if err != nil {
+		if errors.Is(err, appwf.ErrWorkflowNameExists) {
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

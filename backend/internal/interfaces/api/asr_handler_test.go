@@ -273,6 +273,10 @@ func (r *workflowRepoBindingStub) ListFiltered(_ context.Context, _ *wfdomain.Ow
 	panic("unexpected ListFiltered call")
 }
 
+func (r *workflowRepoBindingStub) ExistsByName(_ context.Context, _ wfdomain.OwnerType, _ uint64, _ string, _ uint64) (bool, error) {
+	return false, nil
+}
+
 type workflowNodeBindingStub struct {
 	nodes []wfdomain.Node
 }

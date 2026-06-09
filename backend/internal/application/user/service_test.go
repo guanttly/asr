@@ -183,6 +183,10 @@ func (r *workflowRepoStub) ListFiltered(_ context.Context, _ *wfdomain.OwnerType
 	return nil, 0, nil
 }
 
+func (r *workflowRepoStub) ExistsByName(_ context.Context, _ wfdomain.OwnerType, _ uint64, _ string, _ uint64) (bool, error) {
+	return false, nil
+}
+
 func TestAuthenticateAnonymouslyReusesDeviceIdentityByMAC(t *testing.T) {
 	userRepo := &userRepoStub{
 		user:     &userdomain.User{ID: 77, DisplayName: "DESKTOP-A", Role: userdomain.RoleUser},

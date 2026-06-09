@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -140,6 +141,10 @@ func (h *VoiceCommandHandler) CreateEntry(c *gin.Context) {
 	req.DictID = dictID
 	result, err := h.service.CreateEntry(c.Request.Context(), &req)
 	if err != nil {
+		if errors.Is(err, appvoicecommand.ErrVoiceCommandIntentExists) {
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}
@@ -170,6 +175,10 @@ func (h *VoiceCommandHandler) UpdateEntry(c *gin.Context) {
 	req.DictID = dictID
 	result, err := h.service.UpdateEntry(c.Request.Context(), &req)
 	if err != nil {
+		if errors.Is(err, appvoicecommand.ErrVoiceCommandIntentExists) {
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

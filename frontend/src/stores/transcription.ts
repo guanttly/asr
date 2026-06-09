@@ -7,6 +7,7 @@ export const useTranscriptionStore = defineStore('transcription', {
     isRecording: false,
     liveSentences: [] as string[],
     processedSentences: [] as string[],
+    processedSentenceBase: 0,
     draftText: '',
     transcriptText: '',
     processedTranscriptText: '',
@@ -33,8 +34,11 @@ export const useTranscriptionStore = defineStore('transcription', {
         return
 
       this.processedSentences.push(normalized)
-      if (this.processedSentences.length > MAX_LIVE_SENTENCES)
-        this.processedSentences.splice(0, this.processedSentences.length - MAX_LIVE_SENTENCES)
+      if (this.processedSentences.length > MAX_LIVE_SENTENCES) {
+        const removed = this.processedSentences.length - MAX_LIVE_SENTENCES
+        this.processedSentences.splice(0, removed)
+        this.processedSentenceBase += removed
+      }
 
       this.processedTranscriptText = this.processedTranscriptText
         ? `${this.processedTranscriptText}\n${normalized}`
@@ -46,6 +50,7 @@ export const useTranscriptionStore = defineStore('transcription', {
     reset() {
       this.liveSentences = []
       this.processedSentences = []
+      this.processedSentenceBase = 0
       this.draftText = ''
       this.transcriptText = ''
       this.processedTranscriptText = ''

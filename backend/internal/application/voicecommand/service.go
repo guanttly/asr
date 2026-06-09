@@ -136,6 +136,23 @@ func (s *Service) GetDictEntries(ctx context.Context, dictID uint64) ([]EntryRes
 	return items, nil
 }
 
+// ensureIntentUnique 校验同一控制指令组内意图值是否重复，excludeID 用于编辑时排除自身。
+func (s *Service) ensureIntentUnique(ctx context.Context, dictID uint64, intentKey string, excludeID uint64) error {
+	entries, err := s.entryRepo.ListByDict(ctx, dictID)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if entries[i].ID == excludeID {
+			continue
+		}
+		if entries[i].Intent == intentKey {
+			return fmt.Errorf("%w: 意图值「%s」已存在，请勿重复创建", ErrVoiceCommandIntentExists, intentKey)
+		}
+	}
+	return nil
+}
+
 func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*EntryResponse, error) {
 	dict, err := s.dictRepo.GetByID(ctx, req.DictID)
 	if err != nil {
@@ -146,6 +163,9 @@ func (s *Service) CreateEntry(ctx context.Context, req *CreateEntryRequest) (*En
 	}
 	intentKey, err := normalizeIntentKeyInput(dict.GroupKey, req.Intent)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureIntentUnique(ctx, req.DictID, intentKey, 0); err != nil {
 		return nil, err
 	}
 	entry := &domain.Entry{
@@ -167,6 +187,9 @@ func (s *Service) UpdateEntry(ctx context.Context, req *UpdateEntryRequest) (*En
 	}
 	intentKey, err := normalizeIntentKeyInput(dict.GroupKey, req.Intent)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureIntentUnique(ctx, req.DictID, intentKey, req.ID); err != nil {
 		return nil, err
 	}
 	entry, err := s.entryRepo.GetByID(ctx, req.ID)

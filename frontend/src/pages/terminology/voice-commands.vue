@@ -384,8 +384,9 @@ async function handleSubmitEntry() {
     resetEntryForm()
     await selectDict(currentDictId.value)
   }
-  catch {
-    message.error(editingEntryId.value ? '控制指令更新失败' : '控制指令创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || (editingEntryId.value ? '控制指令更新失败' : '控制指令创建失败'))
   }
   finally {
     entrySaving.value = false

@@ -60,7 +60,8 @@ export function useWorkflowCatalog(workflowTypeSource: MaybeRefOrGetter<ActiveWo
         workflow_type: workflowType,
         include_legacy: false,
       })
-      workflows.value = result.data.items || []
+      // 仅暴露已发布（系统模板为已上架）的工作流，未发布草稿不可被应用绑定或选择。
+      workflows.value = (result.data.items || []).filter((item: WorkflowCatalogItem) => item.is_published === true)
       return workflows.value
     }
     finally {

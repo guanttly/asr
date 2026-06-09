@@ -118,6 +118,22 @@ func (r *WorkflowRepo) Create(ctx context.Context, wf *domain.Workflow) error {
 	return nil
 }
 
+func (r *WorkflowRepo) ExistsByName(ctx context.Context, ownerType domain.OwnerType, ownerID uint64, name string, excludeID uint64) (bool, error) {
+	query := r.db.WithContext(ctx).Model(&WorkflowModel{}).
+		Where("owner_type = ? AND name = ?", string(ownerType), name)
+	if ownerType == domain.OwnerUser {
+		query = query.Where("owner_id = ?", ownerID)
+	}
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *WorkflowRepo) GetByID(ctx context.Context, id uint64) (*domain.Workflow, error) {
 	var m WorkflowModel
 	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&m).Error; err != nil {

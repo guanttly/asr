@@ -117,6 +117,11 @@ const executionSummaryByTask = ref<Record<number, ExecutionSummary>>({})
 const contentViewerVisible = ref(false)
 const contentViewerTitle = ref('')
 const contentViewerText = ref('')
+const CONTENT_VIEWER_PAGE_SIZE = 30000
+const contentViewerShownLength = ref(CONTENT_VIEWER_PAGE_SIZE)
+const contentViewerTotalLength = computed(() => contentViewerText.value.length)
+const contentViewerVisibleText = computed(() => contentViewerText.value.slice(0, contentViewerShownLength.value))
+const contentViewerHasMore = computed(() => contentViewerShownLength.value < contentViewerTotalLength.value)
 const nowTimestamp = ref(Date.now())
 const submitForm = reactive({
   audioUrl: '',
@@ -431,7 +436,19 @@ function openContentViewer(task: TaskItem) {
 
   contentViewerTitle.value = `任务 #${task.id} 内容查看`
   contentViewerText.value = content
+  contentViewerShownLength.value = CONTENT_VIEWER_PAGE_SIZE
   contentViewerVisible.value = true
+}
+
+function loadMoreContentViewer() {
+  contentViewerShownLength.value = Math.min(
+    contentViewerShownLength.value + CONTENT_VIEWER_PAGE_SIZE,
+    contentViewerTotalLength.value,
+  )
+}
+
+function showAllContentViewer() {
+  contentViewerShownLength.value = contentViewerTotalLength.value
 }
 
 function patchTaskRow(task: TaskItem | null | undefined) {
@@ -708,7 +725,10 @@ const filteredTasks = computed(() => {
   return tasks.value.filter(item =>
     String(item.id).includes(value)
     || item.type.toLowerCase().includes(value)
-    || item.status.toLowerCase().includes(value),
+    || item.status.toLowerCase().includes(value)
+    || formatTaskType(item.type).toLowerCase().includes(value)
+    || formatTaskStatus(item.status).toLowerCase().includes(value)
+    || workflowLabel(item.workflow_id).toLowerCase().includes(value),
   )
 })
 
@@ -1174,7 +1194,7 @@ onBeforeUnmount(() => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">任务列表</span>
           <div class="flex flex-wrap items-center gap-2">
-            <NInput v-model:value="keyword" clearable placeholder="搜索 ID / 类型 / 状态" size="small" class="w-full sm:!w-48" />
+            <NInput v-model:value="keyword" clearable :maxlength="128" placeholder="搜索 ID / 类型 / 状态 / 工作流" size="small" class="w-full sm:!w-56" />
             <NButton quaternary size="small" :loading="syncingAll" @click="handleSyncProcessing">
               同步
             </NButton>
@@ -1383,8 +1403,15 @@ onBeforeUnmount(() => {
 
     <NModal v-model:show="contentViewerVisible" preset="card" :title="contentViewerTitle" class="modal-card max-w-4xl">
       <div class="rounded-2.5 bg-mist/60 p-3.5">
-        <div class="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-2 bg-white/80 p-4 text-sm leading-7 text-ink">
-          {{ contentViewerText || '当前没有可展示的内容。' }}
+        <div class="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-2 bg-white/80 p-4 text-sm leading-7 text-ink">{{ contentViewerVisibleText || '当前没有可展示的内容。' }}</div>
+        <div v-if="contentViewerHasMore" class="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs text-slate">
+          <span>已展示 {{ contentViewerVisibleText.length }} / {{ contentViewerTotalLength }} 字，超长内容已分段加载以提升速度</span>
+          <NButton size="small" @click="loadMoreContentViewer">
+            加载更多
+          </NButton>
+          <NButton size="small" tertiary @click="showAllContentViewer">
+            展示全部
+          </NButton>
         </div>
       </div>
       <div class="mt-4 flex justify-end">

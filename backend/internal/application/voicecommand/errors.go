@@ -7,4 +7,5 @@ var (
 	ErrVoiceCommandEntryNotFound     = errors.New("voice command entry not found")
 	ErrVoiceCommandBaseDictProtected = errors.New("voice command base dict protected")
 	ErrVoiceCommandBaseDictConflict  = errors.New("voice command base dict conflict")
+	ErrVoiceCommandIntentExists      = errors.New("voice command intent already exists")
 )

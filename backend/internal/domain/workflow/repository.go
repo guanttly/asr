@@ -17,6 +17,7 @@ type WorkflowRepository interface {
 	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context, ownerType *OwnerType, ownerID *uint64, publishedOnly bool, offset, limit int) ([]*Workflow, int64, error)
 	ListFiltered(ctx context.Context, ownerType *OwnerType, ownerID *uint64, publishedOnly bool, filter WorkflowListFilter, offset, limit int) ([]*Workflow, int64, error)
+	ExistsByName(ctx context.Context, ownerType OwnerType, ownerID uint64, name string, excludeID uint64) (bool, error)
 }
 
 // NodeRepository manages workflow node CRUD operations.

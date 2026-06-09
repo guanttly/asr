@@ -2,7 +2,7 @@
 import type { DataTableColumns } from 'naive-ui'
 import type { ActiveWorkflowType, WorkflowOwnerType, WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
 
-import { NButton, NTag, useMessage } from 'naive-ui'
+import { NButton, NSelect, NTag, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -55,6 +55,7 @@ const form = reactive({
   description: '',
   owner_type: WORKFLOW_OWNER_TYPES.USER as WorkflowOwnerType,
   workflow_type: WORKFLOW_TYPES.BATCH as ActiveWorkflowType,
+  source_id: undefined as number | undefined,
 })
 
 const workflowScenarioOptions = computed<Array<{ value: ActiveWorkflowType, label: string, description: string }>>(() => {
@@ -97,9 +98,14 @@ const workflowFilterOptions = computed<Array<{ value: 'all' | ActiveWorkflowType
     options.push({ value: WORKFLOW_TYPES.MEETING, label: '会议纪要' })
   if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
     options.push({ value: WORKFLOW_TYPES.VOICE_CONTROL, label: '语音控制' })
-  options.push({ value: WORKFLOW_TYPES.LEGACY, label: 'Legacy' })
   return options
 })
+
+const workflowTemplateOptions = computed<Array<{ label: string, value: number }>>(() =>
+  systemTemplates.value
+    .filter(item => item.is_published && item.workflow_type === form.workflow_type)
+    .map(item => ({ label: `${item.name} #${item.id}`, value: item.id })),
+)
 
 const isAdmin = computed(() => userStore.profile?.role === 'admin')
 const workflowLookup = computed(() => {
@@ -194,6 +200,7 @@ function resetCreateForm() {
   form.description = ''
   form.owner_type = 'user'
   form.workflow_type = WORKFLOW_TYPES.BATCH
+  form.source_id = undefined
 }
 
 async function loadWorkflows() {
@@ -235,6 +242,7 @@ async function handleCreate() {
       description: form.description.trim(),
       owner_type: ownerType,
       workflow_type: form.workflow_type,
+      source_id: form.source_id,
     })
     createVisible.value = false
     resetCreateForm()
@@ -243,8 +251,9 @@ async function handleCreate() {
     if (result.data?.id)
       router.push(`/workflows/${result.data.id}`)
   }
-  catch {
-    message.error('工作流创建失败')
+  catch (error) {
+    const responseMessage = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+    message.error(responseMessage || '工作流创建失败')
   }
   finally {
     creating.value = false
@@ -474,6 +483,11 @@ watch(workflowScenarioOptions, (options) => {
     form.workflow_type = WORKFLOW_TYPES.BATCH
 })
 
+watch(() => form.workflow_type, () => {
+  // 切换场景后清空已选模板，避免应用到不匹配场景的初始模板。
+  form.source_id = undefined
+})
+
 watch(workflowFilterOptions, (options) => {
   if (!options.some(option => option.value === scenario.value))
     scenario.value = 'all'
@@ -650,6 +664,21 @@ onMounted(loadWorkflows)
           </div>
           <div class="mt-2 text-xs text-slate">
             创建后会按场景自动固化必要节点，编辑时不能删除、移动或关闭这些边界节点。
+          </div>
+        </div>
+        <div v-if="workflowTemplateOptions.length" class="rounded-3 border border-black/6 bg-[#fbfdff] p-3">
+          <div class="text-xs font-600 text-ink">
+            初始模板（可选）
+          </div>
+          <NSelect
+            v-model:value="form.source_id"
+            class="mt-3"
+            clearable
+            :options="workflowTemplateOptions"
+            placeholder="从系统模板初始化节点，留空则创建空白工作流"
+          />
+          <div class="mt-2 text-xs text-slate">
+            选择后会复制该系统模板的节点与处理链路作为初始内容，可在创建后继续编辑。
           </div>
         </div>
         <div class="flex justify-end gap-2">

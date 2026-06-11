@@ -30,6 +30,7 @@ services:
       ASR_SERVICES_SUMMARY_MODEL: qwen3-4b
       ASR_LEGACY_ACCESS_LOG_PATH: /var/log/asr/legacy-access.log
     volumes:
+      - ./runtime/config:/app/backend/configs
       - ./runtime/mysql:/var/lib/asr/mysql
       - ./runtime/certs:/var/lib/asr/certs
       - ./runtime/downloads:/var/lib/asr/downloads

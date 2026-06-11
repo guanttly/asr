@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -687,5 +688,103 @@ func TestCreateRealtimeTaskRejectsActiveStreamSession(t *testing.T) {
 	})
 	if !errors.Is(err, ErrStreamSessionActive) {
 		t.Fatalf("expected ErrStreamSessionActive, got %v", err)
+	}
+}
+
+func TestCollapseRepeatedRuns(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: ""},
+		{name: "single rune hallucination folds to two", in: strings.Repeat("啊", 30), want: "啊啊"},
+		{name: "phrase hallucination folds to two", in: strings.Repeat("我们", 8), want: "我们我们"},
+		{name: "short repeat kept", in: "好好好", want: "好好好"},
+		{name: "normal sentence kept", in: "今天天气很好，我们一起去公园散步。", want: "今天天气很好，我们一起去公园散步。"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := collapseRepeatedRuns(tc.in); got != tc.want {
+				t.Fatalf("collapseRepeatedRuns(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeTranscriptionTextCollapsesHallucination(t *testing.T) {
+	in := "  " + strings.Repeat("嗯", 25) + "  "
+	if got := sanitizeTranscriptionText(in); got != "嗯嗯" {
+		t.Fatalf("sanitizeTranscriptionText folded hallucination = %q, want %q", got, "嗯嗯")
+	}
+}
+
+func TestIsNonRetryableTaskError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "missing audio source", err: errors.New("audio_url or local uploaded file is required"), want: true},
+		{name: "oversized audio", err: errors.New("音频文件超过 ASR 上游限制，无法提交"), want: true},
+		{name: "upstream 4xx", err: errors.New("batch query returned status 404: not found"), want: true},
+		{name: "upstream 5xx retryable", err: errors.New("batch query returned status 500"), want: false},
+		{name: "connection refused retryable", err: errors.New("dial tcp 127.0.0.1:9000: connect: connection refused"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isNonRetryableTaskError(tc.err); got != tc.want {
+				t.Fatalf("isNonRetryableTaskError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleSyncFailureMarksFailedForNonRetryableError(t *testing.T) {
+	svc := &Service{}
+	now := time.Now()
+	task := &domain.TranscriptionTask{Status: domain.TaskStatusProcessing}
+	svc.handleSyncFailure(task, now, errors.New("batch query returned status 404"))
+	if task.Status != domain.TaskStatusFailed {
+		t.Fatalf("expected status failed, got %v", task.Status)
+	}
+	if task.SyncFailCount != 1 {
+		t.Fatalf("expected SyncFailCount 1, got %d", task.SyncFailCount)
+	}
+	if task.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt cleared for terminal failure, got %v", task.NextSyncAt)
+	}
+}
+
+func TestHandleSyncFailureRetriesRetryableError(t *testing.T) {
+	svc := &Service{}
+	now := time.Now()
+	task := &domain.TranscriptionTask{Status: domain.TaskStatusProcessing}
+	svc.handleSyncFailure(task, now, errors.New("dial tcp: connection refused"))
+	if task.Status != domain.TaskStatusProcessing {
+		t.Fatalf("expected status to stay processing, got %v", task.Status)
+	}
+	if task.SyncFailCount != 1 {
+		t.Fatalf("expected SyncFailCount 1, got %d", task.SyncFailCount)
+	}
+	if task.NextSyncAt == nil {
+		t.Fatalf("expected NextSyncAt set for retry backoff")
+	}
+}
+
+func TestHandleSyncFailureMarksFailedAfterMaxRetries(t *testing.T) {
+	svc := &Service{}
+	now := time.Now()
+	task := &domain.TranscriptionTask{Status: domain.TaskStatusProcessing, SyncFailCount: maxTaskSyncFailures - 1}
+	svc.handleSyncFailure(task, now, errors.New("dial tcp: connection refused"))
+	if task.SyncFailCount != maxTaskSyncFailures {
+		t.Fatalf("expected SyncFailCount %d, got %d", maxTaskSyncFailures, task.SyncFailCount)
+	}
+	if task.Status != domain.TaskStatusFailed {
+		t.Fatalf("expected status failed after max retries, got %v", task.Status)
+	}
+	if task.NextSyncAt != nil {
+		t.Fatalf("expected NextSyncAt cleared after terminal failure, got %v", task.NextSyncAt)
 	}
 }

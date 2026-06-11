@@ -60,9 +60,11 @@ WORKDIR /app
 
 COPY --from=backend-builder /out /app/bin
 COPY --from=frontend-builder /src/frontend/dist /srv/asr/frontend-dist
-RUN mkdir -p /app/backend/configs
+RUN mkdir -p /app/backend/configs /opt/asr/config-default
 COPY backend/configs/config.example.yaml /app/backend/configs/config.yaml
 COPY backend/configs/config.example.yaml /app/backend/configs/config.example.yaml
+COPY backend/configs/config.example.yaml /opt/asr/config-default/config.yaml
+COPY backend/configs/config.example.yaml /opt/asr/config-default/config.example.yaml
 COPY deploy/jusha-asr-business/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/jusha-asr-business/nginx.conf /etc/nginx/conf.d/default.conf
 COPY deploy/jusha-asr-business/scripts /app/scripts
@@ -74,12 +76,14 @@ COPY deploy/jusha-asr-business/scripts /app/scripts
 COPY docs/terms /opt/asr/term-catalog-default
 
 RUN chmod +x /app/scripts/*.sh /app/bin/* \
- && mkdir -p /var/log/supervisor /var/log/nginx /var/log/asr /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog
+ && mkdir -p /var/log/supervisor /var/log/nginx /var/log/asr /run/mysqld /var/lib/asr/mysql /var/lib/asr/downloads /var/lib/asr/tmp /var/lib/asr/uploads /var/lib/asr/certs /var/lib/asr/term-catalog /app/backend/configs
 
 # Runtime secrets are injected via compose/.env during install time; do not
 # bake placeholder passwords or secrets into image metadata.
 ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
     ASR_MYSQL_DATABASE=asr \
+    ASR_CONFIG_DIR=/app/backend/configs \
+    ASR_CONFIG_SEED_DIR=/opt/asr/config-default \
     ASR_DOWNLOAD_DIR=/var/lib/asr/downloads \
     ASR_DOWNLOAD_PUBLIC_BASE_PATH=/downloads/files \
     ASR_ENABLE_HTTPS=1 \
@@ -99,6 +103,6 @@ ENV ASR_MYSQL_DATA_DIR=/var/lib/asr/mysql \
 
 EXPOSE 80 443
 
-VOLUME ["/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs", "/var/lib/asr/term-catalog", "/var/log/asr"]
+VOLUME ["/app/backend/configs", "/var/lib/asr/mysql", "/var/lib/asr/downloads", "/var/lib/asr/tmp", "/var/lib/asr/uploads", "/var/lib/asr/certs", "/var/lib/asr/term-catalog", "/var/log/asr"]
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]

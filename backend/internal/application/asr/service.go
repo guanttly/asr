@@ -114,6 +114,9 @@ const (
 	snippetPollTimeout = 2 * time.Minute
 	snippetPollEvery   = 1200 * time.Millisecond
 	DefaultLanguage    = "auto"
+	// maxTaskSyncFailures 是批量任务同步/提交失败的最大重试次数，超过后任务收敛到
+	// 终态 failed，避免错误音频 URL 等场景任务永远卡在 processing 既不失败也删不掉。
+	maxTaskSyncFailures = 5
 )
 
 var transcriptionMarkupPattern = regexp.MustCompile(`(?i)language\s+[a-z_-]+<asr_text>|</?asr_text>`)
@@ -1034,7 +1037,7 @@ func (s *Service) syncTaskState(ctx context.Context, task *domain.TranscriptionT
 
 	status, err := s.batchSubmitter.QueryBatchTask(ctx, task.ExternalTaskID)
 	if err != nil {
-		s.recordSyncFailure(task, now, err)
+		s.handleSyncFailure(task, now, err)
 		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
 			return false, updateErr
 		}
@@ -1104,7 +1107,7 @@ func (s *Service) submitBatchTask(ctx context.Context, task *domain.Transcriptio
 		s.updateTaskSegmentProgress(ctx, task, progress)
 	})
 	if err != nil {
-		s.recordSyncFailure(task, now, err)
+		s.handleSyncFailure(task, now, err)
 		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
 			return false, updateErr
 		}
@@ -1114,7 +1117,7 @@ func (s *Service) submitBatchTask(ctx context.Context, task *domain.Transcriptio
 
 	result, err := s.batchSubmitter.SubmitBatch(ctx, submitReq)
 	if err != nil {
-		s.recordSyncFailure(task, now, err)
+		s.handleSyncFailure(task, now, err)
 		if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
 			return false, updateErr
 		}
@@ -1146,7 +1149,7 @@ func (s *Service) submitBatchTask(ctx context.Context, task *domain.Transcriptio
 		status := normalizeTaskStatus(result.Status)
 		if status == "" && strings.TrimSpace(result.ResultText) == "" && result.Duration <= 0 {
 			err = fmt.Errorf("batch submission returned neither task_id nor result_text")
-			s.recordSyncFailure(task, now, err)
+			s.handleSyncFailure(task, now, err)
 			if updateErr := s.taskRepo.Update(ctx, task); updateErr != nil {
 				return false, updateErr
 			}
@@ -1323,6 +1326,38 @@ func (s *Service) recordSyncFailure(task *domain.TranscriptionTask, now time.Tim
 	task.UpdatedAt = now
 }
 
+// handleSyncFailure 记录一次批量同步失败，并在错误不可重试或重试次数超过上限时
+// 将任务收敛到终态 failed，以便停止无限重试并允许删除。
+func (s *Service) handleSyncFailure(task *domain.TranscriptionTask, now time.Time, err error) {
+	s.recordSyncFailure(task, now, err)
+	if !isNonRetryableTaskError(err) && task.SyncFailCount < maxTaskSyncFailures {
+		return
+	}
+	if task.TransitionTo(domain.TaskStatusFailed) {
+		task.NextSyncAt = nil
+		task.UpdatedAt = now
+	}
+}
+
+// isNonRetryableTaskError 判断批量同步失败是否属于重试也无法恢复的错误，
+// 例如音频 URL 无效/返回 4xx、音频超过上游大小限制等客户端侧错误。
+func isNonRetryableTaskError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "audio_url or local uploaded file is required"):
+		return true
+	case strings.Contains(msg, "音频文件超过 ASR 上游限制"):
+		return true
+	case strings.Contains(msg, "returned status 4"):
+		// 音频源或上游返回 4xx 客户端错误（URL 失效、鉴权失败、参数错误等）。
+		return true
+	}
+	return false
+}
+
 func (s *Service) recordSyncSuccess(task *domain.TranscriptionTask, now time.Time) bool {
 	changed := false
 	task.LastSyncAt = &now
@@ -1488,7 +1523,83 @@ func sanitizeTranscriptionText(text string) string {
 		lines[i] = strings.TrimSpace(transcriptionWhitespacePattern.ReplaceAllString(line, " "))
 	}
 	cleaned = strings.TrimSpace(strings.Join(lines, "\n"))
+	cleaned = collapseRepeatedRuns(cleaned)
 	return strings.TrimSpace(cleaned)
+}
+
+const (
+	// 以下阈值仅用于折叠 ASR "复读机"式的连续重复幻觉，阈值偏高以避免
+	// 误伤"好好好""哈哈哈"等正常表达；只有连续重复明显超出正常语言习惯才折叠。
+	maxRepeatUnitRunes      = 40 // 检测的最大重复单元长度（按 rune 计）
+	singleRuneRepeatTrigger = 16 // 单字连续重复达到该次数才折叠
+	phraseRepeatTrigger     = 6  // 多字短语连续重复达到该次数才折叠
+	repeatKeepCount         = 2  // 折叠后保留的重复次数
+)
+
+// collapseRepeatedRuns 折叠连续重复的字/词/短语（ASR 幻觉常见形态），
+// 仅在重复次数明显超出正常语言习惯时才折叠，尽量避免误伤正常文本。
+func collapseRepeatedRuns(text string) string {
+	if text == "" {
+		return text
+	}
+	runes := []rune(text)
+	n := len(runes)
+	out := make([]rune, 0, n)
+	i := 0
+	for i < n {
+		matched := false
+		maxUnit := maxRepeatUnitRunes
+		if maxUnit > (n-i)/2 {
+			maxUnit = (n - i) / 2
+		}
+		for unitLen := 1; unitLen <= maxUnit; unitLen++ {
+			repeat := countRepeatedUnits(runes, i, unitLen)
+			trigger := phraseRepeatTrigger
+			if unitLen == 1 {
+				trigger = singleRuneRepeatTrigger
+			}
+			if repeat < trigger {
+				continue
+			}
+			keep := repeatKeepCount
+			if keep > repeat {
+				keep = repeat
+			}
+			for k := 0; k < keep; k++ {
+				out = append(out, runes[i:i+unitLen]...)
+			}
+			i += repeat * unitLen
+			matched = true
+			break
+		}
+		if !matched {
+			out = append(out, runes[i])
+			i++
+		}
+	}
+	return string(out)
+}
+
+// countRepeatedUnits 返回从 start 开始、长度为 unitLen 的单元连续重复的次数（含首次）。
+func countRepeatedUnits(runes []rune, start, unitLen int) int {
+	if unitLen <= 0 || start+unitLen > len(runes) {
+		return 0
+	}
+	repeat := 1
+	for j := start + unitLen; j+unitLen <= len(runes); j += unitLen {
+		equal := true
+		for k := 0; k < unitLen; k++ {
+			if runes[j+k] != runes[start+k] {
+				equal = false
+				break
+			}
+		}
+		if !equal {
+			break
+		}
+		repeat++
+	}
+	return repeat
 }
 
 func (s *Service) publishTaskUpdated(task *domain.TranscriptionTask) {

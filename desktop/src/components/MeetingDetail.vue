@@ -528,9 +528,12 @@ async function handleRegenerate() {
     return
   regenerating.value = true
   try {
-    const workflowId = detail.value.workflow_id ?? (
-      await ensureMeetingWorkflowBinding().catch(() => appStore.meetingWorkflowId)
-    )
+    // 强制刷新会议工作流绑定：管理员在服务端修正总结地址或改绑工作流后，客户端需同步到最新配置
+    const currentBinding = await ensureMeetingWorkflowBinding(true).catch(() => appStore.meetingWorkflowId)
+    // 失败的纪要优先使用刷新后的最新绑定（可能是修正后的总结地址）；正常纪要保留原工作流以保证可复现
+    const workflowId = detail.value.status === 'failed'
+      ? (currentBinding ?? detail.value.workflow_id ?? null)
+      : (detail.value.workflow_id ?? currentBinding ?? null)
     await regenerateMeetingSummary(detail.value.id, workflowId)
     await load({ silent: true, resetDraft: true })
     summaryMode.value = 'preview'

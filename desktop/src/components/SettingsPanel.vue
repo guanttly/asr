@@ -548,6 +548,13 @@ onBeforeUnmount(() => {
         </label>
       </div>
       <div class="field row">
+        <label>开机自启</label>
+        <label class="toggle">
+          <input v-model="appStore.autoStart" type="checkbox">
+          <span class="toggle-slider" />
+        </label>
+      </div>
+      <div class="field row">
         <label>保留标点符号</label>
         <label class="toggle">
           <input v-model="settings.keepPunctuation" type="checkbox">

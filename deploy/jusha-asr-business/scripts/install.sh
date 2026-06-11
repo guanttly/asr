@@ -80,6 +80,48 @@ backup_optional_file() {
   cp "$SRC_PATH" "$DEST_PATH"
 }
 
+runtime_config_source_for() {
+  CONFIG_NAME="$1"
+
+  for SRC_PATH in \
+    "$SCRIPT_DIR/runtime/config/$CONFIG_NAME" \
+    "$SCRIPT_DIR/runtime/config/config.example.yaml" \
+    "$SCRIPT_DIR/../../backend/configs/config.example.yaml"
+  do
+    if [ -f "$SRC_PATH" ]; then
+      printf '%s\n' "$SRC_PATH"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+seed_runtime_config_file() {
+  CONFIG_NAME="$1"
+  DEST_PATH="$SCRIPT_DIR/runtime/config/$CONFIG_NAME"
+
+  if [ -f "$DEST_PATH" ]; then
+    return 0
+  fi
+
+  mkdir -p "$SCRIPT_DIR/runtime/config"
+  SRC_PATH=$(runtime_config_source_for "$CONFIG_NAME" || true)
+  if [ -n "$SRC_PATH" ]; then
+    cp "$SRC_PATH" "$DEST_PATH"
+    echo "已生成默认配置文件: runtime/config/$CONFIG_NAME"
+    return 0
+  fi
+
+  echo "警告: 未找到默认配置模板，未生成 runtime/config/$CONFIG_NAME。" >&2
+}
+
+ensure_runtime_config() {
+  mkdir -p "$SCRIPT_DIR/runtime/config"
+  seed_runtime_config_file config.example.yaml
+  seed_runtime_config_file config.yaml
+}
+
 canonical_path() {
   TARGET_PATH="$1"
   if [ -d "$TARGET_PATH" ]; then
@@ -117,6 +159,7 @@ assert_existing_runtime_matches_install_dir() {
   fi
 
   for MOUNT_PAIR in \
+    "/app/backend/configs:runtime/config:配置目录" \
     "/var/lib/asr/mysql:runtime/mysql:MySQL 数据目录" \
     "/var/lib/asr/uploads:runtime/uploads:上传文件目录" \
     "/var/lib/asr/term-catalog:runtime/term-catalog:影像术语库目录" \
@@ -203,6 +246,11 @@ backup_mysql_before_upgrade() {
 
 backup_runtime_data_before_upgrade() {
   backup_mysql_before_upgrade
+  if ! backup_directory_archive "$SCRIPT_DIR/runtime/config" "$BACKUP_DIR/runtime-config.tar.gz" "配置目录"; then
+    echo "配置目录备份失败，已中止升级以保护现有配置。" >&2
+    echo "确认已有外部备份后，可设置 ASR_INSTALL_SKIP_DATA_BACKUP=1 强制跳过。" >&2
+    exit 1
+  fi
   if ! backup_directory_archive "$SCRIPT_DIR/runtime/term-catalog" "$BACKUP_DIR/runtime-term-catalog.tar.gz" "影像术语库目录"; then
     echo "影像术语库目录备份失败，已中止升级以保护现有数据。" >&2
     echo "确认已有外部备份后，可设置 ASR_INSTALL_SKIP_DATA_BACKUP=1 强制跳过。" >&2
@@ -791,8 +839,9 @@ rollback_previous_release() {
 
 cd "$SCRIPT_DIR"
 
-mkdir -p runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/term-catalog runtime/logs
+mkdir -p runtime/config runtime/mysql runtime/certs runtime/downloads runtime/tmp runtime/uploads runtime/term-catalog runtime/logs
 chmod 1777 runtime/tmp
+ensure_runtime_config
 
 ENV_CREATED=0
 if [ -f .env.example ] && [ ! -f .env ]; then

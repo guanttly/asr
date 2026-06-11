@@ -236,9 +236,18 @@ const filteredMeetings = computed(() => {
     return meetings.value
   return meetings.value.filter(item =>
     item.title.toLowerCase().includes(value)
-    || item.status.toLowerCase().includes(value),
+    || item.status.toLowerCase().includes(value)
+    || meetingStatusMeta(item.status).text.toLowerCase().includes(value),
   )
 })
+
+// 输入法组合输入(composition)期间 naive-ui 不会同步 v-model，
+// 这里监听原生 input 事件，使中文等组合输入过程中也能实时搜索。
+function handleKeywordInput(event: Event) {
+  const target = event.target as HTMLInputElement | null
+  if (target && typeof target.value === 'string')
+    keyword.value = target.value
+}
 
 async function loadMeetings() {
   loading.value = true
@@ -296,7 +305,7 @@ onBeforeUnmount(() => {
       <template #header>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">会议列表</span>
-          <div class="flex flex-wrap items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2" @input="handleKeywordInput">
             <NInput v-model:value="keyword" :maxlength="128" clearable placeholder="搜索会议标题 / 状态" size="small" class="w-full sm:!w-56" />
             <NButton quaternary size="small" @click="loadMeetings">
               刷新

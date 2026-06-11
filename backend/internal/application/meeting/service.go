@@ -31,6 +31,9 @@ const (
 	maxSyncBackoff     = 10 * time.Minute
 	batchSubmitTimeout = 30 * time.Minute
 	maxSummaryMarkdown = 50000
+	// maxMeetingSyncFailures 是"转写完成但摘要/收尾失败"时的最大自动重试次数，
+	// 超过后会议才落入终态 failed，避免极长会议摘要失败后无重试或无限重试。
+	maxMeetingSyncFailures = 5
 )
 
 // SummaryWorkflowExecutor runs a workflow against meeting transcript text.
@@ -438,6 +441,20 @@ func (s *Service) RegenerateSummary(ctx context.Context, meetingID uint64, userI
 			return nil, err
 		}
 	}
+
+	// 手动重新生成成功后，把因摘要失败而处于 failed/重试中的会议恢复为 completed，
+	// 并清除失败信息，使界面状态与实际一致。
+	if meeting.Status != domain.MeetingStatusCompleted || meeting.SyncFailCount != 0 || meeting.LastSyncError != "" || meeting.NextSyncAt != nil {
+		nowTime := time.Now()
+		meeting.Status = domain.MeetingStatusCompleted
+		meeting.SyncFailCount = 0
+		meeting.LastSyncError = ""
+		meeting.NextSyncAt = nil
+		meeting.LastSyncAt = &nowTime
+		if err := s.meetingRepo.Update(ctx, meeting); err != nil {
+			return nil, err
+		}
+	}
 	s.publishMeetingUpdated(meeting)
 
 	return s.GetMeeting(ctx, meetingID)
@@ -486,7 +503,7 @@ func (s *Service) syncMeetingState(ctx context.Context, meeting *domain.Meeting)
 	if meeting.Status == domain.MeetingStatusCompleted {
 		completed, completeErr := s.finalizeCompletedMeeting(ctx, meeting, status.ResultText)
 		if completeErr != nil {
-			return s.failMeeting(ctx, meeting, now, completeErr)
+			return s.handleMeetingFinalizeFailure(ctx, meeting, now, completeErr)
 		}
 		if completed {
 			updated = true
@@ -572,7 +589,7 @@ func (s *Service) submitMeetingTask(ctx context.Context, meeting *domain.Meeting
 	if meeting.Status == domain.MeetingStatusCompleted {
 		completed, completeErr := s.finalizeCompletedMeeting(ctx, meeting, result.ResultText)
 		if completeErr != nil {
-			return s.failMeeting(ctx, meeting, now, completeErr)
+			return s.handleMeetingFinalizeFailure(ctx, meeting, now, completeErr)
 		}
 		if completed {
 			updated = true
@@ -604,56 +621,63 @@ func (s *Service) finalizeCompletedMeeting(ctx context.Context, meeting *domain.
 		return false, fmt.Errorf("empty transcription result")
 	}
 
-	transcriptText := text
-	summaryContent := ""
-	modelVersion := ""
-	if meeting.WorkflowID != nil {
-		if s.workflowExec == nil {
-			return false, fmt.Errorf("workflow executor unavailable")
-		}
-		exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, text, meeting.AudioURL, meeting.LocalFilePath)
-		if err != nil {
-			return false, err
-		}
-		transcriptText = extractMeetingTranscriptText(exec, text)
-		content, version, err := extractMeetingSummary(exec, *meeting.WorkflowID)
-		if err != nil {
-			return false, err
-		}
-		summaryContent = content
-		modelVersion = version
-	}
-
+	// 先持久化逐字稿：即使后续摘要生成失败（例如极长会议超时/超长），
+	// 逐字稿也已落库，既能让"重新生成总结"可用，也支持后台自动重试。
 	changed := false
 	if s.transcriptRepo != nil {
-		if err := s.transcriptRepo.DeleteByMeeting(ctx, meeting.ID); err != nil {
-			return false, err
-		}
-		if err := s.transcriptRepo.BatchCreate(ctx, []domain.Transcript{{
-			MeetingID:    meeting.ID,
-			SpeakerLabel: "ASR",
-			Text:         transcriptText,
-			StartTime:    0,
-			EndTime:      meeting.Duration,
-		}}); err != nil {
+		if err := s.persistMeetingTranscript(ctx, meeting, text); err != nil {
 			return false, err
 		}
 		changed = true
 	}
-	if summaryContent != "" && s.summaryRepo != nil {
-		summaryChanged, err := s.upsertMeetingSummary(ctx, meeting.ID, summaryContent, modelVersion)
-		if err != nil {
-			return false, err
+
+	if meeting.WorkflowID != nil {
+		if s.workflowExec == nil {
+			return changed, fmt.Errorf("workflow executor unavailable")
 		}
-		if summaryChanged {
-			changed = true
+		exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, text, meeting.AudioURL, meeting.LocalFilePath)
+		if err != nil {
+			return changed, err
+		}
+		transcriptText := extractMeetingTranscriptText(exec, text)
+		content, version, err := extractMeetingSummary(exec, *meeting.WorkflowID)
+		if err != nil {
+			return changed, err
+		}
+		if transcriptText != text && s.transcriptRepo != nil {
+			if err := s.persistMeetingTranscript(ctx, meeting, transcriptText); err != nil {
+				return changed, err
+			}
+		}
+		if content != "" && s.summaryRepo != nil {
+			if _, err := s.upsertMeetingSummary(ctx, meeting.ID, content, version); err != nil {
+				return changed, err
+			}
 		}
 	}
+
 	if meeting.Status != domain.MeetingStatusCompleted {
 		meeting.Status = domain.MeetingStatusCompleted
 		changed = true
 	}
 	return changed, nil
+}
+
+// persistMeetingTranscript 将单段逐字稿写入会议（先清后写）。
+func (s *Service) persistMeetingTranscript(ctx context.Context, meeting *domain.Meeting, text string) error {
+	if s.transcriptRepo == nil {
+		return nil
+	}
+	if err := s.transcriptRepo.DeleteByMeeting(ctx, meeting.ID); err != nil {
+		return err
+	}
+	return s.transcriptRepo.BatchCreate(ctx, []domain.Transcript{{
+		MeetingID:    meeting.ID,
+		SpeakerLabel: "ASR",
+		Text:         text,
+		StartTime:    0,
+		EndTime:      meeting.Duration,
+	}})
 }
 
 func (s *Service) upsertMeetingSummary(ctx context.Context, meetingID uint64, content, modelVersion string) (bool, error) {
@@ -699,23 +723,45 @@ func (s *Service) persistMeetingSyncFailure(ctx context.Context, meeting *domain
 }
 
 func (s *Service) failMeeting(ctx context.Context, meeting *domain.Meeting, now time.Time, err error) (bool, error) {
-	updated := s.recordMeetingSyncSuccess(meeting, now)
+	// 进入终态失败时累计失败次数，而不是复用"同步成功"逻辑把计数清零，
+	// 否则前端显示的失败次数与实际不符（BUG：失败的会议总结失败次数为 0）。
+	meeting.SyncFailCount++
+	meeting.LastSyncAt = &now
+	meeting.NextSyncAt = nil
+	meeting.UpdatedAt = now
+	if message := strings.TrimSpace(err.Error()); message != "" {
+		meeting.LastSyncError = message
+	}
 	if meeting.Status != domain.MeetingStatusFailed {
 		meeting.Status = domain.MeetingStatusFailed
-		updated = true
 	}
-	message := strings.TrimSpace(err.Error())
-	if message != "" && meeting.LastSyncError != message {
-		meeting.LastSyncError = message
-		updated = true
+	if updateErr := s.meetingRepo.Update(ctx, meeting); updateErr != nil {
+		return false, updateErr
 	}
-	if updated {
-		if updateErr := s.meetingRepo.Update(ctx, meeting); updateErr != nil {
-			return false, updateErr
-		}
-		s.publishMeetingUpdated(meeting)
-	}
+	s.publishMeetingUpdated(meeting)
 	return false, err
+}
+
+// handleMeetingFinalizeFailure 处理"转写完成但摘要/收尾失败"的情况：
+// 逐字稿此时已落库，对可重试错误保持会议为 processing 并退避重试；
+// 仅在不可重试或超过最大重试次数后才落入终态 failed，
+// 这样极长会议摘要失败也能自动重试，并保留手动"重新生成总结"的入口。
+func (s *Service) handleMeetingFinalizeFailure(ctx context.Context, meeting *domain.Meeting, now time.Time, err error) (bool, error) {
+	if isNonRetryableMeetingError(err) || meeting.SyncFailCount+1 >= maxMeetingSyncFailures {
+		return s.failMeeting(ctx, meeting, now, err)
+	}
+	meeting.Status = domain.MeetingStatusProcessing
+	return s.persistMeetingSyncFailure(ctx, meeting, now, err)
+}
+
+// isNonRetryableMeetingError 判断收尾失败是否属于重试也无法恢复的错误。
+func isNonRetryableMeetingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "empty transcription result") ||
+		strings.Contains(msg, "workflow executor unavailable")
 }
 
 func (s *Service) recordMeetingSyncFailure(meeting *domain.Meeting, now time.Time, err error) {

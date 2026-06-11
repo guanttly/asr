@@ -938,12 +938,27 @@ preserve_target_entry() {
 
 preserve_runtime_entry() {
   case "$1" in
-    mysql|uploads|tmp|certs|term-catalog|logs)
+    config|mysql|uploads|tmp|certs|term-catalog|logs)
       return 0
       ;;
   esac
 
   return 1
+}
+
+sync_config_dir() {
+  SRC_CONFIG_DIR="$1"
+  DEST_CONFIG_DIR="$2"
+
+  mkdir -p "$DEST_CONFIG_DIR"
+
+  if [ ! -f "$DEST_CONFIG_DIR/config.yaml" ] && [ -f "$SRC_CONFIG_DIR/config.yaml" ]; then
+    cp -a "$SRC_CONFIG_DIR/config.yaml" "$DEST_CONFIG_DIR/config.yaml"
+  fi
+
+  if [ -f "$SRC_CONFIG_DIR/config.example.yaml" ]; then
+    cp -a "$SRC_CONFIG_DIR/config.example.yaml" "$DEST_CONFIG_DIR/config.example.yaml"
+  fi
 }
 
 sync_cert_dir() {
@@ -1000,6 +1015,9 @@ sync_runtime_dir() {
   find "$SRC_RUNTIME_DIR" -mindepth 1 -maxdepth 1 | while read -r INCOMING_PATH; do
     ENTRY_NAME=$(basename "$INCOMING_PATH")
     case "$ENTRY_NAME" in
+      config)
+        sync_config_dir "$INCOMING_PATH" "$DEST_RUNTIME_DIR/$ENTRY_NAME"
+        ;;
       mysql|uploads|tmp|term-catalog|logs)
         mkdir -p "$DEST_RUNTIME_DIR/$ENTRY_NAME"
         if [ "$ENTRY_NAME" = "tmp" ]; then
@@ -1016,7 +1034,7 @@ sync_runtime_dir() {
     esac
   done
 
-  mkdir -p "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs" "$DEST_RUNTIME_DIR/term-catalog" "$DEST_RUNTIME_DIR/logs"
+  mkdir -p "$DEST_RUNTIME_DIR/config" "$DEST_RUNTIME_DIR/mysql" "$DEST_RUNTIME_DIR/uploads" "$DEST_RUNTIME_DIR/tmp" "$DEST_RUNTIME_DIR/certs" "$DEST_RUNTIME_DIR/term-catalog" "$DEST_RUNTIME_DIR/logs"
   chmod 1777 "$DEST_RUNTIME_DIR/tmp" 2>/dev/null || true
 }
 
@@ -1246,7 +1264,9 @@ done
 
 BUILD_WORK_ROOT=$(mktemp -d "$OUTPUT_ROOT/.${PACKAGE_NAME}.staging.XXXXXX")
 STAGING_DIR="$BUILD_WORK_ROOT/$PACKAGE_ROOT_NAME"
-mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog" "$STAGING_DIR/runtime/logs"
+mkdir -p "$STAGING_DIR/image" "$STAGING_DIR/runtime/config" "$STAGING_DIR/runtime/mysql" "$STAGING_DIR/runtime/certs" "$STAGING_DIR/runtime/downloads" "$STAGING_DIR/runtime/tmp" "$STAGING_DIR/runtime/uploads" "$STAGING_DIR/runtime/term-catalog" "$STAGING_DIR/runtime/logs"
+cp "$REPO_ROOT/backend/configs/config.example.yaml" "$STAGING_DIR/runtime/config/config.yaml"
+cp "$REPO_ROOT/backend/configs/config.example.yaml" "$STAGING_DIR/runtime/config/config.example.yaml"
 
 cp "$DEPLOY_DIR/docker-compose.bundle.yml" "$STAGING_DIR/docker-compose.yml"
 cp "$DEPLOY_DIR/README.md" "$STAGING_DIR/README.md"

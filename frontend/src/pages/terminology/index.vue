@@ -1244,7 +1244,7 @@ onMounted(loadDicts)
 <template>
   <div class="flex-1 flex flex-col min-h-0 gap-5">
     <div class="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr] flex-1 min-h-0">
-      <NCard class="card-main flex flex-col min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
+      <NCard class="card-main flex flex-col min-h-0 min-w-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <span class="text-sm font-600">词典列表</span>
@@ -1261,7 +1261,7 @@ onMounted(loadDicts)
         <NDataTable flex-height class="flex-1 min-h-0" :columns="dictColumns" :data="dicts" :loading="loading" :pagination="false" size="small" />
       </NCard>
 
-      <NCard class="card-main flex flex-col min-h-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
+      <NCard class="card-main flex flex-col min-h-0 min-w-0" content-style="display: flex; flex-direction: column; min-height: 0; padding: 0 20px 20px;">
         <template #header>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-2">
@@ -1334,7 +1334,7 @@ onMounted(loadDicts)
                 新增规则
               </NButton>
             </div>
-            <NDataTable flex-height class="flex-1 min-h-0" :columns="ruleColumns" :data="displayRules" :loading="ruleLoading" :pagination="{ pageSize: 8 }" size="small" />
+            <NDataTable flex-height class="flex-1 min-h-0" :columns="ruleColumns" :data="displayRules" :loading="ruleLoading" :pagination="{ pageSize: 8 }" :scroll-x="832" size="small" />
           </NTabPane>
         </NTabs>
       </NCard>

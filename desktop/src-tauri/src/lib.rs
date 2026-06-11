@@ -499,6 +499,34 @@ fn get_runtime_log_path() -> String {
 }
 
 #[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager
+            .enable()
+            .map_err(|err| format!("failed to enable autostart: {err}"))?;
+    } else {
+        manager
+            .disable()
+            .map_err(|err| format!("failed to disable autostart: {err}"))?;
+    }
+    let state = manager
+        .is_enabled()
+        .map_err(|err| format!("failed to read autostart state: {err}"))?;
+    log_runtime(&format!("autostart set enabled={enabled} actual={state}"));
+    Ok(state)
+}
+
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|err| format!("failed to read autostart state: {err}"))
+}
+
+#[tauri::command]
 async fn save_pdf_file(suggested_name: String, pdf_base64: String) -> Result<bool, String> {
     let Some(file_handle) = rfd::AsyncFileDialog::new()
         .add_filter("PDF", &["pdf"])
@@ -669,6 +697,10 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .invoke_handler(tauri::generate_handler![
             inject_text,
             read_clipboard,
@@ -686,7 +718,9 @@ pub fn run() {
             append_runtime_log,
             read_runtime_log_tail,
             get_runtime_log_path,
-            save_pdf_file
+            save_pdf_file,
+            set_autostart,
+            get_autostart
         ])
         .setup(move |app| {
             let window = app.get_webview_window("main").ok_or_else(|| {

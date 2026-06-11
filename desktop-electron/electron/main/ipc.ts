@@ -318,6 +318,13 @@ export function registerIpc() {
         return runtimeLogPath()
       case 'save_pdf_file':
         return savePdfFile(String(args.suggestedName ?? 'document.pdf'), String(args.pdfBase64 ?? ''))
+      case 'set_autostart': {
+        const autostartEnabled = Boolean(args.enabled)
+        app.setLoginItemSettings({ openAtLogin: autostartEnabled })
+        return app.getLoginItemSettings().openAtLogin
+      }
+      case 'get_autostart':
+        return app.getLoginItemSettings().openAtLogin
       case 'window:action':
         return performWindowAction(String(args.action ?? ''), args, sourceWindow)
       case 'event:subscribe':

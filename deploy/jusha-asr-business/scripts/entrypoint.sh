@@ -15,6 +15,8 @@ export ASR_DATABASE_PORT="${ASR_DATABASE_PORT:-3306}"
 export ASR_DATABASE_USER="${ASR_DATABASE_USER:-root}"
 export ASR_DATABASE_PASSWORD="${ASR_DATABASE_PASSWORD:-${ASR_MYSQL_ROOT_PASSWORD:-}}"
 export ASR_DATABASE_DBNAME="${ASR_DATABASE_DBNAME:-${ASR_MYSQL_DATABASE}}"
+export ASR_CONFIG_DIR="${ASR_CONFIG_DIR:-/app/backend/configs}"
+export ASR_CONFIG_SEED_DIR="${ASR_CONFIG_SEED_DIR:-/opt/asr/config-default}"
 export ASR_DOWNLOAD_DIR="${ASR_DOWNLOAD_DIR:-/var/lib/asr/downloads}"
 export ASR_DOWNLOAD_PUBLIC_BASE_PATH="${ASR_DOWNLOAD_PUBLIC_BASE_PATH:-/downloads/files}"
 export ASR_ENABLE_HTTPS="${ASR_ENABLE_HTTPS:-1}"
@@ -39,9 +41,24 @@ require_env ASR_JWT_SECRET
 
 ASR_LEGACY_ACCESS_LOG_DIR=$(dirname "${ASR_LEGACY_ACCESS_LOG_PATH}")
 
-mkdir -p "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${ASR_TMP_DIR}" "${ASR_UPLOAD_DIR}" "${ASR_CATALOG_DIR}" "${ASR_LEGACY_ACCESS_LOG_DIR}" /run/mysqld /var/log/supervisor /var/log/nginx
+mkdir -p "${ASR_CONFIG_DIR}" "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${ASR_TLS_CERT_DIR}" "${ASR_TMP_DIR}" "${ASR_UPLOAD_DIR}" "${ASR_CATALOG_DIR}" "${ASR_LEGACY_ACCESS_LOG_DIR}" /run/mysqld /var/log/supervisor /var/log/nginx
 chown -R mysql:mysql "${ASR_MYSQL_DATA_DIR}" /run/mysqld
 chmod 1777 "${ASR_TMP_DIR}"
+
+seed_config_file() {
+  CONFIG_NAME="$1"
+  if [ -f "${ASR_CONFIG_DIR}/${CONFIG_NAME}" ]; then
+    return 0
+  fi
+
+  if [ -f "${ASR_CONFIG_SEED_DIR}/${CONFIG_NAME}" ]; then
+    echo "[entrypoint] seeding ${CONFIG_NAME} from ${ASR_CONFIG_SEED_DIR} into ${ASR_CONFIG_DIR}"
+    cp "${ASR_CONFIG_SEED_DIR}/${CONFIG_NAME}" "${ASR_CONFIG_DIR}/${CONFIG_NAME}"
+  fi
+}
+
+seed_config_file config.yaml
+seed_config_file config.example.yaml
 
 catalog_dir_needs_seed() {
   if [ ! -d "${ASR_CATALOG_DIR}" ]; then

@@ -50,6 +50,7 @@ interface PersistedState {
   displayName: string
   role: string
   autoInject: boolean
+  autoStart: boolean
   autoHideWindowOnRecordStart: boolean
   microphonePermissionGranted: boolean
   debugLoggingEnabled: boolean
@@ -78,6 +79,7 @@ function defaultPersistedState(): PersistedState {
     displayName: '',
     role: '',
     autoInject: true,
+    autoStart: false,
     autoHideWindowOnRecordStart: false,
     microphonePermissionGranted: false,
     debugLoggingEnabled: false,
@@ -130,6 +132,7 @@ function normalizePersistedState(parsed?: Partial<PersistedState> | null): Persi
     displayName: parsed?.displayName || '',
     role: parsed?.role || '',
     autoInject: parsed?.autoInject !== false,
+    autoStart: parsed?.autoStart === true,
     autoHideWindowOnRecordStart: parsed?.autoHideWindowOnRecordStart === true,
     microphonePermissionGranted: parsed?.microphonePermissionGranted === true,
     debugLoggingEnabled: parsed?.debugLoggingEnabled === true,
@@ -188,6 +191,11 @@ export const useAppStore = defineStore('app', () => {
   const displayName = ref(persisted.displayName)
   const role = ref(persisted.role)
   const autoInject = ref(persisted.autoInject)
+  const autoStart = ref(persisted.autoStart)
+  watch(autoStart, (enabled) => {
+    // 开机自启是系统级设置，变更时同步到 Tauri/Electron 原生层。
+    void invoke('set_autostart', { enabled }).catch(() => undefined)
+  })
   const autoHideWindowOnRecordStart = ref(persisted.autoHideWindowOnRecordStart)
   const microphonePermissionGranted = ref(persisted.microphonePermissionGranted)
   const microphoneDetected = ref(true)
@@ -235,6 +243,7 @@ export const useAppStore = defineStore('app', () => {
       displayName: displayName.value,
       role: role.value,
       autoInject: autoInject.value,
+      autoStart: autoStart.value,
       autoHideWindowOnRecordStart: autoHideWindowOnRecordStart.value,
       microphonePermissionGranted: microphonePermissionGranted.value,
       debugLoggingEnabled: debugLoggingEnabled.value,
@@ -254,6 +263,7 @@ export const useAppStore = defineStore('app', () => {
     displayName.value = next.displayName
     role.value = next.role
     autoInject.value = next.autoInject
+    autoStart.value = next.autoStart
     autoHideWindowOnRecordStart.value = next.autoHideWindowOnRecordStart
     microphonePermissionGranted.value = next.microphonePermissionGranted
     debugLoggingEnabled.value = next.debugLoggingEnabled
@@ -403,6 +413,7 @@ export const useAppStore = defineStore('app', () => {
     voiceWorkflowId,
     workflowBindingsLoaded,
     autoInject,
+    autoStart,
     autoHideWindowOnRecordStart,
     microphonePermissionGranted,
     debugLoggingEnabled,
@@ -436,6 +447,7 @@ export const useAppStore = defineStore('app', () => {
     voiceWorkflowId,
     workflowBindingsLoaded,
     autoInject,
+    autoStart,
     autoHideWindowOnRecordStart,
     microphonePermissionGranted,
     microphoneDetected,

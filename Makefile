@@ -4,6 +4,7 @@
 .PHONY: lint test test-backend test-openapi-real test-frontend-unit test-frontend-e2e
 .PHONY: docker-up docker-down docker-build
 .PHONY: release-jusha-asr release-jusha-all release-jusha-business release-jusha-models
+.PHONY: release-fama-business install-fama-business
 .PHONY: generate-radiology-term-excel sync-term-catalog generate-radiology-rules-excel sync-rules-catalog
 
 # ============================================================
@@ -67,12 +68,19 @@
 #
 # release-jusha-* 组合示例：
 #   make release-jusha-all VERSION=0.8.6 OUTPUT_DIR=./dist SERVER_HOST=192.168.40.221
-#   make release-jusha-business VERSION=0.9.4 JUSHA_ASR_PART_SIZE=2g OUTPUT_DIR=../releases SERVER_HOST=192.168.40.221 DRY_RUN=1
-#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../releases JUSHA_ASR_PART_SIZE=2g
-#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=../releases JUSHA_ASR_PART_SIZE=524288000
+#   make release-jusha-business VERSION=0.9.4 JUSHA_ASR_PART_SIZE=2g OUTPUT_DIR=/data/ganttly/releases/fama/0.9.4 SERVER_HOST=192.168.40.221 DRY_RUN=1
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=/data/ganttly/releases/fama/0.9.3 JUSHA_ASR_PART_SIZE=2g
+#   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=/data/ganttly/releases/fama/0.9.3 JUSHA_ASR_PART_SIZE=524288000
+#
+# 192.168.40.221 /data/ganttly/fama 标准流程：
+#   make release-fama-business VERSION=0.10.3 JUSHA_ASR_PART_SIZE=2g
+#   make install-fama-business VERSION=0.10.3
 
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)
+FAMA_RELEASE_ROOT ?= /data/ganttly/releases/fama
+FAMA_INSTALL_ROOT ?= /data/ganttly
+FAMA_SERVER_HOST ?= 192.168.40.221
 
 sh_quote = '$(subst ','\'',$(1))'
 
@@ -208,6 +216,17 @@ release-jusha-all:
 # 只生成业务服务包。
 release-jusha-business:
 	$(MAKE) release-jusha-asr JUSHA_MODE=business
+
+release-fama-business:
+	@test -n "$(VERSION)" || { echo "VERSION is required, for example: make release-fama-business VERSION=0.10.3" >&2; exit 2; }
+	$(MAKE) release-jusha-business VERSION="$(VERSION)" OUTPUT_DIR="$(FAMA_RELEASE_ROOT)/$(VERSION)" SERVER_HOST="$(FAMA_SERVER_HOST)"
+
+install-fama-business:
+	@test -n "$(VERSION)" || { echo "VERSION is required, for example: make install-fama-business VERSION=0.10.3" >&2; exit 2; }
+	@cd "$(FAMA_RELEASE_ROOT)/$(VERSION)" && \
+		test -f "jusha-asr-business-$(VERSION).run" && \
+		test -f "jusha-asr-business-$(VERSION).run.part001" && \
+		ASR_RUN_TARGET_DIR="$(FAMA_INSTALL_ROOT)" sh "./jusha-asr-business-$(VERSION).run"
 
 # 只生成模型服务组合包；顶层产物名为 models，内部包含 ASR 与 3D-Speaker 两个安装包。
 release-jusha-models:

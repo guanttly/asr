@@ -1,5 +1,11 @@
 import type { Page, Route } from '@playwright/test'
 
+export type MockEdition = 'standard' | 'advanced'
+
+export interface MockOptions {
+  edition?: MockEdition
+}
+
 const now = '2026-05-20T10:00:00+08:00'
 
 const workflows = [
@@ -158,27 +164,45 @@ function catalogTree() {
   }
 }
 
-async function handleAPI(route: Route) {
+function productFeatures(edition: MockEdition) {
+  const capabilities = edition === 'standard'
+    ? { realtime: true, batch: true, meeting: false, voiceprint: false, voice_control: false }
+    : { realtime: true, batch: true, meeting: true, voiceprint: true, voice_control: true }
+  return {
+    edition,
+    capabilities,
+    supported_languages: [{ code: 'auto', label: '自动识别（中英混合）' }],
+    hardware_tier: edition,
+    hardware_requirements: {
+      standard: { tier: 'standard', minimum: { cpu: '8 核', memory: '16 GB', storage: '200 GB', acceleration: 'RTX 3090' }, recommended: { cpu: '16 核', memory: '32 GB', storage: '500 GB', acceleration: 'A10' } },
+      advanced: { tier: 'advanced', minimum: { cpu: '16 核', memory: '32 GB', storage: '500 GB', acceleration: 'A10' }, recommended: { cpu: '32 核', memory: '64 GB', storage: '1 TB', acceleration: 'A100' } },
+    },
+  }
+}
+
+async function handleAPI(route: Route, options: MockOptions = {}) {
   const request = route.request()
   const url = new URL(request.url())
   const path = url.pathname
   const method = request.method()
+  const edition: MockEdition = options.edition ?? 'advanced'
+
+  // 普通版未开放语音控制能力，控制指令库接口返回 403（与真实网关一致），
+  // 用于复现/回归 bug 14852（节点管理页不应再无条件请求该接口）。
+  if (edition === 'standard' && path.startsWith('/api/admin/voice-command-dicts')) {
+    return route.fulfill({
+      status: 403,
+      contentType: 'application/json; charset=utf-8',
+      body: JSON.stringify({ code: 40300, message: '当前版本未开放控制指令库' }),
+    })
+  }
 
   if (method === 'POST' && path === '/api/admin/auth/login')
     return fulfill(route, { token: 'mock-token' })
   if (method === 'GET' && path === '/api/admin/me')
     return fulfill(route, { id: 1, username: 'admin', displayName: '系统管理员', role: 'admin' })
   if (method === 'GET' && path === '/api/admin/app-settings/product-features') {
-    return fulfill(route, {
-      edition: 'advanced',
-      capabilities: { realtime: true, batch: true, meeting: true, voiceprint: true, voice_control: true },
-      supported_languages: [{ code: 'auto', label: '自动识别（中英混合）' }],
-      hardware_tier: 'advanced',
-      hardware_requirements: {
-        standard: { tier: 'standard', minimum: { cpu: '8 核', memory: '16 GB', storage: '200 GB', acceleration: 'RTX 3090' }, recommended: { cpu: '16 核', memory: '32 GB', storage: '500 GB', acceleration: 'A10' } },
-        advanced: { tier: 'advanced', minimum: { cpu: '16 核', memory: '32 GB', storage: '500 GB', acceleration: 'A10' }, recommended: { cpu: '32 核', memory: '64 GB', storage: '1 TB', acceleration: 'A100' } },
-      },
-    })
+    return fulfill(route, productFeatures(edition))
   }
   if (path === '/api/admin/me/workflow-bindings')
     return fulfill(route, { realtime: 1, batch: 2, meeting: 3, voice_control: 4 })
@@ -225,8 +249,13 @@ async function handleAPI(route: Route) {
     return fulfill(route, workflowList(url.searchParams))
   if (path === '/api/admin/workflows' && method === 'POST')
     return fulfill(route, { ...workflows[1], id: 99, name: 'E2E 新建工作流' })
-  if (path === '/api/admin/workflows/node-types')
-    return fulfill(route, nodeTypes)
+  if (path === '/api/admin/workflows/node-types') {
+    // 与后端 allowNodeType 一致：普通版过滤掉会议 / 语音控制相关节点。
+    const gated = edition === 'standard'
+      ? new Set(['voice_wake', 'voice_intent', 'meeting_summary', 'speaker_diarize'])
+      : new Set<string>()
+    return fulfill(route, nodeTypes.filter(item => !gated.has(item.type)))
+  }
   if (/^\/api\/admin\/workflows\/\d+$/.test(path)) {
     const id = Number(path.split('/').pop())
     return fulfill(route, workflows.find(item => item.id === id) || workflows[1])
@@ -314,11 +343,11 @@ async function handleAPI(route: Route) {
   return fulfill(route, {})
 }
 
-export async function mockFrontendAPI(page: Page) {
+export async function mockFrontendAPI(page: Page, options: MockOptions = {}) {
   await page.route('**/*', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path.startsWith('/api/')) {
-      await handleAPI(route)
+      await handleAPI(route, options)
       return
     }
     await route.fallback()

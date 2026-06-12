@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { reactive, ref, watch } from 'vue'
 import type { RecognitionSettings } from '@/composables/useSettings'
 import { defineStore } from 'pinia'

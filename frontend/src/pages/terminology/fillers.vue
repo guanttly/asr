@@ -94,12 +94,12 @@ const filteredEntries = computed(() => {
 })
 
 const dictColumns = [
-  { title: '词库名称', key: 'name' },
-  { title: '场景', key: 'scene' },
+  { title: '词库名称', key: 'name', width: 160 },
+  { title: '场景', key: 'scene', width: 110 },
   {
     title: '类型',
     key: 'is_base',
-    render: (row: FillerDictItem) => h('div', { class: 'flex items-center gap-2' }, [
+    render: (row: FillerDictItem) => h('div', { class: 'flex flex-wrap items-center gap-2' }, [
       h(NTag, {
         size: 'small',
         round: true,
@@ -119,8 +119,7 @@ const dictColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 260,
-    render: (row: FillerDictItem) => h('div', { class: 'flex items-center gap-2' }, [
+    render: (row: FillerDictItem) => h('div', { class: 'flex flex-wrap items-center gap-2' }, [
       row.id === currentDictId.value
         ? h(NTag, { size: 'small', round: true, bordered: false, type: 'success' }, { default: () => '当前词库' })
         : h(NButton, { text: true, type: 'primary', size: 'small', onClick: () => selectDict(row.id) }, { default: () => '查看' }),

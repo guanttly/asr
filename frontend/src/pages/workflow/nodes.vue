@@ -12,6 +12,8 @@ import { getNodeTypes, testNodeStream, updateNodeDefault } from '@/api/workflow'
 import NodeDetailPanel from '@/components/NodeDetailPanel.vue'
 import TextDiffPreview from '@/components/TextDiffPreview.vue'
 import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { useAppStore } from '@/stores/app'
 import { buildMeetingSummaryTokenBudget, buildNodeConfigOverrides, DEFAULT_MEETING_SUMMARY_CHUNK_PROMPT, DEFAULT_MEETING_SUMMARY_PROMPT, fallbackNodeDefaultConfig, formatConfigText, hasTextPlaceholder, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 
 interface DictOption {
@@ -26,6 +28,7 @@ interface RegexRule {
 }
 
 const message = useMessage()
+const appStore = useAppStore()
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
@@ -504,7 +507,12 @@ watch(selectedNodeType, () => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadNodeTypeList(), loadTermDictOptions(), loadFillerDictOptions(), loadSensitiveDictOptions(), loadVoiceCommandDictOptions()])
+  const loaders = [loadNodeTypeList(), loadTermDictOptions(), loadFillerDictOptions(), loadSensitiveDictOptions()]
+  // 控制指令库属于语音控制能力，普通版未开放该接口（返回 403），
+  // 仅在具备语音控制能力时加载，避免节点管理页弹出无关的加载失败提示（bug 14852）。
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+    loaders.push(loadVoiceCommandDictOptions())
+  await Promise.all(loaders)
 })
 </script>
 

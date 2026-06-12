@@ -46,6 +46,7 @@ var textPlaceholderPattern = regexp.MustCompile(`(?i)\{\{\s*text\s*\}\}`)
 var markdownHeadingPattern = regexp.MustCompile(`(?m)^\s{0,3}#{1,6}\s+\S`)
 var markdownListPattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]\s+\S|\d+\.\s+\S)`)
 var markdownFencePattern = regexp.MustCompile("(?m)^```.*$")
+var thinkBlockPattern = regexp.MustCompile(`(?is)<think>.*?</think>`)
 
 func NewLLMCorrectionHandler() *LLMCorrectionHandler {
 	return &LLMCorrectionHandler{
@@ -182,6 +183,7 @@ func parseLLMResponse(respBody []byte, allowMarkdown bool, usedMaxTokens int) (s
 	}
 
 	rawContent := chatResp.Choices[0].Message.Content
+	rawContent = stripReasoningBlocks(rawContent)
 	var outputText string
 	if allowMarkdown {
 		outputText = strings.TrimSpace(rawContent)
@@ -337,6 +339,7 @@ func (h *LLMCorrectionHandler) consumeChatStream(body io.Reader, allowMarkdown b
 	var (
 		eventLines       []string
 		rawContent       strings.Builder
+		emittedClean     string
 		model            string
 		promptTokens     int
 		completionTokens int
@@ -364,12 +367,22 @@ func (h *LLMCorrectionHandler) consumeChatStream(body io.Reader, allowMarkdown b
 		if delta != "" {
 			rawContent.WriteString(delta)
 			if emit != nil {
-				if err := emit(&NodeStreamEvent{
-					Type:       NodeStreamEventDelta,
-					Delta:      delta,
-					OutputText: rawContent.String(),
-				}); err != nil {
-					return false, err
+				// Hide qwen3 <think> reasoning from the live preview by emitting
+				// the cleaned accumulated text; only surface newly revealed text.
+				clean := stripReasoningBlocks(rawContent.String())
+				if clean != emittedClean {
+					visibleDelta := clean
+					if strings.HasPrefix(clean, emittedClean) {
+						visibleDelta = clean[len(emittedClean):]
+					}
+					emittedClean = clean
+					if err := emit(&NodeStreamEvent{
+						Type:       NodeStreamEventDelta,
+						Delta:      visibleDelta,
+						OutputText: clean,
+					}); err != nil {
+						return false, err
+					}
 				}
 			}
 		}
@@ -400,7 +413,7 @@ func (h *LLMCorrectionHandler) consumeChatStream(body io.Reader, allowMarkdown b
 		return rawContent.String(), nil, err
 	}
 
-	rawOutput := rawContent.String()
+	rawOutput := stripReasoningBlocks(rawContent.String())
 	outputText := strings.TrimSpace(rawOutput)
 	if !allowMarkdown {
 		outputText = normalizeLLMCorrectionOutput(rawOutput)
@@ -553,6 +566,30 @@ func enforcePlainTextOutput(prompt string) string {
 		return trimmed
 	}
 	return trimmed + guard
+}
+
+// stripReasoningBlocks removes qwen3 / DeepSeek-R1 style <think>...</think>
+// reasoning blocks that some OpenAI-compatible servers emit inline in the
+// message content (instead of in the separate reasoning_content channel).
+// Without stripping, the reasoning text pollutes the corrected output and the
+// LLM correction node appears to "fail" (bug 14853). It also tolerates partial
+// leaks: a lone trailing </think> (reasoning streamed without an opening tag)
+// or a lone <think> with no close (thinking truncated before an answer).
+func stripReasoningBlocks(text string) string {
+	if text == "" {
+		return text
+	}
+	cleaned := thinkBlockPattern.ReplaceAllString(text, "")
+
+	lower := strings.ToLower(cleaned)
+	if idx := strings.LastIndex(lower, "</think>"); idx >= 0 {
+		cleaned = cleaned[idx+len("</think>"):]
+		lower = strings.ToLower(cleaned)
+	}
+	if idx := strings.Index(lower, "<think>"); idx >= 0 {
+		cleaned = cleaned[:idx]
+	}
+	return cleaned
 }
 
 func hasMarkdownSyntax(text string) bool {

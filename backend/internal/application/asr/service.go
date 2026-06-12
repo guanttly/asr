@@ -122,6 +122,7 @@ const (
 var transcriptionMarkupPattern = regexp.MustCompile(`(?i)language\s+[a-z_-]+<asr_text>|</?asr_text>`)
 var transcriptionTokenPattern = regexp.MustCompile(`<\|[^>]+\|>`)
 var transcriptionWhitespacePattern = regexp.MustCompile(`[\t\f\r ]+`)
+var transcriptionClauseNumberPattern = regexp.MustCompile(`^[第]?[零〇一二三四五六七八九十百千万两\d]+[、.．，,：:]+`)
 
 var ErrTaskNotFound = errors.New("task not found")
 var ErrTaskDeleteNotAllowed = errors.New("only completed or failed tasks can be deleted")
@@ -1524,6 +1525,7 @@ func sanitizeTranscriptionText(text string) string {
 	}
 	cleaned = strings.TrimSpace(strings.Join(lines, "\n"))
 	cleaned = collapseRepeatedRuns(cleaned)
+	cleaned = collapseRunawayClauses(cleaned)
 	return strings.TrimSpace(cleaned)
 }
 
@@ -1600,6 +1602,117 @@ func countRepeatedUnits(runes []rune, start, unitLen int) int {
 		repeat++
 	}
 	return repeat
+}
+
+const (
+	// 子句级防复读折叠的阈值：用于处理「整段多句循环重复」这类
+	// collapseRepeatedRuns 无法覆盖的块级幻觉（重复单元跨句、超过 rune 上限）。
+	// 阈值偏高，确保只有明显超出正常报告语言习惯的循环重复才会被折叠，
+	// 对正常影像报告与会议纪要均安全（普通文本不会把一句话重复 4~6 次）。
+	runawayClauseMinSegments = 8  // 子句总数不足时直接跳过，避免误伤短文本
+	runawayClauseLongRunes   = 12 // 长句重复阈值：rune 数 ≥ 该值且重复 ≥ 4 次即折叠
+	runawayClauseLongCount   = 4
+	runawayClauseShortRunes  = 8 // 短句重复阈值：rune 数 ≥ 该值且重复 ≥ 6 次即折叠
+	runawayClauseShortCount  = 6
+)
+
+// collapseRunawayClauses 折叠「整句/整段循环重复」式幻觉，仅保留首次出现。
+// 与 collapseRepeatedRuns（处理连续重复的字/短语）互补：本函数按句切分后统计
+// 归一化子句的出现频次，对明显超频的子句只保留第一次。此清洗始终生效，不依赖
+// 工作流或词典配置，因此 OpenAPI 批量识别等未绑定工作流的链路也能抑制块级幻觉。
+func collapseRunawayClauses(text string) string {
+	if text == "" {
+		return text
+	}
+	segments := splitTranscriptClauses(text)
+	if len(segments) < runawayClauseMinSegments {
+		return text
+	}
+
+	counts := make(map[string]int, len(segments))
+	for _, segment := range segments {
+		if key := normalizeClauseKey(segment); key != "" {
+			counts[key]++
+		}
+	}
+
+	var builder strings.Builder
+	seen := make(map[string]int, len(counts))
+	dropped := 0
+	for _, segment := range segments {
+		key := normalizeClauseKey(segment)
+		if shouldDropRunawayClause(key, counts[key], seen[key]) {
+			seen[key]++
+			dropped++
+			continue
+		}
+		if key != "" {
+			seen[key]++
+		}
+		builder.WriteString(segment)
+	}
+	if dropped == 0 {
+		return text
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// splitTranscriptClauses 按句末标点（。；;\n）切分文本，分隔符保留在前一子句末尾。
+func splitTranscriptClauses(text string) []string {
+	segments := make([]string, 0, 16)
+	start := 0
+	for index, value := range text {
+		switch value {
+		case '。', '；', ';', '\n':
+			end := index + len(string(value))
+			segments = append(segments, text[start:end])
+			start = end
+		}
+	}
+	if start < len(text) {
+		segments = append(segments, text[start:])
+	}
+	return segments
+}
+
+// normalizeClauseKey 归一化子句用于频次统计：去除首尾标点、行内编号（如「1、」「2.」）
+// 以及标点/空白，得到稳定的比较键；过短（<8 rune）的子句返回空串不参与统计。
+func normalizeClauseKey(segment string) string {
+	normalized := strings.TrimSpace(segment)
+	normalized = strings.Trim(normalized, " \t\r\n，,。；;：:、.．")
+	for {
+		next := transcriptionClauseNumberPattern.ReplaceAllString(normalized, "")
+		if next == normalized {
+			break
+		}
+		normalized = strings.TrimSpace(next)
+	}
+	var builder strings.Builder
+	for _, value := range normalized {
+		switch value {
+		case ' ', '\t', '\r', '\n', '，', ',', '。', '；', ';', '：', ':', '、', '.', '．':
+			continue
+		}
+		builder.WriteRune(value)
+	}
+	normalized = builder.String()
+	if len([]rune(normalized)) < runawayClauseShortRunes {
+		return ""
+	}
+	return normalized
+}
+
+// shouldDropRunawayClause 判断某个归一化子句是否属于需折叠的循环重复幻觉。
+// seenCount==0 表示这是首次出现，永远保留。
+func shouldDropRunawayClause(key string, totalCount, seenCount int) bool {
+	if key == "" || seenCount == 0 {
+		return false
+	}
+	length := len([]rune(key))
+	if length >= runawayClauseLongRunes && totalCount >= runawayClauseLongCount {
+		return true
+	}
+	return length >= runawayClauseShortRunes && totalCount >= runawayClauseShortCount
 }
 
 func (s *Service) publishTaskUpdated(task *domain.TranscriptionTask) {

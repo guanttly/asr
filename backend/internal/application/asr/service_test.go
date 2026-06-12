@@ -719,6 +719,54 @@ func TestSanitizeTranscriptionTextCollapsesHallucination(t *testing.T) {
 	}
 }
 
+func TestCollapseRunawayClauses(t *testing.T) {
+	// 真实 DSA 报告块级幻觉形态：跨句、单元长度超过 collapseRepeatedRuns 的 rune 上限，
+	// 整段「句1。句2。」循环重复上百次，collapseRepeatedRuns 无法折叠，需子句级折叠兜底。
+	lead := "右锁骨下动脉起始段重度狭窄。"
+	block := "经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙，半重度管腔狭窄，同前。"
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: ""},
+		{
+			name: "runaway multi-clause block folds to first occurrence",
+			in:   lead + strings.Repeat(block, 60),
+			want: lead + block,
+		},
+		{
+			name: "long clause repeated below threshold is kept",
+			in: strings.Repeat("两侧胸廓对称胸壁软组织未见异常。", 3) +
+				"纵隔居中。心影不大。膈面光整。肋膈角锐利。胸廓对称。",
+			want: strings.Repeat("两侧胸廓对称胸壁软组织未见异常。", 3) +
+				"纵隔居中。心影不大。膈面光整。肋膈角锐利。胸廓对称。",
+		},
+		{
+			name: "normal multi-sentence report is untouched",
+			in:   "两肺纹理增多模糊。纵隔窗未见明显肿大淋巴结。心影形态大小未见异常。双侧胸膜未见增厚。所见骨质结构未见异常。",
+			want: "两肺纹理增多模糊。纵隔窗未见明显肿大淋巴结。心影形态大小未见异常。双侧胸膜未见增厚。所见骨质结构未见异常。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := collapseRunawayClauses(tc.in); got != tc.want {
+				t.Fatalf("collapseRunawayClauses() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeTranscriptionTextCollapsesRunawayClauses(t *testing.T) {
+	block := "经260cm加硬导丝引导下置入右侧锁骨下动脉。复查造影见右侧锁骨下动脉管腔粗糙，半重度管腔狭窄，同前。"
+	in := strings.Repeat(block, 80)
+	got := sanitizeTranscriptionText(in)
+	if got != block {
+		t.Fatalf("sanitizeTranscriptionText runaway-clause guard = %q, want %q", got, block)
+	}
+}
+
 func TestIsNonRetryableTaskError(t *testing.T) {
 	cases := []struct {
 		name string

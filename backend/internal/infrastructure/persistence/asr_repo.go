@@ -163,15 +163,16 @@ func (r *TaskRepo) ListByUser(ctx context.Context, userID uint64, taskType *doma
 		Find(&models).Error; err != nil {
 		return nil, 0, err
 	}
-	latestFinalTexts, err := r.latestFinalTextsByTaskIDs(ctx, models)
+	latestExecutions, err := r.latestExecutionsByTaskIDs(ctx, models)
 	if err != nil {
 		return nil, 0, err
 	}
 	tasks := make([]*domain.TranscriptionTask, len(models))
 	for i := range models {
 		tasks[i] = r.toDomain(&models[i])
-		if finalText, ok := latestFinalTexts[models[i].ID]; ok {
-			tasks[i].LatestFinalText = finalText
+		if latestExecution, ok := latestExecutions[models[i].ID]; ok {
+			tasks[i].LatestFinalText = latestExecution.FinalText
+			tasks[i].LatestExecution = latestExecution.Summary
 		}
 	}
 	return tasks, total, nil
@@ -194,26 +195,36 @@ func (r *TaskRepo) List(ctx context.Context, taskType *domain.TaskType, offset, 
 		Find(&models).Error; err != nil {
 		return nil, 0, err
 	}
-	latestFinalTexts, err := r.latestFinalTextsByTaskIDs(ctx, models)
+	latestExecutions, err := r.latestExecutionsByTaskIDs(ctx, models)
 	if err != nil {
 		return nil, 0, err
 	}
 	tasks := make([]*domain.TranscriptionTask, len(models))
 	for i := range models {
 		tasks[i] = r.toDomain(&models[i])
-		if finalText, ok := latestFinalTexts[models[i].ID]; ok {
-			tasks[i].LatestFinalText = finalText
+		if latestExecution, ok := latestExecutions[models[i].ID]; ok {
+			tasks[i].LatestFinalText = latestExecution.FinalText
+			tasks[i].LatestExecution = latestExecution.Summary
 		}
 	}
 	return tasks, total, nil
 }
 
-type latestExecutionTextRow struct {
-	TriggerID string         `gorm:"column:trigger_id"`
-	FinalText sql.NullString `gorm:"column:final_text"`
+type latestExecutionSummary struct {
+	FinalText    string
+	Summary      *domain.LatestExecutionSummary
+	hasFinalText bool
 }
 
-func (r *TaskRepo) latestFinalTextsByTaskIDs(ctx context.Context, models []TaskModel) (map[uint64]string, error) {
+type latestExecutionSummaryRow struct {
+	TriggerID    string         `gorm:"column:trigger_id"`
+	FinalText    sql.NullString `gorm:"column:final_text"`
+	Status       string         `gorm:"column:status"`
+	ErrorMessage sql.NullString `gorm:"column:error_message"`
+	CreatedAt    time.Time      `gorm:"column:created_at"`
+}
+
+func (r *TaskRepo) latestExecutionsByTaskIDs(ctx context.Context, models []TaskModel) (map[uint64]latestExecutionSummary, error) {
 	triggerIDs := make([]string, 0, len(models))
 	for _, model := range models {
 		if model.WorkflowID == nil {
@@ -222,13 +233,13 @@ func (r *TaskRepo) latestFinalTextsByTaskIDs(ctx context.Context, models []TaskM
 		triggerIDs = append(triggerIDs, strconv.FormatUint(model.ID, 10))
 	}
 	if len(triggerIDs) == 0 {
-		return map[uint64]string{}, nil
+		return map[uint64]latestExecutionSummary{}, nil
 	}
 
-	var rows []latestExecutionTextRow
+	var rows []latestExecutionSummaryRow
 	if err := r.db.WithContext(ctx).
 		Table("workflow_executions").
-		Select("trigger_id, final_text").
+		Select("trigger_id, final_text, status, error_message, created_at").
 		Where("trigger_type IN ?", []string{string(wfdomain.TriggerBatchTask), string(wfdomain.TriggerRealtime)}).
 		Where("trigger_id IN ?", triggerIDs).
 		Order("trigger_id ASC, created_at DESC, id DESC").
@@ -236,19 +247,30 @@ func (r *TaskRepo) latestFinalTextsByTaskIDs(ctx context.Context, models []TaskM
 		return nil, err
 	}
 
-	result := make(map[uint64]string, len(triggerIDs))
+	result := make(map[uint64]latestExecutionSummary, len(triggerIDs))
 	for _, row := range rows {
-		if !row.FinalText.Valid {
-			continue
-		}
 		id, err := strconv.ParseUint(row.TriggerID, 10, 64)
 		if err != nil {
 			continue
 		}
-		if _, exists := result[id]; exists {
-			continue
+
+		item, exists := result[id]
+		if !exists {
+			createdAt := row.CreatedAt
+			summary := &domain.LatestExecutionSummary{
+				Status:    row.Status,
+				CreatedAt: &createdAt,
+			}
+			if row.ErrorMessage.Valid {
+				summary.ErrorMessage = row.ErrorMessage.String
+			}
+			item.Summary = summary
 		}
-		result[id] = row.FinalText.String
+		if row.FinalText.Valid && !item.hasFinalText {
+			item.FinalText = row.FinalText.String
+			item.hasFinalText = true
+		}
+		result[id] = item
 	}
 	return result, nil
 }

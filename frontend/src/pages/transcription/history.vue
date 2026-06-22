@@ -39,6 +39,7 @@ interface TaskItem {
   last_sync_at?: string
   next_sync_at?: string
   result_text?: string
+  execution_summary?: ExecutionSummary
   duration: number
   workflow_id?: number
   created_at?: string
@@ -757,7 +758,7 @@ async function loadTasks(options?: { silent?: boolean }) {
   try {
     const result = await getTranscriptionTasks({ offset: 0, limit: 100, type: TRANSCRIPTION_TASK_TYPES.BATCH, scope: 'all' })
     tasks.value = result.data.items
-    await loadExecutionSummaries(result.data.items)
+    applyExecutionSummaries(result.data.items)
   }
   catch {
     if (!options?.silent)
@@ -768,58 +769,55 @@ async function loadTasks(options?: { silent?: boolean }) {
   }
 }
 
-async function loadExecutionSummaries(items: TaskItem[]) {
-  const workflowTasks = items.filter(item => item.workflow_id)
-  if (workflowTasks.length === 0) {
-    executionSummaryByTask.value = {}
-    return
-  }
-
-  const next: Record<number, ExecutionSummary> = {}
-  const results = await Promise.allSettled(
-    workflowTasks.map(async (item) => {
-      const result = await getTranscriptionTaskExecutions(item.id)
-      const latest = (result.data || [])[0] as ExecutionItem | undefined
-      return {
-        taskId: item.id,
-        summary: latest
-          ? {
-              status: latest.status,
-              created_at: latest.created_at,
-              error_message: latest.error_message,
-            }
-          : {
-              status: EXECUTION_SUMMARY_NOT_STARTED,
-            },
+function executionSummaryFromExecutions(executions: ExecutionItem[]): ExecutionSummary {
+  const latest = executions[0]
+  return latest
+    ? {
+        status: latest.status,
+        created_at: latest.created_at,
+        error_message: latest.error_message,
       }
-    }),
-  )
+    : {
+        status: EXECUTION_SUMMARY_NOT_STARTED,
+      }
+}
 
-  for (const result of results) {
-    if (result.status !== 'fulfilled')
+function applyTaskExecutionSummary(task: TaskItem | null | undefined) {
+  if (!task)
+    return
+
+  const next = { ...executionSummaryByTask.value }
+  if (!task.workflow_id) {
+    delete next[task.id]
+  }
+  else {
+    next[task.id] = task.execution_summary || { status: EXECUTION_SUMMARY_NOT_STARTED }
+  }
+  executionSummaryByTask.value = next
+}
+
+function applyExecutionSummaries(items: TaskItem[]) {
+  const next: Record<number, ExecutionSummary> = {}
+  for (const item of items) {
+    if (!item.workflow_id)
       continue
-    next[result.value.taskId] = result.value.summary
+    next[item.id] = item.execution_summary || { status: EXECUTION_SUMMARY_NOT_STARTED }
   }
   executionSummaryByTask.value = next
 }
 
 async function refreshExecutionSummary(task: TaskItem | null | undefined) {
-  if (!task?.workflow_id)
+  if (!task)
     return
+  if (!task.workflow_id) {
+    applyTaskExecutionSummary(task)
+    return
+  }
   try {
     const result = await getTranscriptionTaskExecutions(task.id)
-    const latest = (result.data || [])[0] as ExecutionItem | undefined
     executionSummaryByTask.value = {
       ...executionSummaryByTask.value,
-      [task.id]: latest
-        ? {
-            status: latest.status,
-            created_at: latest.created_at,
-            error_message: latest.error_message,
-          }
-        : {
-            status: EXECUTION_SUMMARY_NOT_STARTED,
-          },
+      [task.id]: executionSummaryFromExecutions(result.data || []),
     }
   }
   catch {
@@ -936,6 +934,10 @@ async function handleShowDetail(taskId: number) {
     detailTask.value = result.data
     detailExecutions.value = executionsResult.data || []
     patchTaskRow(result.data)
+    executionSummaryByTask.value = {
+      ...executionSummaryByTask.value,
+      [taskId]: executionSummaryFromExecutions(detailExecutions.value),
+    }
   }
   catch (error) {
     detailTask.value = null
@@ -960,7 +962,10 @@ async function handleResumePostProcess() {
     patchTaskRow(result.data)
     const executionsResult = await getTranscriptionTaskExecutions(taskId)
     detailExecutions.value = executionsResult.data || []
-    await refreshExecutionSummary(result.data)
+    executionSummaryByTask.value = {
+      ...executionSummaryByTask.value,
+      [taskId]: executionSummaryFromExecutions(detailExecutions.value),
+    }
 
     if (result.data.post_process_status === 'processing' || result.data.post_process_status === 'completed')
       message.success('已从失败节点继续执行后处理')
@@ -1104,8 +1109,12 @@ onMounted(async () => {
 
   stopBusinessSubscription = subscribeBusinessTopic(['asr.task.updated'], (event) => {
     const payload = event.payload as { task?: TaskItem } | undefined
-    applyTaskUpdate(payload?.task)
-    void refreshExecutionSummary(payload?.task)
+    const task = payload?.task
+    applyTaskUpdate(task)
+    if (task?.execution_summary)
+      applyTaskExecutionSummary(task)
+    else
+      void refreshExecutionSummary(task)
   })
 })
 

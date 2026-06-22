@@ -71,35 +71,43 @@ type StreamSessionState struct {
 	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 }
 
+// TaskExecutionSummaryResponse is the latest workflow execution summary attached to a task row.
+type TaskExecutionSummaryResponse struct {
+	Status       string     `json:"status"`
+	CreatedAt    *time.Time `json:"created_at,omitempty"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+}
+
 // TaskResponse is the DTO returned to clients.
 type TaskResponse struct {
-	ID                uint64                   `json:"id"`
-	Type              domain.TaskType          `json:"type"`
-	Status            domain.TaskStatus        `json:"status"`
-	ExternalTaskID    string                   `json:"external_task_id,omitempty"`
-	ProgressPercent   int                      `json:"progress_percent"`
-	ProgressStage     string                   `json:"progress_stage,omitempty"`
-	ProgressMessage   string                   `json:"progress_message,omitempty"`
-	SegmentTotal      int                      `json:"segment_total,omitempty"`
-	SegmentCompleted  int                      `json:"segment_completed,omitempty"`
-	AudioURL          string                   `json:"audio_url,omitempty"`
-	MeetingID         *uint64                  `json:"meeting_id,omitempty"`
-	PostProcessStatus domain.PostProcessStatus `json:"post_process_status"`
-	PostProcessError  string                   `json:"post_process_error,omitempty"`
-	PostProcessedAt   *time.Time               `json:"post_processed_at,omitempty"`
-	SyncFailCount     int                      `json:"sync_fail_count"`
-	LastSyncError     string                   `json:"last_sync_error,omitempty"`
-	LastSyncAt        *time.Time               `json:"last_sync_at,omitempty"`
-	NextSyncAt        *time.Time               `json:"next_sync_at,omitempty"`
-	ResultText        string                   `json:"result_text,omitempty"`
-	FinalText         string                   `json:"final_text,omitempty"`
-	Duration          float64                  `json:"duration"`
-	WorkflowID        *uint64                  `json:"workflow_id,omitempty"`
-	Language          string                   `json:"language,omitempty"`
-	UseITN            *bool                    `json:"use_itn,omitempty"`
-	Hotwords          []string                 `json:"hotwords,omitempty"`
-	CreatedAt         time.Time                `json:"created_at"`
-	UpdatedAt         time.Time                `json:"updated_at"`
+	ID                uint64                        `json:"id"`
+	Type              domain.TaskType               `json:"type"`
+	Status            domain.TaskStatus             `json:"status"`
+	ExternalTaskID    string                        `json:"external_task_id,omitempty"`
+	ProgressPercent   int                           `json:"progress_percent"`
+	ProgressStage     string                        `json:"progress_stage,omitempty"`
+	ProgressMessage   string                        `json:"progress_message,omitempty"`
+	SegmentTotal      int                           `json:"segment_total,omitempty"`
+	SegmentCompleted  int                           `json:"segment_completed,omitempty"`
+	AudioURL          string                        `json:"audio_url,omitempty"`
+	MeetingID         *uint64                       `json:"meeting_id,omitempty"`
+	PostProcessStatus domain.PostProcessStatus      `json:"post_process_status"`
+	PostProcessError  string                        `json:"post_process_error,omitempty"`
+	PostProcessedAt   *time.Time                    `json:"post_processed_at,omitempty"`
+	SyncFailCount     int                           `json:"sync_fail_count"`
+	LastSyncError     string                        `json:"last_sync_error,omitempty"`
+	LastSyncAt        *time.Time                    `json:"last_sync_at,omitempty"`
+	NextSyncAt        *time.Time                    `json:"next_sync_at,omitempty"`
+	ResultText        string                        `json:"result_text,omitempty"`
+	FinalText         string                        `json:"final_text,omitempty"`
+	ExecutionSummary  *TaskExecutionSummaryResponse `json:"execution_summary,omitempty"`
+	Duration          float64                       `json:"duration"`
+	WorkflowID        *uint64                       `json:"workflow_id,omitempty"`
+	Language          string                        `json:"language,omitempty"`
+	UseITN            *bool                         `json:"use_itn,omitempty"`
+	Hotwords          []string                      `json:"hotwords,omitempty"`
+	CreatedAt         time.Time                     `json:"created_at"`
+	UpdatedAt         time.Time                     `json:"updated_at"`
 }
 
 // TaskListResponse wraps a paginated list of tasks.
@@ -214,6 +222,7 @@ func ToResponse(t *domain.TranscriptionTask) *TaskResponse {
 		NextSyncAt:        t.NextSyncAt,
 		ResultText:        resultText,
 		FinalText:         sanitizeTranscriptionText(t.LatestFinalText),
+		ExecutionSummary:  toTaskExecutionSummaryResponse(t.LatestExecution),
 		Duration:          t.Duration,
 		WorkflowID:        t.WorkflowID,
 		Language:          t.Language,
@@ -221,6 +230,17 @@ func ToResponse(t *domain.TranscriptionTask) *TaskResponse {
 		Hotwords:          t.Hotwords,
 		CreatedAt:         t.CreatedAt,
 		UpdatedAt:         t.UpdatedAt,
+	}
+}
+
+func toTaskExecutionSummaryResponse(summary *domain.LatestExecutionSummary) *TaskExecutionSummaryResponse {
+	if summary == nil {
+		return nil
+	}
+	return &TaskExecutionSummaryResponse{
+		Status:       summary.Status,
+		CreatedAt:    summary.CreatedAt,
+		ErrorMessage: summary.ErrorMessage,
 	}
 }
 

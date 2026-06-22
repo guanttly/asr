@@ -106,6 +106,7 @@ const transcriptionTask = {
   audio_url: 'https://example.com/audio/report.wav',
   post_process_status: 'completed',
   result_text: '患者肺部小结节，建议随访。',
+  execution_summary: { status: 'completed', created_at: now },
   duration: 36,
   workflow_id: 2,
   created_at: now,

@@ -30,35 +30,43 @@ const (
 	PostProcessFailed     PostProcessStatus = "failed"
 )
 
+// LatestExecutionSummary is the lightweight workflow execution state attached to a task list row.
+type LatestExecutionSummary struct {
+	Status       string
+	CreatedAt    *time.Time
+	ErrorMessage string
+}
+
 // TranscriptionTask is the core aggregate for a transcription job.
 type TranscriptionTask struct {
-	ID                uint64            `json:"id"`
-	UserID            uint64            `json:"user_id"`
-	Type              TaskType          `json:"type"`
-	Status            TaskStatus        `json:"status"`
-	ExternalTaskID    string            `json:"external_task_id"`
-	MeetingID         *uint64           `json:"meeting_id,omitempty"`
-	PostProcessStatus PostProcessStatus `json:"post_process_status"`
-	PostProcessError  string            `json:"post_process_error"`
-	PostProcessedAt   *time.Time        `json:"post_processed_at,omitempty"`
-	SyncFailCount     int               `json:"sync_fail_count"`
-	LastSyncError     string            `json:"last_sync_error"`
-	LastSyncAt        *time.Time        `json:"last_sync_at,omitempty"`
-	NextSyncAt        *time.Time        `json:"next_sync_at,omitempty"`
-	AudioURL          string            `json:"audio_url"`
-	LocalFilePath     string            `json:"-"`
-	SegmentTotal      int               `json:"segment_total"`
-	SegmentCompleted  int               `json:"segment_completed"`
-	ResultText        string            `json:"result_text"`
-	LatestFinalText   string            `json:"-"`
-	Duration          float64           `json:"duration"`    // audio duration in seconds
-	DictID            *uint64           `json:"dict_id"`     // optional terminology dict
-	WorkflowID        *uint64           `json:"workflow_id"` // optional workflow for post-processing
-	Language          string            `json:"language"`
-	UseITN            *bool             `json:"use_itn,omitempty"`
-	Hotwords          []string          `json:"hotwords,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	ID                uint64                  `json:"id"`
+	UserID            uint64                  `json:"user_id"`
+	Type              TaskType                `json:"type"`
+	Status            TaskStatus              `json:"status"`
+	ExternalTaskID    string                  `json:"external_task_id"`
+	MeetingID         *uint64                 `json:"meeting_id,omitempty"`
+	PostProcessStatus PostProcessStatus       `json:"post_process_status"`
+	PostProcessError  string                  `json:"post_process_error"`
+	PostProcessedAt   *time.Time              `json:"post_processed_at,omitempty"`
+	SyncFailCount     int                     `json:"sync_fail_count"`
+	LastSyncError     string                  `json:"last_sync_error"`
+	LastSyncAt        *time.Time              `json:"last_sync_at,omitempty"`
+	NextSyncAt        *time.Time              `json:"next_sync_at,omitempty"`
+	AudioURL          string                  `json:"audio_url"`
+	LocalFilePath     string                  `json:"-"`
+	SegmentTotal      int                     `json:"segment_total"`
+	SegmentCompleted  int                     `json:"segment_completed"`
+	ResultText        string                  `json:"result_text"`
+	LatestFinalText   string                  `json:"-"`
+	LatestExecution   *LatestExecutionSummary `json:"-"`
+	Duration          float64                 `json:"duration"`    // audio duration in seconds
+	DictID            *uint64                 `json:"dict_id"`     // optional terminology dict
+	WorkflowID        *uint64                 `json:"workflow_id"` // optional workflow for post-processing
+	Language          string                  `json:"language"`
+	UseITN            *bool                   `json:"use_itn,omitempty"`
+	Hotwords          []string                `json:"hotwords,omitempty"`
+	CreatedAt         time.Time               `json:"created_at"`
+	UpdatedAt         time.Time               `json:"updated_at"`
 }
 
 // CanTransition checks whether a status transition is valid.

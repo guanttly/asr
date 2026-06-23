@@ -17,11 +17,18 @@ type seedDictionary struct {
 	Entries     []domain.Entry
 }
 
+// DictReferenceChecker reports how many workflow nodes still reference a
+// sensitive dictionary, so deletion can be blocked while it is in use.
+type DictReferenceChecker interface {
+	CountSensitiveDictReferences(ctx context.Context, dictID uint64) (int, error)
+}
+
 // Service orchestrates sensitive dictionary management.
 type Service struct {
-	dictRepo  domain.DictRepository
-	entryRepo domain.EntryRepository
-	seedRepo  termdomain.SeedStateRepository
+	dictRepo   domain.DictRepository
+	entryRepo  domain.EntryRepository
+	seedRepo   termdomain.SeedStateRepository
+	refChecker DictReferenceChecker
 }
 
 const sensitiveSeedStateKey = "sensitive_seed_initialized_v1"
@@ -30,6 +37,12 @@ const sensitiveDictListLimit = 1000
 
 func NewService(dictRepo domain.DictRepository, entryRepo domain.EntryRepository, seedRepo termdomain.SeedStateRepository) *Service {
 	return &Service{dictRepo: dictRepo, entryRepo: entryRepo, seedRepo: seedRepo}
+}
+
+// SetReferenceChecker wires an optional checker used to block deletion of a
+// sensitive dictionary that is still referenced by workflow nodes.
+func (s *Service) SetReferenceChecker(checker DictReferenceChecker) {
+	s.refChecker = checker
 }
 
 func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*DictResponse, error) {
@@ -76,6 +89,15 @@ func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
 	}
 	if dict.IsBase {
 		return fmt.Errorf("%w: 基础敏感词库不允许删除，请直接编辑内容", ErrSensitiveBaseDictProtected)
+	}
+	if s.refChecker != nil {
+		count, err := s.refChecker.CountSensitiveDictReferences(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: 该敏感词库仍被 %d 个工作流节点引用，请先解除引用后再删除", ErrSensitiveDictInUse, count)
+		}
 	}
 	entries, err := s.entryRepo.ListByDict(ctx, id)
 	if err != nil {

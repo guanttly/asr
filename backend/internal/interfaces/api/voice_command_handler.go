@@ -99,7 +99,15 @@ func (h *VoiceCommandHandler) DeleteDict(c *gin.Context) {
 		return
 	}
 	if err := h.service.DeleteDict(c.Request.Context(), dictID); err != nil {
-		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		switch {
+		case errors.Is(err, appvoicecommand.ErrVoiceCommandDictNotFound):
+			response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		case errors.Is(err, appvoicecommand.ErrVoiceCommandBaseDictProtected),
+			errors.Is(err, appvoicecommand.ErrVoiceCommandDictInUse):
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+		default:
+			response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
+		}
 		return
 	}
 	response.Success(c, gin.H{"deleted": true})

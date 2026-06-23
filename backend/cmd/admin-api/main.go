@@ -46,6 +46,36 @@ func (c fillerDictReferenceChecker) CountFillerDictReferences(ctx context.Contex
 	return c.nodeRepo.CountConfigDictReferences(ctx, string(domain.NodeFillerFilter), dictID)
 }
 
+// sensitiveDictReferenceChecker reports how many sensitive_filter nodes still
+// reference a sensitive dictionary.
+type sensitiveDictReferenceChecker struct {
+	nodeRepo *persistence.WorkflowNodeRepo
+}
+
+func (c sensitiveDictReferenceChecker) CountSensitiveDictReferences(ctx context.Context, dictID uint64) (int, error) {
+	return c.nodeRepo.CountConfigDictReferences(ctx, string(domain.NodeSensitiveFilter), dictID)
+}
+
+// termDictReferenceChecker reports how many term_correction nodes still
+// reference a terminology dictionary.
+type termDictReferenceChecker struct {
+	nodeRepo *persistence.WorkflowNodeRepo
+}
+
+func (c termDictReferenceChecker) CountTermDictReferences(ctx context.Context, dictID uint64) (int, error) {
+	return c.nodeRepo.CountConfigDictReferences(ctx, string(domain.NodeTermCorrection), dictID)
+}
+
+// voiceCommandDictReferenceChecker reports how many voice_intent nodes still
+// reference a voice command library via their dict_ids array.
+type voiceCommandDictReferenceChecker struct {
+	nodeRepo *persistence.WorkflowNodeRepo
+}
+
+func (c voiceCommandDictReferenceChecker) CountVoiceCommandDictReferences(ctx context.Context, dictID uint64) (int, error) {
+	return c.nodeRepo.CountConfigDictListReferences(ctx, string(domain.NodeVoiceIntent), dictID)
+}
+
 func (a *batchEngineAdapter) SubmitBatch(ctx context.Context, req appasr.BatchSubmitRequest) (*appasr.BatchSubmitResult, error) {
 	result, err := a.client.SubmitBatch(ctx, asrengine.BatchTranscribeRequest{
 		AudioURL:      req.AudioURL,
@@ -124,6 +154,7 @@ func main() {
 		persistence.NewRuleRepo(db),
 		persistence.NewSeedStateRepo(db),
 	)
+	termService.SetReferenceChecker(termDictReferenceChecker{nodeRepo: persistence.NewWorkflowNodeRepo(db)})
 	if err := termService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
 	}
@@ -148,6 +179,7 @@ func main() {
 		sensitiveEntryRepo,
 		persistence.NewSeedStateRepo(db),
 	)
+	sensitiveService.SetReferenceChecker(sensitiveDictReferenceChecker{nodeRepo: persistence.NewWorkflowNodeRepo(db)})
 	if err := sensitiveService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
 	}
@@ -173,6 +205,7 @@ func main() {
 		voiceCommandEntryRepo,
 		persistence.NewSeedStateRepo(db),
 	)
+	voiceCommandService.SetReferenceChecker(voiceCommandDictReferenceChecker{nodeRepo: persistence.NewWorkflowNodeRepo(db)})
 	if err := voiceCommandService.EnsureSeedData(context.Background()); err != nil {
 		log.Fatal(err)
 	}

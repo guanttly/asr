@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -133,6 +134,10 @@ func (h *TermHandler) DeleteDict(c *gin.Context) {
 	}
 
 	if err := h.service.DeleteDict(c.Request.Context(), dictID); err != nil {
+		if errors.Is(err, appterm.ErrTermDictInUse) {
+			response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

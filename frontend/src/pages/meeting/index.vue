@@ -73,7 +73,12 @@ function isMeetingActive(row: MeetingItem) {
 }
 
 function isMeetingDeletable(row: MeetingItem) {
-  return ['uploaded', 'completed', 'failed'].includes(row.status)
+  if (['uploaded', 'completed', 'failed'].includes(row.status))
+    return true
+  // 卡在“生成中”但已记录同步/摘要失败的会议允许删除（bug 14916）。
+  if (row.status === 'processing')
+    return (row.sync_fail_count || 0) > 0 || !!row.last_sync_error?.trim()
+  return false
 }
 
 function formatElapsedDuration(row: MeetingItem) {

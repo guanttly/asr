@@ -25,6 +25,14 @@ import {
 
 const message = useMessage()
 const confirmDelete = useDeleteConfirmDialog()
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  const messageText = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+  if (typeof messageText === 'string' && messageText.trim())
+    return messageText.trim()
+  return fallback
+}
+
 const loading = ref(false)
 const entryLoading = ref(false)
 const dictSaving = ref(false)
@@ -100,7 +108,7 @@ const dictColumns = [
   {
     title: '类型',
     key: 'is_base',
-    render: (row: VoiceCommandDictItem) => h('div', { class: 'flex items-center gap-2' }, [
+    render: (row: VoiceCommandDictItem) => h('div', { class: 'flex flex-wrap items-center gap-2' }, [
       h(NTag, {
         size: 'small',
         round: true,
@@ -115,8 +123,8 @@ const dictColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 260,
-    render: (row: VoiceCommandDictItem) => h('div', { class: 'flex items-center gap-2' }, [
+    minWidth: 220,
+    render: (row: VoiceCommandDictItem) => h('div', { class: 'flex flex-wrap items-center gap-2' }, [
       row.id === currentDictId.value
         ? h(NTag, { size: 'small', round: true, bordered: false, type: 'success' }, { default: () => '当前分组' })
         : h(NButton, { text: true, type: 'primary', size: 'small', onClick: () => selectDict(row.id) }, { default: () => '查看' }),
@@ -339,10 +347,14 @@ async function handleDeleteDict(row: VoiceCommandDictItem) {
     }
     await loadDicts()
   }
-  catch {
-    message.error('控制指令组删除失败')
-    if (row.is_base)
+  catch (error) {
+    if (row.is_base) {
+      message.error('控制指令组删除失败')
       message.warning('基础控制指令组受保护，不允许删除。')
+    }
+    else {
+      message.error(extractErrorMessage(error, '控制指令组删除失败'))
+    }
   }
   finally {
     deletingDictId.value = null

@@ -31,6 +31,10 @@ const (
 	maxSyncBackoff     = 10 * time.Minute
 	batchSubmitTimeout = 30 * time.Minute
 	maxSummaryMarkdown = 50000
+	// regenerateSummaryTimeout 是后台异步「重新生成会议纪要」的上限。极长会议
+	// （数小时音频）的摘要生成耗时较长，需脱离请求连接在后台执行，避免客户端
+	// 连接中断影响纪要生成（BUG14883）。
+	regenerateSummaryTimeout = 2 * time.Hour
 	// maxMeetingSyncFailures 是"转写完成但摘要/收尾失败"时的最大自动重试次数，
 	// 超过后会议才落入终态 failed，避免极长会议摘要失败后无重试或无限重试。
 	maxMeetingSyncFailures = 5
@@ -90,6 +94,9 @@ type Service struct {
 	batchSubmitter   BatchEngine
 	eventPublisher   EventPublisher
 	inflightMeetings sync.Map
+	// backgroundDoneHook 仅用于测试：在后台异步任务（如重新生成会议纪要）
+	// 完成后回调，便于测试等待异步流程结束。生产环境保持为 nil。
+	backgroundDoneHook func(meetingID uint64)
 }
 
 // NewService creates a new meeting application service.
@@ -380,7 +387,10 @@ func (s *Service) DeleteMeeting(ctx context.Context, meetingID uint64, userID ui
 	return nil
 }
 
-// RegenerateSummary executes the selected workflow against meeting transcript text and persists the meeting summary node output.
+// RegenerateSummary 异步重新生成会议纪要：同步完成必要校验并将会议置为
+// "处理中"后立即返回，真正的纪要生成放到脱离请求连接的后台 goroutine 执行。
+// 这样即使客户端连接不稳定/断开，只要逐字稿已就绪，后台也会自行完成生成并通过
+// 会议更新事件回推结果，客户端只需轮询查看（BUG14883：客户端连接不应影响生成）。
 func (s *Service) RegenerateSummary(ctx context.Context, meetingID uint64, userID uint64, req *RegenerateSummaryRequest) (*MeetingDetailResponse, error) {
 	meeting, err := s.meetingRepo.GetByID(ctx, meetingID)
 	if err != nil {
@@ -403,6 +413,7 @@ func (s *Service) RegenerateSummary(ctx context.Context, meetingID uint64, userI
 		return nil, fmt.Errorf("workflow_id is required")
 	}
 
+	// 同步校验逐字稿是否存在：没有逐字稿无法生成纪要，需立即报错而非进入异步。
 	transcripts, err := s.transcriptRepo.ListByMeeting(ctx, meetingID)
 	if err != nil {
 		return nil, err
@@ -411,53 +422,105 @@ func (s *Service) RegenerateSummary(ctx context.Context, meetingID uint64, userI
 		return nil, fmt.Errorf("meeting has no transcript")
 	}
 
-	inputText := buildSummaryInput(transcripts)
-	exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, inputText, meeting.AudioURL, meeting.LocalFilePath)
-	if err != nil {
-		return nil, err
+	// 抢占会议运行锁：与后台同步定时器、上一次尚未结束的重新生成互斥，避免重复执行。
+	if !s.beginMeetingRun(meetingID) {
+		return nil, fmt.Errorf("meeting summary is already regenerating")
 	}
 
-	content, modelVersion, err := extractMeetingSummary(exec, *meeting.WorkflowID)
-	if err != nil {
+	// 标记为"处理中"并清除历史失败信息：客户端据此进入轮询展示。运行锁会一直持有
+	// 到后台 goroutine 结束，期间会议状态保持 processing 或最终态，后台同步定时器
+	// 不会插手，从而避免重复生成。
+	now := time.Now()
+	meeting.Status = domain.MeetingStatusProcessing
+	meeting.SyncFailCount = 0
+	meeting.LastSyncError = ""
+	meeting.NextSyncAt = nil
+	meeting.LastSyncAt = &now
+	if err := s.meetingRepo.Update(ctx, meeting); err != nil {
+		s.endMeetingRun(meetingID)
 		return nil, err
 	}
+	s.publishMeetingUpdated(meeting)
 
-	existing, err := s.summaryRepo.GetByMeeting(ctx, meetingID)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	if existing != nil {
-		existing.Content = content
-		existing.ModelVersion = modelVersion
-		if err := s.summaryRepo.Update(ctx, existing); err != nil {
-			return nil, err
+	s.dispatchSummaryRegeneration(meetingID)
+
+	return s.GetMeeting(ctx, meetingID)
+}
+
+// dispatchSummaryRegeneration 在后台异步执行纪要生成。调用方必须已持有会议运行锁
+// （beginMeetingRun），本方法结束时负责释放。整个过程使用脱离请求连接、带上限的
+// 后台 context，客户端断开不会中断生成。
+func (s *Service) dispatchSummaryRegeneration(meetingID uint64) {
+	go func() {
+		defer s.notifyBackgroundDone(meetingID)
+		defer s.endMeetingRun(meetingID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), regenerateSummaryTimeout)
+		defer cancel()
+
+		meeting, err := s.meetingRepo.GetByID(ctx, meetingID)
+		if err != nil {
+			return
 		}
-	} else {
-		if err := s.summaryRepo.Create(ctx, &domain.Summary{
-			MeetingID:    meetingID,
-			Content:      content,
-			ModelVersion: modelVersion,
-		}); err != nil {
-			return nil, err
-		}
-	}
 
-	// 手动重新生成成功后，把因摘要失败而处于 failed/重试中的会议恢复为 completed，
-	// 并清除失败信息，使界面状态与实际一致。
-	if meeting.Status != domain.MeetingStatusCompleted || meeting.SyncFailCount != 0 || meeting.LastSyncError != "" || meeting.NextSyncAt != nil {
-		nowTime := time.Now()
+		now := time.Now()
+		if err := s.runSummaryRegeneration(ctx, meeting); err != nil {
+			// 生成失败：复用既有收尾失败处理（可重试则退避重试，否则落入终态 failed）。
+			_, _ = s.handleMeetingFinalizeFailure(ctx, meeting, now, err)
+			return
+		}
+
+		// 生成成功：把因摘要失败而处于 failed/重试中的会议恢复为 completed，
+		// 清除失败信息后落库并回推会议更新事件。
 		meeting.Status = domain.MeetingStatusCompleted
 		meeting.SyncFailCount = 0
 		meeting.LastSyncError = ""
 		meeting.NextSyncAt = nil
-		meeting.LastSyncAt = &nowTime
+		meeting.LastSyncAt = &now
 		if err := s.meetingRepo.Update(ctx, meeting); err != nil {
-			return nil, err
+			return
 		}
-	}
-	s.publishMeetingUpdated(meeting)
+		s.publishMeetingUpdated(meeting)
+	}()
+}
 
-	return s.GetMeeting(ctx, meetingID)
+// runSummaryRegeneration 执行实际的纪要生成：读取逐字稿、调用总结工作流、落库摘要。
+// 不负责会议状态流转（由调用方根据成功/失败处理）。
+func (s *Service) runSummaryRegeneration(ctx context.Context, meeting *domain.Meeting) error {
+	if s.workflowExec == nil {
+		return fmt.Errorf("workflow executor unavailable")
+	}
+	if meeting.WorkflowID == nil {
+		return fmt.Errorf("workflow_id is required")
+	}
+	transcripts, err := s.transcriptRepo.ListByMeeting(ctx, meeting.ID)
+	if err != nil {
+		return err
+	}
+	if len(transcripts) == 0 {
+		return fmt.Errorf("meeting has no transcript")
+	}
+
+	inputText := buildSummaryInput(transcripts)
+	exec, err := s.workflowExec.ExecuteMeetingSummaryWorkflow(ctx, *meeting.WorkflowID, meeting.ID, meeting.UserID, inputText, meeting.AudioURL, meeting.LocalFilePath)
+	if err != nil {
+		return err
+	}
+	content, modelVersion, err := extractMeetingSummary(exec, *meeting.WorkflowID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.upsertMeetingSummary(ctx, meeting.ID, content, modelVersion); err != nil {
+		return err
+	}
+	return nil
+}
+
+// notifyBackgroundDone 触发测试回调（生产环境为 nil），用于等待后台异步任务结束。
+func (s *Service) notifyBackgroundDone(meetingID uint64) {
+	if s.backgroundDoneHook != nil {
+		s.backgroundDoneHook(meetingID)
+	}
 }
 
 func (s *Service) syncMeetingState(ctx context.Context, meeting *domain.Meeting) (bool, error) {
@@ -485,6 +548,11 @@ func (s *Service) syncMeetingState(ctx context.Context, meeting *domain.Meeting)
 		return s.persistMeetingSyncFailure(ctx, meeting, now, err)
 	}
 
+	// 记录一次“上游查询成功”会把 SyncFailCount 清零；但对于“转写已完成、摘要/收尾持续失败”
+	// 的极长会议，若每轮都先清零再收尾失败，重试计数永远停在 1，会议会永远停在
+	// processing 而无法进入 failed 终态（BUG14912）。因此先保存收尾前的累计失败次数，
+	// 在收尾失败时还原，使重试计数能正常累加到上限后落入 failed。
+	priorFailCount := meeting.SyncFailCount
 	updated := s.recordMeetingSyncSuccess(meeting, now)
 	if nextStatus := normalizeMeetingStatus(status.Status); nextStatus != "" && nextStatus != meeting.Status {
 		meeting.Status = nextStatus
@@ -503,6 +571,8 @@ func (s *Service) syncMeetingState(ctx context.Context, meeting *domain.Meeting)
 	if meeting.Status == domain.MeetingStatusCompleted {
 		completed, completeErr := s.finalizeCompletedMeeting(ctx, meeting, status.ResultText)
 		if completeErr != nil {
+			// 还原“查询成功”前的累计失败次数，避免每轮清零导致无法进入 failed 终态（BUG14912）。
+			meeting.SyncFailCount = priorFailCount
 			return s.handleMeetingFinalizeFailure(ctx, meeting, now, completeErr)
 		}
 		if completed {
@@ -990,5 +1060,10 @@ func canDeleteMeeting(meeting *domain.Meeting) bool {
 	if meeting == nil {
 		return false
 	}
-	return meeting.Status != domain.MeetingStatusProcessing
+	if meeting.Status != domain.MeetingStatusProcessing {
+		return true
+	}
+	// 允许删除“卡在生成中”的会议：当存在同步/摘要失败记录时，说明会议已无法
+	// 自行完成（BUG14916），用户应能清理；健康的进行中会议仍受保护。
+	return meeting.SyncFailCount > 0 || meeting.LastSyncError != ""
 }

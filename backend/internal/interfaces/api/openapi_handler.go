@@ -116,7 +116,7 @@ func (h *OpenAPIASRHandler) GetTask(c *gin.Context) {
 func (h *OpenAPIASRHandler) StartStreamSession(c *gin.Context) {
 	result, err := h.service.StartStreamSession(c.Request.Context())
 	if err != nil {
-		response.OpenError(c, http.StatusInternalServerError, errcode.OpenInternal, err.Error())
+		h.writeStreamError(c, err)
 		return
 	}
 	commitURL, eventsURL, wsURL := buildOpenStreamURLs(c, result.SessionID)
@@ -468,6 +468,8 @@ func (h *OpenAPIASRHandler) openTaskPayloadWithRequestID(requestID string, resul
 
 func (h *OpenAPIASRHandler) writeStreamError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, appasr.ErrStreamEngineUnavailable):
+		response.OpenError(c, http.StatusServiceUnavailable, errcode.OpenStreamUnavailable, "实时流式识别接口未启用，请改用录音文件识别接口（asr.recognize），或在服务端配置 services.asr_stream 后重试")
 	case errors.Is(err, appasr.ErrStreamSessionNotFound):
 		response.OpenError(c, http.StatusNotFound, errcode.OpenSessionExpired, err.Error())
 	case errors.Is(err, appasr.ErrStreamSessionExpired):

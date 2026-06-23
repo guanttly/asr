@@ -2,12 +2,17 @@ package terminology
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	domain "github.com/lgt/asr/internal/domain/terminology"
 )
+
+// ErrTermDictInUse is returned when a terminology dictionary is still referenced
+// by one or more workflow nodes and therefore cannot be deleted.
+var ErrTermDictInUse = errors.New("term dict in use")
 
 type seedDictionary struct {
 	Name    string
@@ -16,12 +21,19 @@ type seedDictionary struct {
 	Rules   []domain.CorrectionRule
 }
 
+// DictReferenceChecker reports how many workflow nodes still reference a
+// terminology dictionary, so deletion can be blocked while it is in use.
+type DictReferenceChecker interface {
+	CountTermDictReferences(ctx context.Context, dictID uint64) (int, error)
+}
+
 // Service orchestrates terminology management use cases.
 type Service struct {
-	dictRepo  domain.DictRepository
-	entryRepo domain.EntryRepository
-	ruleRepo  domain.RuleRepository
-	seedRepo  domain.SeedStateRepository
+	dictRepo   domain.DictRepository
+	entryRepo  domain.EntryRepository
+	ruleRepo   domain.RuleRepository
+	seedRepo   domain.SeedStateRepository
+	refChecker DictReferenceChecker
 }
 
 const (
@@ -46,6 +58,12 @@ func NewService(
 		ruleRepo:  ruleRepo,
 		seedRepo:  seedRepo,
 	}
+}
+
+// SetReferenceChecker wires an optional checker used to block deletion of a
+// terminology dictionary that is still referenced by workflow nodes.
+func (s *Service) SetReferenceChecker(checker DictReferenceChecker) {
+	s.refChecker = checker
 }
 
 // CreateDict creates a new terminology dictionary.
@@ -84,6 +102,15 @@ func (s *Service) UpdateDict(ctx context.Context, id uint64, req *UpdateDictRequ
 
 // DeleteDict deletes a terminology dictionary and its related entries and rules.
 func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
+	if s.refChecker != nil {
+		count, err := s.refChecker.CountTermDictReferences(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: 该术语库仍被 %d 个工作流节点引用，请先解除引用后再删除", ErrTermDictInUse, count)
+		}
+	}
 	if _, err := s.entryRepo.DeleteByDict(ctx, id); err != nil {
 		return err
 	}

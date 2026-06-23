@@ -27,6 +27,7 @@ const (
 	OpenAudioTooLong                = "ERR_AUDIO_TOO_LONG"
 	OpenUnsupportedFormat           = "ERR_UNSUPPORTED_FORMAT"
 	OpenSessionExpired              = "ERR_SESSION_EXPIRED"
+	OpenStreamUnavailable           = "ERR_OPEN_STREAM_UNAVAILABLE"
 	OpenSkillNameDuplicated         = "ERR_SKILL_NAME_DUPLICATED"
 	OpenSkillNotFound               = "ERR_SKILL_NOT_FOUND"
 	OpenSkillCallbackUnreachable    = "ERR_SKILL_CALLBACK_UNREACHABLE"

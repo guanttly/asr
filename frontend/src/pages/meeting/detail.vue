@@ -100,7 +100,15 @@ const selectedWorkflow = computed(() => {
 
 const detailStatusMeta = computed(() => getMeetingStatusMeta(detail.value?.status))
 const detailElapsedText = computed(() => formatElapsedDuration(detail.value))
-const canDeleteMeeting = computed(() => ['uploaded', 'completed', 'failed'].includes(detail.value?.status || ''))
+const canDeleteMeeting = computed(() => {
+  const status = detail.value?.status || ''
+  if (['uploaded', 'completed', 'failed'].includes(status))
+    return true
+  // 卡在“生成中”但已记录同步/摘要失败的会议允许删除（bug 14916）。
+  if (status === 'processing')
+    return (detail.value?.sync_fail_count || 0) > 0 || !!detail.value?.last_sync_error?.trim()
+  return false
+})
 const detailFailureReason = computed(() => detail.value?.last_sync_error?.trim() || '')
 const detailFailureHint = computed(() => {
   if (detail.value?.status !== 'failed')

@@ -228,12 +228,6 @@ function appendMeetingSummaryTextPlaceholder(field: 'prompt_template' | 'chunk_p
   })
 }
 
-function listToText(value: unknown) {
-  if (!Array.isArray(value))
-    return ''
-  return value.map(item => String(item).trim()).filter(Boolean).join('\n')
-}
-
 function ensureWordList(value: unknown): string[] {
   if (!Array.isArray(value))
     return []
@@ -245,6 +239,10 @@ function textToList(value: string) {
     .split(/[\n,，]/)
     .map(item => item.trim())
     .filter(Boolean)
+}
+
+function listToText(value: unknown): string {
+  return ensureWordList(value).join('\n')
 }
 
 function updateRegexRule(index: number, patch: Partial<RegexRule>) {
@@ -873,26 +871,30 @@ onMounted(async () => {
                     <div class="text-xs text-slate/70">
                       默认唤醒词列表
                     </div>
-                    <div class="mt-1 rounded-2 bg-white px-3 py-2">
-                      <NDynamicTags
-                        :value="ensureWordList(selectedConfig.wake_words)"
-                        @update:value="(value: string[]) => updateSelectedConfig({ wake_words: value })"
-                      />
-                    </div>
+                    <NInput
+                      :value="listToText(selectedConfig.wake_words)"
+                      type="textarea"
+                      :autosize="{ minRows: 3, maxRows: 6 }"
+                      placeholder="每行一个正式唤醒词，例如：你好小鲨"
+                      class="mt-1"
+                      @update:value="(value: string) => updateSelectedConfig({ wake_words: textToList(value) })"
+                    />
                     <div class="mt-1 text-[11px] leading-5 text-slate/65">
-                      点击右侧「+ 添加」可新增任意多个正式唤醒词，例如：你好小鲨。
+                      每行填写一个正式唤醒词，可新增任意多个，例如：你好小鲨。
                     </div>
                   </div>
                   <div>
                     <div class="text-xs text-slate/70">
                       默认同音 / 易错词
                     </div>
-                    <div class="mt-1 rounded-2 bg-white px-3 py-2">
-                      <NDynamicTags
-                        :value="ensureWordList(selectedConfig.homophone_words)"
-                        @update:value="(value: string[]) => updateSelectedConfig({ homophone_words: value })"
-                      />
-                    </div>
+                    <NInput
+                      :value="listToText(selectedConfig.homophone_words)"
+                      type="textarea"
+                      :autosize="{ minRows: 4, maxRows: 8 }"
+                      placeholder="每行一个同音 / 易错词，例如：你好小莎"
+                      class="mt-1"
+                      @update:value="(value: string) => updateSelectedConfig({ homophone_words: textToList(value) })"
+                    />
                     <div class="mt-2 text-[11px] leading-5 text-slate/65">
                       建议在这里沉淀终端日志里出现过的误识别词，作为所有语音控制 workflow 的全局默认唤醒候选集。
                     </div>

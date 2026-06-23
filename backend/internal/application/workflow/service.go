@@ -17,6 +17,10 @@ import (
 // that already exists within the same owner scope.
 var ErrWorkflowNameExists = errors.New("workflow name already exists")
 
+// ErrPresetWorkflowProtected is returned when attempting to delete a built-in
+// preset system workflow template, which must always remain available.
+var ErrPresetWorkflowProtected = errors.New("preset system workflow cannot be deleted")
+
 // Service provides workflow management and execution operations.
 type Service struct {
 	workflowRepo    domain.WorkflowRepository
@@ -176,6 +180,13 @@ func (s *Service) UpdateWorkflow(ctx context.Context, id uint64, req *UpdateWork
 
 // DeleteWorkflow deletes a workflow and its nodes.
 func (s *Service) DeleteWorkflow(ctx context.Context, id uint64) error {
+	wf, err := s.workflowRepo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if wf.IsPreset() {
+		return fmt.Errorf("%w: 预置系统工作流不可删除", ErrPresetWorkflowProtected)
+	}
 	if err := s.nodeRepo.DeleteByWorkflow(ctx, id); err != nil {
 		return err
 	}

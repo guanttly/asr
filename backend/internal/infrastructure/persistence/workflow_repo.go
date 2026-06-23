@@ -321,6 +321,35 @@ func (r *WorkflowNodeRepo) CountConfigDictReferences(ctx context.Context, nodeTy
 	return count, nil
 }
 
+// CountConfigDictListReferences counts workflow nodes of the given type whose
+// config carries a `dict_ids` array that includes dictID. It is used for nodes
+// such as voice_intent that can reference multiple command libraries at once.
+func (r *WorkflowNodeRepo) CountConfigDictListReferences(ctx context.Context, nodeType string, dictID uint64) (int, error) {
+	var models []WorkflowNodeModel
+	if err := r.db.WithContext(ctx).Where("node_type = ?", nodeType).Find(&models).Error; err != nil {
+		return 0, err
+	}
+	count := 0
+	for i := range models {
+		if models[i].Config == "" {
+			continue
+		}
+		var cfg struct {
+			DictIDs []uint64 `json:"dict_ids"`
+		}
+		if err := json.Unmarshal([]byte(models[i].Config), &cfg); err != nil {
+			continue
+		}
+		for _, id := range cfg.DictIDs {
+			if id == dictID {
+				count++
+				break
+			}
+		}
+	}
+	return count, nil
+}
+
 // ─── NodeDefaultRepo ───────────────────────────────────
 
 type WorkflowNodeDefaultRepo struct {

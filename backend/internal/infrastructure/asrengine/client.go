@@ -107,6 +107,11 @@ func (c *Client) StreamURL() string {
 	return c.streamURL
 }
 
+// StreamingAvailable reports whether a streaming ASR endpoint is configured.
+func (c *Client) StreamingAvailable() bool {
+	return strings.TrimSpace(c.streamURL) != ""
+}
+
 // StreamingSessionResult holds the response from the streaming HTTP API.
 type StreamingSessionResult struct {
 	SessionID string `json:"session_id,omitempty"`

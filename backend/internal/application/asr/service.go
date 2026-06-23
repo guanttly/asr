@@ -56,6 +56,8 @@ type StreamingEngine interface {
 	StartStreamSession(ctx context.Context) (string, error)
 	PushStreamChunk(ctx context.Context, sessionID string, pcmData []byte) (*StreamChunkResponse, error)
 	FinishStreamSession(ctx context.Context, sessionID string) (*StreamChunkResponse, error)
+	// StreamingAvailable reports whether the upstream streaming endpoint is configured and usable.
+	StreamingAvailable() bool
 }
 
 // BatchSubmitRequest is the application-level payload sent to the ASR engine.
@@ -347,10 +349,15 @@ func (s *Service) TranscribeSnippet(ctx context.Context, req *TranscribeSnippetR
 	return s.awaitSnippetResult(ctx, result)
 }
 
+// streamingAvailable reports whether realtime streaming ASR is configured and usable.
+func (s *Service) streamingAvailable() bool {
+	return s.streamingEngine != nil && s.streamingEngine.StreamingAvailable()
+}
+
 // StartStreamSession creates a backend-managed upstream streaming session.
 func (s *Service) StartStreamSession(ctx context.Context) (*StreamSessionResponse, error) {
-	if s.streamingEngine == nil {
-		return nil, fmt.Errorf("asr stream engine is not configured")
+	if !s.streamingAvailable() {
+		return nil, ErrStreamEngineUnavailable
 	}
 
 	now := time.Now()
@@ -368,8 +375,8 @@ func (s *Service) StartStreamSession(ctx context.Context) (*StreamSessionRespons
 
 // PushStreamChunk forwards one PCM chunk into the active upstream session.
 func (s *Service) PushStreamChunk(ctx context.Context, req *PushStreamChunkRequest) (*StreamChunkResponse, error) {
-	if s.streamingEngine == nil {
-		return nil, fmt.Errorf("asr stream engine is not configured")
+	if !s.streamingAvailable() {
+		return nil, ErrStreamEngineUnavailable
 	}
 	if req == nil || strings.TrimSpace(req.SessionID) == "" {
 		return nil, fmt.Errorf("session_id is required")
@@ -402,8 +409,8 @@ func (s *Service) PushStreamChunk(ctx context.Context, req *PushStreamChunkReque
 
 // CommitStreamSegment commits the current cumulative streaming transcript since the last sentence boundary.
 func (s *Service) CommitStreamSegment(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
-	if s.streamingEngine == nil {
-		return nil, fmt.Errorf("asr stream engine is not configured")
+	if !s.streamingAvailable() {
+		return nil, ErrStreamEngineUnavailable
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {
@@ -423,8 +430,8 @@ func (s *Service) CommitStreamSegment(ctx context.Context, sessionID string) (*S
 
 // FinishStreamSession finalizes an active upstream streaming session.
 func (s *Service) FinishStreamSession(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
-	if s.streamingEngine == nil {
-		return nil, fmt.Errorf("asr stream engine is not configured")
+	if !s.streamingAvailable() {
+		return nil, ErrStreamEngineUnavailable
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	if trimmedSessionID == "" {

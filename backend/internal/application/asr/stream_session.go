@@ -23,6 +23,7 @@ var ErrStreamSessionExpired = errors.New("stream session expired")
 var ErrStreamSessionActive = errors.New("stream session is still active")
 var ErrStreamSessionClosed = errors.New("stream session already finalized")
 var ErrStreamSessionEmptyAudio = errors.New("stream session contains no audio")
+var ErrStreamEngineUnavailable = errors.New("realtime streaming ASR is not enabled")
 
 type managedStreamSession struct {
 	mu                sync.Mutex

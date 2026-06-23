@@ -94,6 +94,10 @@ func (h *ASRHandler) CommitStreamSession(c *gin.Context) {
 func (h *ASRHandler) StartStreamSession(c *gin.Context) {
 	result, err := h.service.StartStreamSession(c.Request.Context())
 	if err != nil {
+		if errors.Is(err, appasr.ErrStreamEngineUnavailable) {
+			response.Error(c, http.StatusServiceUnavailable, errcode.CodeInternal, "实时流式识别接口未启用，请在服务端配置 services.asr_stream 后重试")
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

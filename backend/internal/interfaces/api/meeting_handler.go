@@ -289,6 +289,9 @@ func (h *MeetingHandler) RegenerateSummary(c *gin.Context) {
 	}
 
 	userID := middleware.UserIDFromContext(c)
+	// 重新生成纪要已改为异步：服务端同步完成校验并将会议置为"处理中"后立即返回，
+	// 真正的摘要生成在脱离请求连接的后台 goroutine 中执行（BUG14883）。客户端
+	// 连接中断不再影响生成，前端通过轮询/会议更新事件查看最终结果。
 	result, err := h.service.RegenerateSummary(c.Request.Context(), id, userID, &req)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())

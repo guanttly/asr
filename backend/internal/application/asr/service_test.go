@@ -85,6 +85,10 @@ func (s *streamingBatchEngineServiceStub) StartStreamSession(_ context.Context) 
 	return s.startSessionID, nil
 }
 
+func (s *streamingBatchEngineServiceStub) StreamingAvailable() bool {
+	return true
+}
+
 func (s *streamingBatchEngineServiceStub) PushStreamChunk(_ context.Context, sessionID string, pcmData []byte) (*StreamChunkResponse, error) {
 	s.lastSessionID = sessionID
 	s.lastPCMData = append([]byte(nil), pcmData...)

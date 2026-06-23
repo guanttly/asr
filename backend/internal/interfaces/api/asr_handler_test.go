@@ -196,6 +196,10 @@ func (s *batchEngineHandlerStub) StartStreamSession(_ context.Context) (string, 
 	return s.streamSessionID, nil
 }
 
+func (s *batchEngineHandlerStub) StreamingAvailable() bool {
+	return true
+}
+
 func (s *batchEngineHandlerStub) PushStreamChunk(_ context.Context, sessionID string, pcmData []byte) (*appasr.StreamChunkResponse, error) {
 	s.lastStreamSessionID = sessionID
 	s.lastStreamPCMData = append([]byte(nil), pcmData...)

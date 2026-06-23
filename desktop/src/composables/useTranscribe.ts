@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { PRODUCT_CAPABILITY_KEYS, SCENE_MODES } from '@/constants/product'
-import { useAppStore } from '@/stores/app'
+import { useAppStore, type SceneMode } from '@/stores/app'
 import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
 import { authedFetch, createTimeoutSignal, ensureMeetingWorkflowBinding, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
@@ -16,6 +16,10 @@ const PRE_ROLL_CHUNKS = 1
 const MAX_SEGMENT_CHUNKS = 60
 const REALTIME_WORKFLOW_TIMEOUT_MS = 3 * 1000
 const AUTO_INJECT_TIMEOUT_MS = 2 * 1000
+// 单个断句的 ASR 识别请求超时上限。断句音频最长 MAX_SEGMENT_CHUNKS×CHUNK_MS≈12s，
+// 正常识别只需数秒；若网络/上游卡住，必须有超时兜底，否则有序消费协程会
+// 一直 await 该断句，导致停止时 drainPipeline() 永不返回（图标一直转圈、会议不落库）。
+const SEGMENT_ASR_TIMEOUT_MS = 60 * 1000
 // 并行处理的断句上限。ASR 上游支持并发，提高此值可在语速较快时更快地
 // 消化堆积的断句；但提交（写历史 / 注入光标）仍严格按断句顺序进行。
 const MAX_PARALLEL_SEGMENTS = 3
@@ -24,6 +28,10 @@ const MAX_PARALLEL_SEGMENTS = 3
 // 2) 没有任何识别文本时直接丢弃。
 const MIN_MEETING_DURATION_SECONDS = 5
 const MIN_REALTIME_DURATION_SECONDS = 1
+// 语音控制切换场景后，切换前后短时间内录入的「残留」断句（命令尾音等）应被
+// 丢弃，避免命令文本在切换后写入历史。以断句的「录入时间」而非「提交时间」
+// 为准判断，对识别/提交延迟具有鲁棒性。
+const POST_SWITCH_SUPPRESS_MS = 1500
 
 interface RealtimeSessionSegment {
   file: File
@@ -39,6 +47,8 @@ interface PipelineSegment {
   file: File
   duration: number
   workflowId?: number
+  /** 断句被录入（入队）的时间戳，用于语音控制切换后的残留抑制判断。 */
+  enqueuedAt: number
   /** ASR 识别结果（已归一化）。 */
   rawText: string
   /** rawText 是否含有效内容。 */
@@ -79,10 +89,15 @@ export function useTranscribe() {
   let workflowActiveCount = 0
   // 用户停止后置为 true：阻断后续光标注入，并丢弃尚未开始的断句队列。
   let pipelineAborted = false
+  // 语音控制切换场景后的「残留抑制」截止时间（基于断句录入时间）。录入时间
+  // 早于该值的断句视为命令尾音，提交时丢弃，不写历史、不注入。
+  let postSwitchSuppressUntil = 0
   let consumerPromise: Promise<void> | null = null
   const pendingSegments: PipelineSegment[] = []
   const segmentsBySeq = new Map<number, PipelineSegment>()
-  let saveSessionPromise: Promise<void> | null = null
+  // 语音控制切换场景时，「旧场景」会话在后台落库的进行中 Promise；停止时需等待
+  // 它们全部完成，确保中间历史不丢。
+  const pendingFlushes: Promise<unknown>[] = []
   const sessionAudioChunks: ArrayBuffer[] = []
   const sessionRecognizedTexts: string[] = []
   const sessionRealtimeSegments: RealtimeSessionSegment[] = []
@@ -309,6 +324,7 @@ export function useTranscribe() {
       seq,
       file,
       duration,
+      enqueuedAt: Date.now(),
       rawText: '',
       hasText: false,
       dropped: false,
@@ -348,17 +364,33 @@ export function useTranscribe() {
     segment.workflowId = realtimeWorkflowId ?? undefined
 
     await debugLog('transcribe.upload', 'uploading segment', { seq: segment.seq, duration: segment.duration, workflowId: realtimeWorkflowId })
-    const resp = await authedFetch('/api/asr/realtime-segments', {
-      method: 'POST',
-      body: formData,
-    })
-    const json = await readResponseEnvelope<{ text?: string }>(resp)
-    if (!resp.ok) {
-      lastError.value = json.message || `识别请求失败: ${resp.status}`
-      void debugLog('transcribe.error', 'segment upload failed', { seq: segment.seq, status: resp.status, message: lastError.value })
+    const { signal, cleanup } = createTimeoutSignal(SEGMENT_ASR_TIMEOUT_MS)
+    try {
+      const resp = await authedFetch('/api/asr/realtime-segments', {
+        method: 'POST',
+        body: formData,
+        signal,
+      })
+      const json = await readResponseEnvelope<{ text?: string }>(resp)
+      if (!resp.ok) {
+        lastError.value = json.message || `识别请求失败: ${resp.status}`
+        void debugLog('transcribe.error', 'segment upload failed', { seq: segment.seq, status: resp.status, message: lastError.value })
+        return ''
+      }
+      return normalizeText(json.data?.text)
+    }
+    catch (error) {
+      // 识别请求超时/网络异常时，断句作为「无文本」跳过即可——会议链路仍会
+      // 由服务端基于完整音频重新转写。绝不能让异常阻塞有序消费协程。
+      lastError.value = error instanceof Error && error.name === 'AbortError'
+        ? '识别请求超时，已跳过该断句'
+        : error instanceof Error ? error.message : '识别请求异常'
+      void debugLog('transcribe.error', 'segment upload aborted or failed', { seq: segment.seq, message: lastError.value })
       return ''
     }
-    return normalizeText(json.data?.text)
+    finally {
+      cleanup()
+    }
   }
 
   async function runWorkflow(rawText: string): Promise<string> {
@@ -373,11 +405,29 @@ export function useTranscribe() {
     }
   }
 
+  // 是否需要对单个断句执行实时 ASR。
+  // - 报告模式：实时转写本身就是产出，必须执行。
+  // - 会议模式：服务端会基于完整音频走批量重转写，逐段实时识别仅用于驱动
+  //   语音控制（唤醒词 / 指令）。未启用语音控制时无需逐段上传，纯累积音频
+  //   交给批量即可，避免会议模式下后台仍在持续跑无意义的实时识别。
+  function isRealtimeAsrNeeded(): boolean {
+    if (appStore.sceneMode === SCENE_MODES.REPORT)
+      return true
+    return appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.VOICE_CONTROL) && appStore.voiceControl.enabled
+  }
+
   // 并行阶段：执行 ASR，并对（普通报告场景的）口述断句推测性地预跑实时
   // 工作流，使有序消费端基本无需再等待 LLM。此处不触碰 voice control /
   // 历史 / 注入等顺序敏感状态，结果只写入该断句自身。
   async function processSegment(segment: PipelineSegment) {
     try {
+      if (!isRealtimeAsrNeeded()) {
+        // 会议模式且未启用语音控制：跳过逐段实时 ASR。音频已在 handleChunk 中
+        // 持续累积，停止后整段走批量上传，由服务端统一转写。
+        segment.rawText = ''
+        segment.hasText = false
+        return
+      }
       const rawText = await transcribeSegment(segment)
       segment.rawText = rawText
       segment.hasText = !!rawText && hasContent(rawText)
@@ -435,10 +485,28 @@ export function useTranscribe() {
     if (!rawText || !segment.hasText)
       return
 
+    // 语音控制切换场景后的「残留」断句（命令尾音、回声等）直接丢弃：不分类、
+    // 不写历史、不注入。以断句录入时间判断，对识别/提交延迟具有鲁棒性，避免
+    // 命令文本在切换后才被提交进而写入历史。
+    if (postSwitchSuppressUntil > 0 && segment.enqueuedAt <= postSwitchSuppressUntil) {
+      await debugLog('voice.command', 'drop residual segment recorded around scene switch', {
+        seq: segment.seq,
+        rawText,
+      })
+      return
+    }
+
     // Voice control: detect wake word / classify command. When swallowed, we
     // skip workflow / inject / history append for this segment so the user's
     // command words don't pollute the document.
     const voiceResult = await voiceControl.handleSegmentText(rawText)
+    if (voiceResult.switched && voiceResult.previousScene) {
+      // 语音控制切换了场景：先把切换前累计的会话按「旧场景」后台落库（会议→
+      // 自动建会议，报告→实时任务），保证中间历史不丢；再开启残留抑制窗口，
+      // 让切换前后录入的命令尾音不污染新场景的历史。
+      flushSessionForScene(voiceResult.previousScene)
+      postSwitchSuppressUntil = Date.now() + POST_SWITCH_SUPPRESS_MS
+    }
     if (voiceResult.swallow) {
       await debugLog('voice.command', 'segment swallowed', { rawText, voiceResult })
       return
@@ -534,109 +602,138 @@ export function useTranscribe() {
     }
   }
 
+  // 停止时落库当前会话（按当前场景）。把会话缓冲快照后再异步上传，避免与
+  // 后续录音相互影响。
   async function persistRealtimeSession() {
-    const transcript = sessionRecognizedTexts.join('\n').trim()
+    const scene = appStore.sceneMode
+    const audioChunks = sessionAudioChunks.splice(0, sessionAudioChunks.length)
+    const recognizedTexts = sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
+    const realtimeSegments = sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
+    await persistSessionSnapshot(scene, audioChunks, recognizedTexts, realtimeSegments)
+  }
+
+  // 语音控制在录音过程中切换场景时调用：把「切换前」累计的会话快照按旧场景
+  // 后台落库，并清空会话缓冲让新场景从零开始累计。绝不丢弃中间历史。
+  function flushSessionForScene(scene: SceneMode) {
+    const audioChunks = sessionAudioChunks.splice(0, sessionAudioChunks.length)
+    const recognizedTexts = sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
+    const realtimeSegments = sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
+    if (audioChunks.length === 0 && recognizedTexts.length === 0 && realtimeSegments.length === 0)
+      return
+    void debugLog('transcribe.session', 'flush session on scene switch', {
+      scene,
+      audioChunks: audioChunks.length,
+      transcripts: recognizedTexts.length,
+      realtimeSegments: realtimeSegments.length,
+    })
+    const flush = persistSessionSnapshot(scene, audioChunks, recognizedTexts, realtimeSegments)
+      .catch(error => debugLog('transcribe.session', 'flush on scene switch failed', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error))
+    pendingFlushes.push(flush)
+  }
+
+  // 把一段会话快照按指定场景落库：会议模式上传完整音频自动建会议；其余模式
+  // 逐条上传实时转写任务。
+  async function persistSessionSnapshot(
+    scene: SceneMode,
+    audioChunks: ArrayBuffer[],
+    recognizedTexts: string[],
+    realtimeSegments: RealtimeSessionSegment[],
+  ) {
+    const transcript = recognizedTexts.join('\n').trim()
+    // 会议模式以「是否有音频」为准：服务端会基于完整音频重新转写，因此即使
+    // 本地实时预览文本为空（识别请求超时/失败）也应生成会议，避免长录音停止
+    // 后「没有会议生成」。仅在非会议模式下才以预览文本是否为空作为兜底判断。
+    const isMeeting = scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)
+    const duration = audioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
+
+    if (isMeeting) {
+      if (audioChunks.length === 0 || duration < MIN_MEETING_DURATION_SECONDS) {
+        await debugLog('transcribe.session', 'skip meeting persistence: duration too short', {
+          duration,
+          minimum: MIN_MEETING_DURATION_SECONDS,
+          hasAudio: audioChunks.length > 0,
+        })
+        return
+      }
+      await persistMeetingSession(audioChunks, transcript, duration)
+      return
+    }
+
     if (!transcript) {
       await debugLog('transcribe.session', 'skip persistence: empty transcript', {
-        scene: appStore.sceneMode,
+        scene,
       })
       return
     }
 
-    if (saveSessionPromise)
-      return saveSessionPromise
+    if (duration < MIN_REALTIME_DURATION_SECONDS) {
+      await debugLog('transcribe.session', 'skip realtime persistence: duration too short', {
+        duration,
+        minimum: MIN_REALTIME_DURATION_SECONDS,
+      })
+      return
+    }
 
-    const scene = appStore.sceneMode
+    if (realtimeSegments.length === 0) {
+      await debugLog('transcribe.session', 'skip realtime persistence: no finalized segments', {
+        duration,
+        transcriptLength: transcript.length,
+      })
+      return
+    }
 
-    saveSessionPromise = (async () => {
-      const duration = sessionAudioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
+    try {
+      let savedCount = 0
+      let failedCount = 0
 
-      if (scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)) {
-        if (duration < MIN_MEETING_DURATION_SECONDS) {
-          await debugLog('transcribe.session', 'skip meeting persistence: duration too short', {
-            duration,
-            minimum: MIN_MEETING_DURATION_SECONDS,
+      for (const [index, segment] of realtimeSegments.entries()) {
+        try {
+          await persistRealtimeSegment(segment)
+          savedCount += 1
+        }
+        catch (error) {
+          failedCount += 1
+          lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
+          await debugLog('transcribe.session', 'failed to save realtime segment history', error instanceof Error ? {
+            index,
+            rawText: segment.rawText,
+            duration: segment.duration,
+            message: error.message,
+            stack: error.stack,
+          } : {
+            index,
+            rawText: segment.rawText,
+            duration: segment.duration,
+            error,
           })
-          saveSessionPromise = null
-          return
         }
-        await persistMeetingSession(transcript, duration)
-        return
       }
 
-      if (duration < MIN_REALTIME_DURATION_SECONDS) {
-        await debugLog('transcribe.session', 'skip realtime persistence: duration too short', {
-          duration,
-          minimum: MIN_REALTIME_DURATION_SECONDS,
-        })
-        saveSessionPromise = null
-        return
-      }
+      if (failedCount > 0 && savedCount > 0)
+        lastError.value = `已有 ${savedCount} 条断句保存，${failedCount} 条失败`
 
-      if (sessionRealtimeSegments.length === 0) {
-        await debugLog('transcribe.session', 'skip realtime persistence: no finalized segments', {
-          duration,
-          transcriptLength: transcript.length,
-        })
-        saveSessionPromise = null
-        return
-      }
-
-      try {
-        let savedCount = 0
-        let failedCount = 0
-
-        for (const [index, segment] of sessionRealtimeSegments.entries()) {
-          try {
-            await persistRealtimeSegment(segment)
-            savedCount += 1
-          }
-          catch (error) {
-            failedCount += 1
-            lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
-            await debugLog('transcribe.session', 'failed to save realtime segment history', error instanceof Error ? {
-              index,
-              rawText: segment.rawText,
-              duration: segment.duration,
-              message: error.message,
-              stack: error.stack,
-            } : {
-              index,
-              rawText: segment.rawText,
-              duration: segment.duration,
-              error,
-            })
-          }
-        }
-
-        if (failedCount > 0 && savedCount > 0)
-          lastError.value = `已有 ${savedCount} 条断句保存，${failedCount} 条失败`
-
-        await debugLog('transcribe.session', 'saved realtime transcription segments', {
-          duration,
-          savedCount,
-          failedCount,
-          segmentCount: sessionRealtimeSegments.length,
-        })
-      }
-      catch (error) {
-        lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
-        await debugLog('transcribe.session', 'failed to save realtime transcription session', error instanceof Error ? {
-          message: error.message,
-          stack: error.stack,
-        } : error)
-      }
-      finally {
-        saveSessionPromise = null
-      }
-    })()
-
-    return saveSessionPromise
+      await debugLog('transcribe.session', 'saved realtime transcription segments', {
+        duration,
+        savedCount,
+        failedCount,
+        segmentCount: realtimeSegments.length,
+      })
+    }
+    catch (error) {
+      lastError.value = error instanceof Error ? error.message : '实时转写历史保存失败'
+      await debugLog('transcribe.session', 'failed to save realtime transcription session', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error)
+    }
   }
 
-  async function persistMeetingSession(transcript: string, duration: number) {
+  async function persistMeetingSession(audioChunks: ArrayBuffer[], transcript: string, duration: number) {
     try {
-      if (sessionAudioChunks.length === 0) {
+      if (audioChunks.length === 0) {
         // No audio means we cannot create a meeting (会议链路依赖音频). Fall
         // back to a realtime task so the user does not lose the transcript.
         await debugLog('transcribe.session', 'meeting scene without audio, fallback to realtime task')
@@ -647,7 +744,7 @@ export function useTranscribe() {
         })
         return
       }
-      const wavFile = createWav(sessionAudioChunks, `meeting-session-${Date.now()}.wav`)
+      const wavFile = createWav(audioChunks, `meeting-session-${Date.now()}.wav`)
       const meetingTitle = `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`
       const meetingWorkflowId = await ensureMeetingWorkflowBinding()
         .catch(() => appStore.meetingWorkflowId)
@@ -677,7 +774,6 @@ export function useTranscribe() {
         meetingId: result?.meeting?.id,
         duration,
         bytes: wavFile.size,
-        segmentCount: sessionRecognizedTexts.length,
         workflowId: meetingWorkflowId,
       })
     }
@@ -687,9 +783,6 @@ export function useTranscribe() {
         message: error.message,
         stack: error.stack,
       } : error)
-    }
-    finally {
-      saveSessionPromise = null
     }
   }
 
@@ -750,6 +843,9 @@ export function useTranscribe() {
     // 已在识别中的断句仍会写入历史以便落库，但不会再注入光标。
     await drainPipeline()
     await persistRealtimeSession()
+    // 等待语音控制切换时「旧场景」会话的后台落库全部完成，确保中间历史不丢。
+    if (pendingFlushes.length > 0)
+      await Promise.allSettled(pendingFlushes.splice(0, pendingFlushes.length))
     status.value = 'idle'
   }
 
@@ -762,13 +858,14 @@ export function useTranscribe() {
     sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
     pendingSegments.splice(0, pendingSegments.length)
     segmentsBySeq.clear()
+    pendingFlushes.splice(0, pendingFlushes.length)
     nextSeq = 0
     commitSeq = 0
     activeWorkers = 0
     workflowActiveCount = 0
     pipelineAborted = false
+    postSwitchSuppressUntil = 0
     consumerPromise = null
-    saveSessionPromise = null
     appStore.invalidateWorkflowBindings()
     noiseFloorLevel.value = DEFAULT_NOISE_FLOOR
     listeningLevel.value = 0

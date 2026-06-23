@@ -109,6 +109,11 @@ const deletingTaskId = ref<number | null>(null)
 const resumingTaskId = ref<number | null>(null)
 const tasks = ref<TaskItem[]>([])
 const keyword = ref('')
+const taskPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  itemCount: 0,
+})
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const detailVisible = ref(false)
@@ -471,12 +476,8 @@ function applyTaskUpdate(task: TaskItem | null | undefined) {
     return
 
   const existingIndex = tasks.value.findIndex(item => item.id === task.id)
-  if (existingIndex === -1) {
-    tasks.value = [task, ...tasks.value].slice(0, 100)
-  }
-  else {
+  if (existingIndex !== -1)
     patchTaskRow(task)
-  }
 
   if (detailTask.value?.id === task.id)
     detailTask.value = { ...detailTask.value, ...task }
@@ -738,6 +739,15 @@ const activeTaskIds = computed(() => {
     .filter(task => isTaskActive(task))
     .map(task => task.id)
 })
+const taskPaginationConfig = computed(() => ({
+  page: taskPagination.page,
+  pageSize: taskPagination.pageSize,
+  itemCount: taskPagination.itemCount,
+  pageSizes: [10, 20, 50],
+  showSizePicker: true,
+  onUpdatePage: handleTaskPageChange,
+  onUpdatePageSize: handleTaskPageSizeChange,
+}))
 
 watch(() => route.query.taskId, (taskId) => {
   if (typeof taskId === 'string' && taskId.trim())
@@ -756,9 +766,16 @@ async function loadWorkflowOptions() {
 async function loadTasks(options?: { silent?: boolean }) {
   loading.value = true
   try {
-    const result = await getTranscriptionTasks({ offset: 0, limit: 100, type: TRANSCRIPTION_TASK_TYPES.BATCH, scope: 'all' })
-    tasks.value = result.data.items
-    applyExecutionSummaries(result.data.items)
+    const result = await getTranscriptionTasks({
+      offset: (taskPagination.page - 1) * taskPagination.pageSize,
+      limit: taskPagination.pageSize,
+      type: TRANSCRIPTION_TASK_TYPES.BATCH,
+      scope: 'all',
+    })
+    const items = result.data.items || []
+    tasks.value = items
+    taskPagination.itemCount = result.data.total || 0
+    applyExecutionSummaries(items)
   }
   catch {
     if (!options?.silent)
@@ -767,6 +784,17 @@ async function loadTasks(options?: { silent?: boolean }) {
   finally {
     loading.value = false
   }
+}
+
+function handleTaskPageChange(page: number) {
+  taskPagination.page = page
+  void loadTasks()
+}
+
+function handleTaskPageSizeChange(pageSize: number) {
+  taskPagination.pageSize = pageSize
+  taskPagination.page = 1
+  void loadTasks()
 }
 
 function executionSummaryFromExecutions(executions: ExecutionItem[]): ExecutionSummary {
@@ -840,6 +868,7 @@ async function handleCreateTask() {
     })
     message.success('批量转写任务已提交到 ASR 引擎')
     submitForm.audioUrl = ''
+    taskPagination.page = 1
     await loadTasks()
   }
   catch (error) {
@@ -1000,6 +1029,7 @@ async function handleUploadTask() {
     await uploadTranscriptionFile(formData)
     message.success('音频已上传并创建批量转写任务')
     clearSelectedFile()
+    taskPagination.page = 1
     await loadTasks()
   }
   catch (error) {
@@ -1033,6 +1063,7 @@ async function handleDeleteTask(row: TaskItem) {
   try {
     await deleteTranscriptionTask(row.id)
     tasks.value = tasks.value.filter(item => item.id !== row.id)
+    taskPagination.itemCount = Math.max(0, taskPagination.itemCount - 1)
     const nextSummaries = { ...executionSummaryByTask.value }
     delete nextSummaries[row.id]
     executionSummaryByTask.value = nextSummaries
@@ -1040,6 +1071,10 @@ async function handleDeleteTask(row: TaskItem) {
       detailVisible.value = false
       detailTask.value = null
       detailExecutions.value = []
+    }
+    if (tasks.value.length === 0 && taskPagination.page > 1) {
+      taskPagination.page -= 1
+      await loadTasks({ silent: true })
     }
     message.success('任务记录已删除')
   }
@@ -1203,7 +1238,7 @@ onBeforeUnmount(() => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <span class="text-sm font-600">任务列表</span>
           <div class="flex flex-wrap items-center gap-2">
-            <NInput v-model:value="keyword" clearable :maxlength="128" placeholder="搜索 ID / 类型 / 状态 / 工作流" size="small" class="w-full sm:!w-56" />
+            <NInput v-model:value="keyword" clearable :maxlength="128" placeholder="搜索当前页 ID / 类型 / 状态 / 工作流" size="small" class="w-full sm:!w-64" />
             <NButton quaternary size="small" :loading="syncingAll" @click="handleSyncProcessing">
               同步
             </NButton>
@@ -1219,13 +1254,14 @@ onBeforeUnmount(() => {
         :columns="columns"
         :data="filteredTasks"
         :loading="loading"
-        :pagination="{ pageSize: 10 }"
+        :pagination="taskPaginationConfig"
+        remote
         :scroll-x="1416"
         size="small"
       />
     </NCard>
 
-    <NModal v-model:show="detailVisible" preset="card" title="转写任务详情" class="modal-card max-w-3xl">
+    <NModal v-model:show="detailVisible" preset="card" title="转写任务详情" class="modal-card max-w-5xl">
       <div v-if="detailLoading" class="py-10 text-center text-slate">
         正在加载任务详情...
       </div>
@@ -1340,7 +1376,7 @@ onBeforeUnmount(() => {
                       {{ formatExecutionStatus(node.status) }} · {{ node.duration_ms || 0 }} ms
                     </div>
                   </div>
-                  <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                  <div class="mt-3">
                     <TextDiffPreview :before-text="sanitizeTranscriptionText(node.input_text)" :after-text="sanitizeTranscriptionText(node.output_text)" />
                   </div>
                   <div class="mt-3">

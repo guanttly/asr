@@ -37,6 +37,10 @@ services:
   asr: http://qwen-asr-batch:8000
   # OpenAI-compatible ASR may reject files over this size via audio_filesize_mb.
   asr_max_audio_size_mb: 25
+  # Optional legacy realtime streaming endpoint (qwen-asr-demo-streaming /api/start|/api/chunk|/api/finish).
+  # Leave empty unless you deploy a dedicated streaming ASR service; the OpenAPI asr.stream
+  # interface returns ERR_OPEN_STREAM_UNAVAILABLE (HTTP 503) when this is not configured.
+  asr_stream: ""
   asr_batch_sync_interval_sec: 20
   asr_batch_sync_batch_size: 20
   asr_batch_sync_warn_threshold: 3

@@ -18,10 +18,17 @@ type seedDictionary struct {
 	Entries     []domain.Entry
 }
 
+// DictReferenceChecker reports how many workflow nodes still reference a voice
+// command library, so deletion can be blocked while it is in use.
+type DictReferenceChecker interface {
+	CountVoiceCommandDictReferences(ctx context.Context, dictID uint64) (int, error)
+}
+
 type Service struct {
-	dictRepo  domain.DictRepository
-	entryRepo domain.EntryRepository
-	seedRepo  termdomain.SeedStateRepository
+	dictRepo   domain.DictRepository
+	entryRepo  domain.EntryRepository
+	seedRepo   termdomain.SeedStateRepository
+	refChecker DictReferenceChecker
 }
 
 const voiceCommandSeedStateKey = "voice_command_seed_initialized_v1"
@@ -29,6 +36,12 @@ const voiceCommandDictListLimit = 1000
 
 func NewService(dictRepo domain.DictRepository, entryRepo domain.EntryRepository, seedRepo termdomain.SeedStateRepository) *Service {
 	return &Service{dictRepo: dictRepo, entryRepo: entryRepo, seedRepo: seedRepo}
+}
+
+// SetReferenceChecker wires an optional checker used to block deletion of a
+// voice command library that is still referenced by workflow nodes.
+func (s *Service) SetReferenceChecker(checker DictReferenceChecker) {
+	s.refChecker = checker
 }
 
 func (s *Service) CreateDict(ctx context.Context, req *CreateDictRequest) (*DictResponse, error) {
@@ -92,6 +105,15 @@ func (s *Service) DeleteDict(ctx context.Context, id uint64) error {
 	}
 	if dict.IsBase {
 		return fmt.Errorf("%w: 基础控制指令组不允许删除，请直接编辑内容", ErrVoiceCommandBaseDictProtected)
+	}
+	if s.refChecker != nil {
+		count, err := s.refChecker.CountVoiceCommandDictReferences(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: 该控制指令组仍被 %d 个工作流节点引用，请先解除引用后再删除", ErrVoiceCommandDictInUse, count)
+		}
 	}
 	entries, err := s.entryRepo.ListByDict(ctx, id)
 	if err != nil {

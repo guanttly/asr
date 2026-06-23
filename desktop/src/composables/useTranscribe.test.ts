@@ -39,7 +39,9 @@ const appStoreMocks = vi.hoisted(() => {
   const state = {
     autoInject: false,
     appendHistory: vi.fn(),
-    hasCapability: vi.fn((key: string) => key === 'meeting' && state.meetingCapability),
+    hasCapability: vi.fn((key: string) =>
+      (key === 'meeting' && state.meetingCapability)
+      || (key === 'voiceControl' && state.voiceControlCapability)),
     invalidateWorkflowBindings: vi.fn(),
     meetingCapability: false,
     meetingWorkflowId: null as number | null,
@@ -53,6 +55,9 @@ const appStoreMocks = vi.hoisted(() => {
       singleChunkPeakMultiplier: 1.45,
     },
     sceneMode: 'report',
+    voiceCommandActive: false,
+    voiceControl: { enabled: false },
+    voiceControlCapability: false,
   }
   return { state }
 })
@@ -161,6 +166,9 @@ describe('useTranscribe realtime persistence', () => {
     appStoreMocks.state.meetingWorkflowId = null
     appStoreMocks.state.realtimeWorkflowId = null
     appStoreMocks.state.sceneMode = 'report'
+    appStoreMocks.state.voiceCommandActive = false
+    appStoreMocks.state.voiceControl.enabled = false
+    appStoreMocks.state.voiceControlCapability = false
     appStoreMocks.state.appendHistory.mockReset()
     appStoreMocks.state.hasCapability.mockClear()
     appStoreMocks.state.invalidateWorkflowBindings.mockReset()
@@ -212,6 +220,26 @@ describe('useTranscribe realtime persistence', () => {
     expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
     expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
     expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
+  })
+
+  it('skips realtime segment ASR in meeting mode when voice control is disabled', async () => {
+    authMocks.authedFetch.mockResolvedValue(envelope({ text: '不应被调用' }))
+    appStoreMocks.state.sceneMode = 'meeting'
+    appStoreMocks.state.meetingCapability = true
+    // Voice control disabled: the meeting is transcribed by the backend batch
+    // pipeline from the whole-session audio, so per-segment realtime ASR would be
+    // wasted backend load and is skipped.
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    for (let i = 0; i < 20; i++)
+      transcribe.handleChunk(createChunk(0))
+    await transcribe.stopAndFlush()
+
+    // No per-segment realtime ASR request is issued in meeting mode.
+    expect(authMocks.authedFetch).not.toHaveBeenCalled()
+    // The whole-session audio is still uploaded for backend batch transcription.
+    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
   })
 
   it('does not inject or append realtime history while recording in meeting mode', async () => {
@@ -333,5 +361,70 @@ describe('useTranscribe realtime persistence', () => {
     // The queued-but-not-started segments never reach ASR and are not recorded.
     expect(asrCallCount).toBe(3)
     expect(appStoreMocks.state.appendHistory).toHaveBeenCalledTimes(3)
+  })
+
+  it('persists the pre-switch meeting session when voice control switches scenes mid-recording', async () => {
+    authMocks.authedFetch.mockResolvedValue(envelope({ text: '切换到报告模式' }))
+    appStoreMocks.state.sceneMode = 'meeting'
+    appStoreMocks.state.meetingCapability = true
+    // Voice control must be enabled for meeting-mode realtime ASR to run (it is
+    // what detects the wake word / switch command).
+    appStoreMocks.state.voiceControlCapability = true
+    appStoreMocks.state.voiceControl.enabled = true
+
+    // The committed segment is a voice command that switches meeting -> report.
+    voiceControlMocks.handleSegmentText.mockImplementation(async () => {
+      appStoreMocks.state.sceneMode = 'report'
+      return { swallow: true, switched: true, previousScene: 'meeting' }
+    })
+
+    const transcribe = useTranscribe()
+    // Build up well over the meeting duration guard before the switch commits.
+    emitSegment(transcribe)
+    for (let i = 0; i < 30; i++)
+      transcribe.handleChunk(createChunk(0))
+    await transcribe.stopAndFlush()
+
+    // The pre-switch buffers are flushed under the OLD (meeting) scene so the
+    // intermediate history is not lost.
+    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    // The switch command words never leak into report history.
+    expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
+    expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
+  })
+
+  it('suppresses command residue segments recorded around a voice scene switch', async () => {
+    const texts = ['切到报告', '残留一', '残留二']
+    authMocks.authedFetch.mockImplementation(async () => envelope({ text: texts.shift() ?? '' }))
+    appStoreMocks.state.sceneMode = 'meeting'
+    appStoreMocks.state.meetingCapability = true
+    // Voice control enabled so meeting-mode realtime ASR runs and can detect the
+    // switch command.
+    appStoreMocks.state.voiceControlCapability = true
+    appStoreMocks.state.voiceControl.enabled = true
+
+    // Only the first committed segment is the switch command; the later segments
+    // were recorded around the switch and must be dropped as residue.
+    let call = 0
+    voiceControlMocks.handleSegmentText.mockImplementation(async () => {
+      call += 1
+      if (call === 1) {
+        appStoreMocks.state.sceneMode = 'report'
+        return { swallow: true, switched: true, previousScene: 'meeting' }
+      }
+      return { swallow: false }
+    })
+
+    const transcribe = useTranscribe()
+    emitSegment(transcribe)
+    emitSegment(transcribe)
+    emitSegment(transcribe)
+    await transcribe.stopAndFlush()
+
+    // Residual segments after the switch never reach report history, and they
+    // are dropped before voice classification even runs.
+    expect(voiceControlMocks.handleSegmentText).toHaveBeenCalledTimes(1)
+    expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
+    expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
   })
 })

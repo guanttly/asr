@@ -140,9 +140,15 @@ type workflowExecServiceStub struct {
 	inputText  string
 	audioURL   string
 	audioPath  string
+	// gate 若非 nil，ExecuteMeetingSummaryWorkflow 会先阻塞直到该 channel 被关闭，
+	// 便于测试在异步重新生成时精确控制后台 goroutine 的时序。
+	gate chan struct{}
 }
 
 func (s *workflowExecServiceStub) ExecuteMeetingSummaryWorkflow(_ context.Context, workflowID uint64, _ uint64, _ uint64, inputText, audioURL, audioFilePath string) (*appwf.ExecutionResponse, error) {
+	if s.gate != nil {
+		<-s.gate
+	}
 	s.workflowID = workflowID
 	s.inputText = inputText
 	s.audioURL = audioURL
@@ -207,14 +213,33 @@ func TestRegenerateSummaryPersistsWorkflowAndSummaryNodeOutput(t *testing.T) {
 		}},
 	}}
 	service := NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExec, nil, nil)
+	// 重新生成已改为异步：通过测试钩子等待后台 goroutine 完成后再断言落库效果。
+	done := make(chan uint64, 1)
+	service.backgroundDoneHook = func(id uint64) { done <- id }
+	// 关闸：后台 goroutine 会阻塞在工作流执行处，确保下面对"立即返回处理中"的断言
+	// 不受后台时序影响。
+	workflowExec.gate = make(chan struct{})
 
 	result, err := service.RegenerateSummary(context.Background(), 8, 5, &RegenerateSummaryRequest{WorkflowID: &workflowID})
 	if err != nil {
 		t.Fatalf("RegenerateSummary returned error: %v", err)
 	}
+	// 同步阶段：工作流绑定已更新、会议进入"处理中"，立即返回而不阻塞等待生成。
 	if meetingRepo.updated == nil || meetingRepo.updated.WorkflowID == nil || *meetingRepo.updated.WorkflowID != workflowID {
 		t.Fatalf("expected meeting workflow to be updated to %d, got %+v", workflowID, meetingRepo.updated)
 	}
+	if result.Status != string(domain.MeetingStatusProcessing) {
+		t.Fatalf("expected immediate response status %q, got %q", domain.MeetingStatusProcessing, result.Status)
+	}
+
+	// 放行后台生成并等待其完成，再校验真正落库的工作流入参与摘要内容。
+	close(workflowExec.gate)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async summary regeneration")
+	}
+
 	if workflowExec.workflowID != workflowID {
 		t.Fatalf("expected workflow executor to receive workflow_id=%d, got %d", workflowID, workflowExec.workflowID)
 	}
@@ -233,11 +258,20 @@ func TestRegenerateSummaryPersistsWorkflowAndSummaryNodeOutput(t *testing.T) {
 	if summaryRepo.created.ModelVersion != "qwen-summary" {
 		t.Fatalf("expected summary model version from node detail, got %q", summaryRepo.created.ModelVersion)
 	}
-	if result.WorkflowID == nil || *result.WorkflowID != workflowID {
-		t.Fatalf("expected response workflow_id=%d, got %+v", workflowID, result.WorkflowID)
+
+	// 生成完成后会议恢复为 completed，并能查询到刷新后的纪要内容。
+	detailResp, err := service.GetMeeting(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("GetMeeting returned error: %v", err)
 	}
-	if result.Summary == nil || result.Summary.Content != "会议摘要内容" {
-		t.Fatalf("expected response summary to be refreshed, got %+v", result.Summary)
+	if detailResp.Status != string(domain.MeetingStatusCompleted) {
+		t.Fatalf("expected meeting status completed after regeneration, got %q", detailResp.Status)
+	}
+	if detailResp.WorkflowID == nil || *detailResp.WorkflowID != workflowID {
+		t.Fatalf("expected response workflow_id=%d, got %+v", workflowID, detailResp.WorkflowID)
+	}
+	if detailResp.Summary == nil || detailResp.Summary.Content != "会议摘要内容" {
+		t.Fatalf("expected response summary to be refreshed, got %+v", detailResp.Summary)
 	}
 }
 

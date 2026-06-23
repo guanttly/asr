@@ -8,4 +8,5 @@ var (
 	ErrSensitiveEntryDuplicate    = errors.New("sensitive entry duplicate")
 	ErrSensitiveBaseDictProtected = errors.New("sensitive base dict protected")
 	ErrSensitiveBaseDictConflict  = errors.New("sensitive base dict conflict")
+	ErrSensitiveDictInUse         = errors.New("sensitive dict in use")
 )

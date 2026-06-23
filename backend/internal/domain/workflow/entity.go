@@ -21,7 +21,13 @@ type Workflow struct {
 	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
-// Node represents an ordered processing step in a workflow.
+// IsPreset reports whether the workflow is a built-in preset system template
+// (seeded by the system with owner id 0). Preset templates must not be deleted;
+// admin-created system templates own a non-zero owner id and remain removable.
+func (w *Workflow) IsPreset() bool {
+	return w.OwnerType == OwnerSystem && w.OwnerID == 0
+}
+
 type Node struct {
 	ID         uint64    `json:"id"`
 	WorkflowID uint64    `json:"workflow_id"`

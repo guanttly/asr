@@ -19,6 +19,14 @@ import { validateResourceName } from '@/utils/resourceName'
 
 const message = useMessage()
 const confirmDelete = useDeleteConfirmDialog()
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  const messageText = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+  if (typeof messageText === 'string' && messageText.trim())
+    return messageText.trim()
+  return fallback
+}
+
 const loading = ref(false)
 const entryLoading = ref(false)
 const dictSaving = ref(false)
@@ -308,10 +316,14 @@ async function handleDeleteDict(row: SensitiveDictItem) {
     }
     await loadDicts()
   }
-  catch {
-    message.error('敏感词库删除失败')
-    if (row.is_base)
+  catch (error) {
+    if (row.is_base) {
+      message.error('敏感词库删除失败')
       message.warning('基础敏感词库受保护，不允许删除。')
+    }
+    else {
+      message.error(extractErrorMessage(error, '敏感词库删除失败'))
+    }
   }
   finally {
     deletingDictId.value = null

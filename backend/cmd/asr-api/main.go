@@ -142,6 +142,10 @@ func (a *batchEngineAdapter) StartStreamSession(ctx context.Context) (string, er
 	return a.client.StartStreamSession(ctx)
 }
 
+func (a *batchEngineAdapter) StreamingAvailable() bool {
+	return a.client.StreamingAvailable()
+}
+
 func (a *batchEngineAdapter) PushStreamChunk(ctx context.Context, sessionID string, pcmData []byte) (*appasr.StreamChunkResponse, error) {
 	result, err := a.client.PushStreamChunk(ctx, sessionID, pcmData)
 	if err != nil {

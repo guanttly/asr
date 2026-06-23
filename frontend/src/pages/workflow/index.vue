@@ -2,7 +2,7 @@
 import type { DataTableColumns } from 'naive-ui'
 import type { ActiveWorkflowType, WorkflowOwnerType, WorkflowSourceKind, WorkflowTargetKind, WorkflowType } from '@/types/workflow'
 
-import { NButton, NSelect, NTag, useMessage } from 'naive-ui'
+import { NButton, NSelect, NTag, NTooltip, useMessage } from 'naive-ui'
 import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -25,6 +25,7 @@ interface WorkflowItem {
   validation_message?: string
   owner_type: WorkflowOwnerType
   owner_id: number
+  is_preset?: boolean
   source_id?: number
   is_published: boolean
   nodes?: Array<{ id: number, label?: string, node_type?: string, enabled?: boolean, is_fixed?: boolean }>
@@ -464,7 +465,12 @@ const columns: DataTableColumns<WorkflowItem> = [
       h(NButton, { text: true, type: 'primary', size: 'small', onClick: () => router.push(`/workflows/${row.id}`) }, { default: () => '编辑' }),
       h(NButton, { text: true, size: 'small', loading: cloningId.value === row.id, onClick: () => handleClone(row) }, { default: () => '克隆' }),
       h(NButton, { text: true, size: 'small', onClick: () => handleTogglePublish(row) }, { default: () => publishStatusMeta(row).actionLabel }),
-      h(NButton, { text: true, size: 'small', type: 'error', loading: deletingId.value === row.id, onClick: () => handleDelete(row) }, { default: () => '删除' }),
+      row.is_preset
+        ? h(NTooltip, null, {
+            trigger: () => h(NButton, { text: true, size: 'small', type: 'error', disabled: true }, { default: () => '删除' }),
+            default: () => '预置系统工作流不可删除',
+          })
+        : h(NButton, { text: true, size: 'small', type: 'error', loading: deletingId.value === row.id, onClick: () => handleDelete(row) }, { default: () => '删除' }),
     ]),
   },
 ]
@@ -626,10 +632,10 @@ onMounted(loadWorkflows)
             创建归属
           </div>
           <div class="mt-2 flex flex-wrap gap-2">
-            <NButton size="small" :type="form.owner_type === 'user' ? 'primary' : 'default'" color="#0f766e" @click="form.owner_type = 'user'">
+            <NButton size="small" :type="form.owner_type === 'user' ? 'primary' : 'default'" :quaternary="form.owner_type !== 'user'" color="#0f766e" @click="form.owner_type = 'user'">
               我的工作流
             </NButton>
-            <NButton size="small" :type="form.owner_type === 'system' ? 'primary' : 'default'" color="#0f766e" @click="form.owner_type = 'system'">
+            <NButton size="small" :type="form.owner_type === 'system' ? 'primary' : 'default'" :quaternary="form.owner_type !== 'system'" color="#0f766e" @click="form.owner_type = 'system'">
               系统模板
             </NButton>
           </div>

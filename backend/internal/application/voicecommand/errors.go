@@ -8,4 +8,5 @@ var (
 	ErrVoiceCommandBaseDictProtected = errors.New("voice command base dict protected")
 	ErrVoiceCommandBaseDictConflict  = errors.New("voice command base dict conflict")
 	ErrVoiceCommandIntentExists      = errors.New("voice command intent already exists")
+	ErrVoiceCommandDictInUse         = errors.New("voice command dict in use")
 )

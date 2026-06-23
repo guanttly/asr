@@ -25,6 +25,8 @@ import TextDiffPreview from '@/components/TextDiffPreview.vue'
 import { useConfirmActionDialog } from '@/composables/useConfirmActionDialog'
 import { useDeleteConfirmDialog } from '@/composables/useDeleteConfirmDialog'
 import { AUDIO_UPLOAD_MAX_SIZE_MB, AUDIO_UPLOAD_SIZE_LIMIT_MESSAGE, isAudioFileOverSizeLimit } from '@/constants/audioUpload'
+import { PRODUCT_FEATURE_KEYS } from '@/constants/product'
+import { useAppStore } from '@/stores/app'
 import { WORKFLOW_SOURCE_KINDS, WORKFLOW_TARGET_KINDS, WORKFLOW_TYPES } from '@/types/workflow'
 import { buildMeetingSummaryTokenBudget, buildNodeConfigOverrides, DEFAULT_MEETING_SUMMARY_CHUNK_PROMPT, DEFAULT_MEETING_SUMMARY_PROMPT, formatConfigText, getNodeDefaultConfig, hasTextPlaceholder, normalizeNodeConfig } from '@/utils/workflowNodeConfig'
 import { getWorkflowTemplateMeta } from '@/utils/workflowTemplateMeta'
@@ -95,6 +97,7 @@ interface EditableNodeDraft {
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
+const appStore = useAppStore()
 const confirmAction = useConfirmActionDialog()
 const confirmDelete = useDeleteConfirmDialog()
 const workflowId = computed(() => Number(route.params.id))
@@ -1349,7 +1352,12 @@ async function handleExecuteWorkflow() {
 
 onMounted(async () => {
   await loadPage()
-  await Promise.all([loadTermDictOptions(), loadFillerDictOptions(), loadSensitiveDictOptions(), loadVoiceCommandDictOptions(), loadTemplateOptions()])
+  // 控制指令库属于语音控制能力，普通版未开放该接口（返回 403），
+  // 仅在具备语音控制能力时加载，避免工作流编辑页弹出无关的加载失败提示（bug 14852）。
+  const dictLoaders = [loadTermDictOptions(), loadFillerDictOptions(), loadSensitiveDictOptions(), loadTemplateOptions()]
+  if (appStore.hasCapability(PRODUCT_FEATURE_KEYS.VOICE_CONTROL))
+    dictLoaders.push(loadVoiceCommandDictOptions())
+  await Promise.all(dictLoaders)
 })
 
 onBeforeUnmount(() => {

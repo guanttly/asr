@@ -227,6 +227,10 @@ func (h *WorkflowHandler) DeleteWorkflow(c *gin.Context) {
 	}
 
 	if err := h.service.DeleteWorkflow(c.Request.Context(), id); err != nil {
+		if errors.Is(err, appwf.ErrPresetWorkflowProtected) {
+			response.Error(c, http.StatusForbidden, errcode.CodeForbidden, err.Error())
+			return
+		}
 		response.Error(c, http.StatusInternalServerError, errcode.CodeInternal, err.Error())
 		return
 	}

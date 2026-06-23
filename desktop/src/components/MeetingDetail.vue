@@ -282,10 +282,25 @@ function normalizeMetaValue(value: string, placeholder: string) {
 }
 
 function buildPrintableMarkdownHtml(markdown: string) {
+  const accent = exportAccent.value.color
+  const soft = exportAccent.value.soft
+  // 导出的 PDF 在组件作用域之外的离屏节点渲染，scoped 的 `.markdown-body`
+  // 样式无法命中，因此这里为大模型常用的 Markdown 元素（标题、引用块、列表、
+  // 表格、加粗等）逐一注入行内样式，确保导出效果与预览一致，适配大模型格式。
   return renderMarkdown(markdown)
-    .replace(/<h1>/g, `<h1 style="font-size: ${exportFont.value.size + 8}px; margin: 0 0 12px; font-weight: 800; color: ${exportAccent.value.color}; line-height: 1.35;">`)
-    .replace(/<h2>/g, `<h2 style="font-size: ${exportFont.value.size + 3}px; margin: 18px 0 8px; font-weight: 700; color: ${exportAccent.value.color}; line-height: 1.45;">`)
+    .replace(/<h1>/g, `<h1 style="font-size: ${exportFont.value.size + 8}px; margin: 0 0 12px; font-weight: 800; color: ${accent}; line-height: 1.35;">`)
+    .replace(/<h2>/g, `<h2 style="font-size: ${exportFont.value.size + 3}px; margin: 18px 0 8px; font-weight: 700; color: ${accent}; line-height: 1.45;">`)
     .replace(/<h3>/g, `<h3 style="font-size: ${exportFont.value.size + 1}px; margin: 12px 0 6px; font-weight: 700; color: #0f172a; line-height: 1.5;">`)
+    .replace(/<p>/g, '<p style="margin: 8px 0;">')
+    .replace(/<ul>/g, '<ul style="margin: 8px 0; padding-left: 22px;">')
+    .replace(/<ol>/g, '<ol style="margin: 8px 0; padding-left: 22px;">')
+    .replace(/<li>/g, '<li style="margin: 4px 0;">')
+    .replace(/<strong>/g, '<strong style="font-weight: 700; color: #0f172a;">')
+    .replace(/<blockquote>/g, `<blockquote style="margin: 10px 0; padding: 6px 12px; border-left: 3px solid ${accent}; background: ${soft}; color: #475569; border-radius: 0 6px 6px 0;">`)
+    .replace(/<table>/g, '<table style="border-collapse: collapse; width: 100%; margin: 10px 0;">')
+    .replace(/<th>/g, `<th style="border: 1px solid rgba(148,163,184,0.5); padding: 6px 10px; text-align: left; vertical-align: top; background: ${soft}; font-weight: 700; color: ${accent};">`)
+    .replace(/<td>/g, '<td style="border: 1px solid rgba(148,163,184,0.5); padding: 6px 10px; text-align: left; vertical-align: top;">')
+    .replace(/<hr>/g, '<hr style="border: none; border-top: 1px solid rgba(148,163,184,0.4); margin: 16px 0;">')
 }
 
 function extractMeetingMeta(content: string): MeetingMeta {
@@ -378,7 +393,21 @@ function setMarkdownField(content: string, field: typeof MEETING_META_FIELDS[num
   // New line: follow the style of any sibling meta line so the header stays consistent.
   const sibling = findSiblingMetaStyle(lines)
   const insertIndex = findMetaInsertIndex(lines)
-  lines.splice(insertIndex, 0, buildMetaLine(field, value, sibling?.marker ?? '', sibling?.style ?? 'plain'))
+  const metaLine = buildMetaLine(field, value, sibling?.marker ?? '', sibling?.style ?? 'plain')
+  if (sibling === null) {
+    // 首次插入会议信息表头：若插入位置后面紧跟非空正文/标题，需补一个空行作为
+    // Markdown 段落分隔，避免表头与紧随的大模型生成标题/正文粘连成一段，
+    // 从而破坏原有排版（BUG14690：用户点击插入表头也要按 MD 格式插入）。
+    // 后续字段会插入到该 meta 块内部（紧贴上一行），空行始终留在块尾。
+    const nextLine = lines[insertIndex]
+    if (nextLine !== undefined && nextLine.trim() !== '')
+      lines.splice(insertIndex, 0, metaLine, '')
+    else
+      lines.splice(insertIndex, 0, metaLine)
+  }
+  else {
+    lines.splice(insertIndex, 0, metaLine)
+  }
   return lines.join('\n')
 }
 
@@ -488,7 +517,6 @@ async function cancelEdit() {
 async function saveEdits() {
   if (!detail.value || !canSave.value)
     return
-  syncMetaFieldsToDraft()
   const contentLength = Array.from(draftContent.value.trim()).length
   if (contentLength < 1 || contentLength > MAX_SUMMARY_MARKDOWN_LENGTH) {
     errorText.value = '会议纪要 Markdown 长度范围为 1-50000 个字符'
@@ -598,7 +626,6 @@ async function blobToBase64(blob: Blob) {
 async function exportToPdf() {
   if (!canExport.value)
     return
-  syncMetaFieldsToDraft()
   exporting.value = true
   errorText.value = ''
   const host = document.createElement('div')
@@ -1410,6 +1437,22 @@ onBeforeUnmount(() => {
 .markdown-body :deep(td) {
   border: 1px solid rgba(148, 163, 184, 0.36);
   padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body :deep(th) {
+  background: rgba(15, 118, 110, 0.08);
+  font-weight: 700;
+  color: #0f766e;
+}
+.markdown-body :deep(tbody tr:nth-child(even)) {
+  background: rgba(148, 163, 184, 0.06);
+}
+.markdown-body :deep(strong) { font-weight: 700; color: #0f172a; }
+.markdown-body :deep(hr) {
+  border: none;
+  border-top: 1px solid rgba(148, 163, 184, 0.32);
+  margin: 14px 0;
 }
 
 .transcript-list {

@@ -86,6 +86,7 @@ type WorkflowResponse struct {
 	ValidationMessage string                    `json:"validation_message,omitempty"`
 	OwnerType         domain.OwnerType          `json:"owner_type"`
 	OwnerID           uint64                    `json:"owner_id"`
+	IsPreset          bool                      `json:"is_preset"`
 	SourceID          *uint64                   `json:"source_id,omitempty"`
 	IsPublished       bool                      `json:"is_published"`
 	Nodes             []NodeResponse            `json:"nodes,omitempty"`
@@ -174,6 +175,7 @@ func ToWorkflowResponse(wf *domain.Workflow) *WorkflowResponse {
 		ValidationMessage: wf.ValidationMessage,
 		OwnerType:         wf.OwnerType,
 		OwnerID:           wf.OwnerID,
+		IsPreset:          wf.IsPreset(),
 		SourceID:          wf.SourceID,
 		IsPublished:       wf.IsPublished,
 		CreatedAt:         wf.CreatedAt,

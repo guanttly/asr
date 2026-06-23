@@ -10,6 +10,10 @@ export interface SegmentHandleResult {
   swallow: boolean
   /** True when the command flow just switched the scene mode. */
   switched?: boolean
+  /** The scene that was active *before* this switch, so the caller can persist
+   *  the pre-switch session under the correct scene. Only set when the scene
+   *  actually changed. */
+  previousScene?: SceneMode
   /** True when the wake word triggered command-listening this turn. */
   enteredCommandMode?: boolean
 }
@@ -18,18 +22,12 @@ export interface SegmentHandleResult {
 // silently swallow every spoken segment until the user's command times out.
 const COMMAND_FAILURE_LIMIT = 3
 const COMMAND_COUNTDOWN_TICK_MS = 200
-// After a successful scene switch we exit command mode immediately, but the
-// spoken command is often split across several ASR segments. Suppress any
-// trailing segments that arrive shortly after the switch so they are not
-// written to history / injected as dictation.
-const POST_SWITCH_SUPPRESS_MS = 1500
 
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let commandDeadline = 0
 let previousScene: SceneMode | null = null
 let pendingProcessing = 0
 let consecutiveFailures = 0
-let postSwitchSuppressUntil = 0
 
 function getAppStore() {
   return useAppStore()
@@ -155,12 +153,6 @@ export function useVoiceControl() {
     if (!appStore.voiceControl.enabled)
       return { swallow: false }
 
-    if (!appStore.voiceCommandActive && Date.now() < postSwitchSuppressUntil) {
-      // Trailing segment from a command we already acted on — keep it out of history.
-      void debugLog('voice.command', 'suppress residual segment after switch', { text })
-      return { swallow: true }
-    }
-
     if (appStore.voiceCommandActive) {
       // Already waiting for a command — bypass wake detection and only classify the command intent.
       setProcessing(true)
@@ -173,15 +165,18 @@ export function useVoiceControl() {
         void debugLog('voice.command', 'classify result', { text, result })
         const nextScene = resolveSceneModeFromVoiceIntent(result.intent)
         if (result.matched && nextScene) {
-          if (appStore.sceneMode !== nextScene) {
+          const switchedFrom = previousScene
+          const sceneChanged = appStore.sceneMode !== nextScene
+          if (sceneChanged) {
             appStore.sceneMode = nextScene
             // Bindings are scoped per workflow; force-refresh on scene change so
             // the next realtime segment uses the freshest workflow.
             appStore.invalidateWorkflowBindings()
           }
           exitCommandMode('switched')
-          postSwitchSuppressUntil = Date.now() + POST_SWITCH_SUPPRESS_MS
-          return { swallow: true, switched: true }
+          return sceneChanged
+            ? { swallow: true, switched: true, previousScene: switchedFrom ?? undefined }
+            : { swallow: true, switched: true }
         }
       }
       catch (error) {
@@ -189,10 +184,13 @@ export function useVoiceControl() {
         void debugLog('voice.command', 'classify failed', error instanceof Error ? { message: error.message } : error)
         if (consecutiveFailures >= COMMAND_FAILURE_LIMIT) {
           // Restore the previous scene and bail so we stop swallowing speech.
+          // The current segment was spoken *as a command* (we are in command
+          // mode), so swallow it instead of leaking the command text into the
+          // document/history.
           if (previousScene && appStore.sceneMode !== previousScene)
             appStore.sceneMode = previousScene
           exitCommandMode('failure')
-          return { swallow: false }
+          return { swallow: true }
         }
       }
       finally {
@@ -212,13 +210,16 @@ export function useVoiceControl() {
       enterCommandMode()
       const nextScene = resolveSceneModeFromVoiceIntent(result.intent)
       if (result.matched && nextScene) {
-        if (appStore.sceneMode !== nextScene) {
+        const switchedFrom = previousScene
+        const sceneChanged = appStore.sceneMode !== nextScene
+        if (sceneChanged) {
           appStore.sceneMode = nextScene
           appStore.invalidateWorkflowBindings()
         }
         exitCommandMode('switched')
-        postSwitchSuppressUntil = Date.now() + POST_SWITCH_SUPPRESS_MS
-        return { swallow: true, switched: true, enteredCommandMode: true }
+        return sceneChanged
+          ? { swallow: true, switched: true, enteredCommandMode: true, previousScene: switchedFrom ?? undefined }
+          : { swallow: true, switched: true, enteredCommandMode: true }
       }
       return { swallow: true, enteredCommandMode: true }
     }

@@ -85,6 +85,14 @@ interface RulePreviewState {
 const message = useMessage()
 const confirmAction = useConfirmActionDialog()
 const confirmDelete = useDeleteConfirmDialog()
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  const messageText = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
+  if (typeof messageText === 'string' && messageText.trim())
+    return messageText.trim()
+  return fallback
+}
+
 const loading = ref(false)
 const entryLoading = ref(false)
 const ruleLoading = ref(false)
@@ -256,6 +264,16 @@ const ruleMatchOptions = [
 const currentRuleMatch = computed(() => ruleMatchMeta[ruleForm.matchType] || ruleMatchMeta.regex)
 const currentRuleExamples = computed(() => ruleExamples[ruleForm.matchType])
 const rulePreview = computed(() => buildRulePreview())
+
+// 正则语法校验：实时检测当前正则是否可编译，用于在弹窗内给出醒目提示（bug 14765）。
+const regexPatternError = computed(() => {
+  if (ruleForm.matchType !== 'regex')
+    return ''
+  const pattern = ruleForm.pattern.trim()
+  if (!pattern)
+    return ''
+  return regexCompiles(pattern) ? '' : '正则表达式语法有误，无法编译，请检查括号、转义符号是否成对。'
+})
 
 function ruleMatchLabel(value: string) {
   return ruleMatchMeta[value as RuleMatchType]?.label || '历史规则（请编辑确认类型）'
@@ -1049,8 +1067,8 @@ async function handleDeleteDict(row: DictItem) {
     }
     await loadDicts()
   }
-  catch {
-    message.error('词库删除失败')
+  catch (error) {
+    message.error(extractErrorMessage(error, '词库删除失败'))
   }
   finally {
     deletingDictId.value = null
@@ -1484,8 +1502,11 @@ onMounted(loadDicts)
         <template v-if="ruleNeedsPattern(ruleForm.matchType)">
           <div class="rule-input-grid">
             <NFormItem :show-feedback="false" :label="currentRuleMatch.patternLabel">
-              <NInput v-model:value="ruleForm.pattern" :maxlength="1000" :placeholder="currentRuleMatch.patternPlaceholder" />
-              <div class="rule-field-tip">
+              <NInput v-model:value="ruleForm.pattern" :maxlength="1000" :status="regexPatternError ? 'error' : undefined" :placeholder="currentRuleMatch.patternPlaceholder" />
+              <div v-if="regexPatternError" class="rule-field-error">
+                {{ regexPatternError }}
+              </div>
+              <div v-else class="rule-field-tip">
                 正则规则支持分组；固定文本替换会按原文逐字匹配。
               </div>
             </NFormItem>
@@ -1660,6 +1681,14 @@ onMounted(loadDicts)
   margin-top: 4px;
   color: #64748b;
   font-size: 12px;
+  line-height: 18px;
+}
+
+.rule-field-error {
+  margin-top: 4px;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 18px;
 }
 

@@ -19,6 +19,8 @@ type Config struct {
 	Product      ProductConfig      `mapstructure:"product"`
 	Services     ServiceConfig      `mapstructure:"services"`
 	Upload       UploadConfig       `mapstructure:"upload"`
+	Meeting      MeetingConfig      `mapstructure:"meeting"`
+	Cleanup      CleanupConfig      `mapstructure:"cleanup"`
 	Download     DownloadConfig     `mapstructure:"download"`
 	Catalog      CatalogConfig      `mapstructure:"catalog"`
 	RulesCatalog RulesCatalogConfig `mapstructure:"rules_catalog"`
@@ -222,6 +224,42 @@ type UploadConfig struct {
 	MaxSessionSizeMB int64 `mapstructure:"max_session_size_mb"`
 }
 
+// MeetingConfig tunes the durable, resumable meeting upload pipeline that keeps
+// long recordings safe by streaming them to the server progressively instead of
+// buffering the whole recording in the client's memory.
+type MeetingConfig struct {
+	// MinRecordingDurationSec is the cumulative duration at which an in-progress
+	// recording is promoted to a real (resumable) meeting. Recordings shorter
+	// than this never become meetings.
+	MinRecordingDurationSec float64 `mapstructure:"min_recording_duration_sec"`
+	// UploadSessionInactiveTimeoutMinutes is how long a recording session may go
+	// without a heartbeat before it is marked interrupted and recovered
+	// server-side.
+	UploadSessionInactiveTimeoutMinutes int `mapstructure:"upload_session_inactive_timeout_minutes"`
+	// UploadSessionResumeRetentionDays is how long an interrupted session's temp
+	// segments are kept so a client can resume (or the server can recover) it.
+	UploadSessionResumeRetentionDays int `mapstructure:"upload_session_resume_retention_days"`
+	// CompletedTempRetentionHours is how long a completed session's temp PCM
+	// segments are kept after the formal audio has been assembled.
+	CompletedTempRetentionHours int `mapstructure:"completed_temp_retention_hours"`
+	// FormalAudioRetentionDays is the retention policy for assembled meeting
+	// audio. 0 disables automatic enforcement (the default; deleting user audio
+	// is destructive and opt-in).
+	FormalAudioRetentionDays int `mapstructure:"formal_audio_retention_days"`
+}
+
+// CleanupConfig drives the background reclamation task that removes orphaned
+// upload temp data and stale logs without ever touching active recordings.
+type CleanupConfig struct {
+	// IntervalMinutes is how often the cleanup task runs.
+	IntervalMinutes int `mapstructure:"interval_minutes"`
+	// LogRetentionDays is the retention for general application logs. 0 disables.
+	LogRetentionDays int `mapstructure:"log_retention_days"`
+	// OpenapiBodyLogRetentionDays is the retention for OpenAPI request/response
+	// body logs. 0 falls back to open_auth.log_retention_days.
+	OpenapiBodyLogRetentionDays int `mapstructure:"openapi_body_log_retention_days"`
+}
+
 // DownloadConfig holds local downloadable package storage settings.
 type DownloadConfig struct {
 	Dir            string `mapstructure:"dir"`
@@ -300,6 +338,14 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("upload.max_audio_size_mb", 200)
 	v.SetDefault("upload.max_chunk_size_mb", 8)
 	v.SetDefault("upload.max_session_size_mb", 4096)
+	v.SetDefault("meeting.min_recording_duration_sec", 5)
+	v.SetDefault("meeting.upload_session_inactive_timeout_minutes", 60)
+	v.SetDefault("meeting.upload_session_resume_retention_days", 7)
+	v.SetDefault("meeting.completed_temp_retention_hours", 24)
+	v.SetDefault("meeting.formal_audio_retention_days", 180)
+	v.SetDefault("cleanup.interval_minutes", 10)
+	v.SetDefault("cleanup.log_retention_days", 30)
+	v.SetDefault("cleanup.openapi_body_log_retention_days", 30)
 	v.SetDefault("download.dir", "downloads")
 	v.SetDefault("download.public_base_path", "/downloads/files")
 	v.SetDefault("catalog.dir", "")

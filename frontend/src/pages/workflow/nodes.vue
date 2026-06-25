@@ -775,12 +775,30 @@ onMounted(async () => {
                   </div>
                   <NInput :value="selectedConfig.api_key" :maxlength="512" type="password" show-password-on="click" placeholder="默认 API Key，可留空" @update:value="updateSelectedConfig({ api_key: $event })" />
                   <div class="grid gap-3 lg:grid-cols-3">
-                    <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0.3 })" />
-                    <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="256" @update:value="updateSelectedConfig({ max_tokens: $event ?? 4096 })" />
-                    <div class="flex items-center gap-2 rounded-2 bg-white px-3 py-2.5">
-                      <span class="text-xs text-slate">允许 Markdown 输出</span>
-                      <NSwitch :value="selectedConfig.allow_markdown" @update:value="updateSelectedConfig({ allow_markdown: $event })" />
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        温度
+                      </div>
+                      <NInputNumber :value="selectedConfig.temperature" :min="0" :max="2" :step="0.1" @update:value="updateSelectedConfig({ temperature: $event ?? 0.3 })" />
                     </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        模型 Token 上限
+                      </div>
+                      <NInputNumber :value="selectedConfig.max_tokens" :min="1" :step="256" @update:value="updateSelectedConfig({ max_tokens: $event ?? 4096 })" />
+                    </div>
+                    <div>
+                      <div class="text-xs text-slate/70">
+                        输出格式
+                      </div>
+                      <div class="flex items-center gap-2 rounded-2 bg-white px-3 py-2.5">
+                        <span class="text-xs text-slate">允许 Markdown 输出</span>
+                        <NSwitch :value="selectedConfig.allow_markdown" @update:value="updateSelectedConfig({ allow_markdown: $event })" />
+                      </div>
+                    </div>
+                  </div>
+                  <div class="text-xs leading-6 text-slate/75">
+                    填写所选模型的总 Token 上限（上下文窗口）即可。系统会自动扣除提示词占用，并对长文本自动分段校对，无需手动为提示词预留 Token。
                   </div>
                   <NInput
                     :value="selectedConfig.prompt_template"

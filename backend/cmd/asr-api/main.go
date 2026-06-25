@@ -11,6 +11,7 @@ import (
 
 	appasr "github.com/lgt/asr/internal/application/asr"
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
+	appmeetingupload "github.com/lgt/asr/internal/application/meetingupload"
 	appnlp "github.com/lgt/asr/internal/application/nlp"
 	appopenplatform "github.com/lgt/asr/internal/application/openplatform"
 	appterm "github.com/lgt/asr/internal/application/terminology"
@@ -338,6 +339,80 @@ func startMeetingSyncLoop(logger *zap.Logger, service *appmeeting.Service, inter
 	}()
 }
 
+// buildMeetingUploadConfig maps app configuration onto the resumable upload
+// service's tunables.
+func buildMeetingUploadConfig(cfg *pkgconfig.Config) appmeetingupload.Config {
+	return appmeetingupload.Config{
+		UploadDir:              cfg.Upload.Dir,
+		MaxChunkBytes:          cfg.Upload.MaxChunkSizeMB * 1024 * 1024,
+		MaxSessionBytes:        cfg.Upload.MaxSessionSizeMB * 1024 * 1024,
+		MinRecordingDuration:   time.Duration(cfg.Meeting.MinRecordingDurationSec * float64(time.Second)),
+		InactiveTimeout:        time.Duration(cfg.Meeting.UploadSessionInactiveTimeoutMinutes) * time.Minute,
+		ResumeRetention:        time.Duration(cfg.Meeting.UploadSessionResumeRetentionDays) * 24 * time.Hour,
+		CompletedTempRetention: time.Duration(cfg.Meeting.CompletedTempRetentionHours) * time.Hour,
+	}
+}
+
+// startMeetingUploadMaintenanceLoop periodically recovers interrupted upload
+// sessions (the server-side safety net that guarantees a recording is never
+// lost) and reclaims orphaned temp data, without ever touching an active
+// recording.
+func startMeetingUploadMaintenanceLoop(logger *zap.Logger, svc *appmeetingupload.Service, intervalMinutes int) {
+	if intervalMinutes <= 0 {
+		intervalMinutes = 10
+	}
+	interval := time.Duration(intervalMinutes) * time.Minute
+	timeout := 30 * time.Minute
+	if timeout < interval {
+		timeout = interval
+	}
+
+	var running atomic.Bool
+	runOnce := func() {
+		if !running.CompareAndSwap(false, true) {
+			logger.Info("meeting upload maintenance tick skipped because previous tick is still running")
+			return
+		}
+		defer running.Store(false)
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		if summary, err := svc.RecoverInterrupted(ctx); err != nil {
+			logger.Warn("meeting upload recovery failed", zap.Error(err))
+		} else if summary.Interrupted+summary.Finalized+summary.Aborted+summary.Failed > 0 {
+			logger.Info(
+				"meeting upload recovery tick",
+				zap.Int("interrupted", summary.Interrupted),
+				zap.Int("finalized", summary.Finalized),
+				zap.Int("aborted", summary.Aborted),
+				zap.Int("failed", summary.Failed),
+			)
+		}
+
+		if summary, err := svc.Cleanup(ctx); err != nil {
+			logger.Warn("meeting upload cleanup failed", zap.Error(err))
+		} else if summary.Reclaimed+summary.Failed > 0 {
+			logger.Info(
+				"meeting upload cleanup tick",
+				zap.Int("reclaimed", summary.Reclaimed),
+				zap.Int("failed", summary.Failed),
+			)
+		}
+	}
+
+	go func() {
+		logger.Info("meeting upload maintenance loop started", zap.Int("interval_minutes", intervalMinutes))
+		runOnce()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			runOnce()
+		}
+	}()
+}
+
 func main() {
 	cfg, err := pkgconfig.Load("configs/config.yaml")
 	if err != nil {
@@ -420,9 +495,12 @@ func main() {
 	asrService.SetHotwordProvider(appterm.NewHotwordProvider(entryRepo))
 	asrService.SetStreamSessionTTL(time.Duration(cfg.Services.ASRStreamSessionRolloverSec) * time.Second)
 	meetingService := appmeeting.NewService(meetingRepo, transcriptRepo, summaryRepo, workflowExecutor, &meetingBatchEngineAdapter{client: asrEngineClient}, businessHub)
+	uploadRepo := persistence.NewUploadRepo(db)
+	meetingUploadService := appmeetingupload.NewService(uploadRepo, meetingService, buildMeetingUploadConfig(cfg), logger.Sugar())
 	voiceprintService := appvoiceprint.NewService(speakerServiceClient)
 	startBatchSyncLoop(logger, asrService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize, cfg.Services.ASRBatchSyncWarnThreshold)
 	startMeetingSyncLoop(logger, meetingService, cfg.Services.ASRBatchSyncIntervalSec, cfg.Services.ASRBatchSyncBatchSize)
+	startMeetingUploadMaintenanceLoop(logger, meetingUploadService, cfg.Cleanup.IntervalMinutes)
 
 	if err := os.MkdirAll(cfg.Upload.Dir, 0o755); err != nil {
 		log.Fatal(err)
@@ -447,7 +525,7 @@ func main() {
 	protected := router.Group("/api", middleware.AuthRequired(cfg.JWT.Secret))
 	productFeatures := cfg.Product.Features()
 	api.NewASRHandler(asrService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB).Register(protected.Group("/asr"))
-	api.NewMeetingHandler(meetingService, workflowService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, cfg.Upload.MaxChunkSizeMB, cfg.Upload.MaxSessionSizeMB, productFeatures).Register(protected.Group("/meetings"))
+	api.NewMeetingHandler(meetingService, workflowService, meetingUploadService, cfg.Upload.Dir, cfg.Upload.PublicBaseURL, cfg.Upload.MaxAudioSizeMB, cfg.Upload.MaxChunkSizeMB, productFeatures).Register(protected.Group("/meetings"))
 	api.NewVoiceprintHandler(voiceprintService, cfg.Upload.MaxAudioSizeMB, productFeatures).Register(protected.Group("/meetings/voiceprints"))
 	router.GET("/ws/events", middleware.AuthRequired(cfg.JWT.Secret), businessHub.Handle)
 

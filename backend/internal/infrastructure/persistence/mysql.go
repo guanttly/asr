@@ -60,6 +60,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&TaskModel{},
 		&AdminOperationStateModel{},
 		&MeetingModel{},
+		&UploadSessionModel{},
+		&UploadSegmentModel{},
 		&TranscriptModel{},
 		&SummaryModel{},
 		&DictModel{},

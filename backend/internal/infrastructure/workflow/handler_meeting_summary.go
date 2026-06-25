@@ -327,7 +327,9 @@ func (h *MeetingSummaryHandler) executeSummaryPrompt(ctx context.Context, cfg Me
 		AllowMarkdown:  true,
 	}
 	llmConfigBytes, _ := json.Marshal(llmCfg)
-	output, detail, err := h.llmHandler.Execute(ctx, llmConfigBytes, inputText, nil)
+	// The meeting summary node manages its own chunking and token budgets, so it
+	// uses the single-call variant to avoid double chunking the input.
+	output, detail, err := h.llmHandler.ExecuteSingle(ctx, llmConfigBytes, inputText)
 	if err != nil {
 		return inputText, detail, err
 	}
@@ -350,7 +352,9 @@ func (h *MeetingSummaryHandler) executeSummaryPromptStream(ctx context.Context, 
 		AllowMarkdown:  true,
 	}
 	llmConfigBytes, _ := json.Marshal(llmCfg)
-	output, detail, err := h.llmHandler.ExecuteStream(ctx, llmConfigBytes, inputText, nil, emit)
+	// The meeting summary node manages its own chunking and token budgets, so it
+	// uses the single-call variant to avoid double chunking the input.
+	output, detail, err := h.llmHandler.ExecuteSingleStream(ctx, llmConfigBytes, inputText, emit)
 	if err != nil {
 		return inputText, detail, err
 	}

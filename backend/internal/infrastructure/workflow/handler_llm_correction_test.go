@@ -3,9 +3,11 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -86,8 +88,11 @@ func TestLLMCorrectionHandlerRetriesWithReducedMaxTokensOnContextOverflow(t *tes
 		}
 
 		if callNumber == 1 {
-			if payload.MaxTokens != 4096 {
-				t.Fatalf("expected first request max_tokens=4096, got %d", payload.MaxTokens)
+			// The configured budget (4096) is the total token limit; the handler
+			// subtracts the rendered prompt tokens, so the first request must ask
+			// for fewer than the configured value.
+			if payload.MaxTokens <= 0 || payload.MaxTokens >= 4096 {
+				t.Fatalf("expected first request max_tokens in (0, 4096), got %d", payload.MaxTokens)
 			}
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"message":"max_tokens or 'max_completion_tokens' is too large: 4096. This model's maximum context length is 8192 tokens and your request has 6336 input tokens (4096 > 8192 - 6336). None","type":"BadRequestError","code":400}}`))
@@ -142,8 +147,10 @@ func TestLLMCorrectionHandlerRetriesWithProviderMaxTokenRange(t *testing.T) {
 		}
 
 		if callNumber == 1 {
-			if payload.MaxTokens != 200000 {
-				t.Fatalf("expected first request max_tokens=200000, got %d", payload.MaxTokens)
+			// The configured budget (200000) is the total token limit; the handler
+			// subtracts the rendered prompt tokens before sending the request.
+			if payload.MaxTokens <= 0 || payload.MaxTokens >= 200000 {
+				t.Fatalf("expected first request max_tokens in (0, 200000), got %d", payload.MaxTokens)
 			}
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Range of max_tokens should be [1, 65536]","type":"invalid_request_error","code":"invalid_parameter_error"}}`))
@@ -181,6 +188,73 @@ func TestLLMCorrectionHandlerRetriesWithProviderMaxTokenRange(t *testing.T) {
 	}
 	if parsedDetail["max_tokens"] != float64(65536) {
 		t.Fatalf("expected detail max_tokens=65536, got %+v", parsedDetail["max_tokens"])
+	}
+}
+
+func TestLLMCorrectionHandlerChunksLongInput(t *testing.T) {
+	var callCount atomic.Int32
+	contents := make([]string, 0)
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		var payload struct {
+			MaxTokens int `json:"max_tokens"`
+			Messages  []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.MaxTokens <= 0 {
+			t.Fatalf("expected positive max_tokens, got %d", payload.MaxTokens)
+		}
+		content := fmt.Sprintf("整理%d", n)
+		mu.Lock()
+		contents = append(contents, content)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"` + content + `"}}],"model":"qwen3-4b","usage":{"prompt_tokens":1600,"completion_tokens":200}}`))
+	}))
+	defer server.Close()
+
+	handler := NewLLMCorrectionHandler()
+	configBytes := []byte(`{
+		"endpoint": "` + server.URL + `",
+		"model": "qwen3-4b",
+		"prompt_template": "请整理以下文本：\n{{TEXT}}",
+		"temperature": 0.3,
+		"max_tokens": 4096
+	}`)
+
+	// ~6000 runes of sentence-delimited text forces several chunks at the
+	// 1600-rune correction quality cap.
+	longInput := strings.Repeat("这是一个会议记录的句子。", 500)
+	output, detail, err := handler.Execute(context.Background(), configBytes, longInput, nil)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if callCount.Load() < 2 {
+		t.Fatalf("expected long input to be chunked into multiple requests, got %d", callCount.Load())
+	}
+
+	mu.Lock()
+	expected := strings.Join(contents, "\n")
+	mu.Unlock()
+	if output != expected {
+		t.Fatalf("expected concatenated chunk outputs %q, got %q", expected, output)
+	}
+
+	var parsedDetail map[string]any
+	if err := json.Unmarshal(detail, &parsedDetail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if parsedDetail["chunked"] != true {
+		t.Fatalf("expected chunked=true in detail, got %+v", parsedDetail["chunked"])
+	}
+	chunkOutputs, ok := parsedDetail["chunk_outputs"].([]any)
+	if !ok || len(chunkOutputs) != int(callCount.Load()) {
+		t.Fatalf("expected chunk_outputs to match request count %d, got %+v", callCount.Load(), parsedDetail["chunk_outputs"])
 	}
 }
 

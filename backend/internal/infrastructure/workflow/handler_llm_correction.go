@@ -11,6 +11,29 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+)
+
+const (
+	// llmCorrectionDefaultMaxTokens is the fallback total token budget when none
+	// is configured. The configured value is treated as the model's total token
+	// limit (prompt + completion), not just the completion budget.
+	llmCorrectionDefaultMaxTokens = 4096
+	// llmCorrectionChunkMaxRunes caps the input size per chunk for correction
+	// quality, so an over-long context cannot degrade correction or drop
+	// paragraphs.
+	llmCorrectionChunkMaxRunes = 1600
+	// llmCorrectionChunkMinRunes prevents pathological fragmentation when the
+	// configured budget is unusually small.
+	llmCorrectionChunkMinRunes = 200
+	// llmCorrectionTokenSafetyMargin reserves headroom for tokenizer differences
+	// between our rune-based estimate and the provider's count.
+	llmCorrectionTokenSafetyMargin = 256
+	// llmCorrectionMinCompletionTokens is the floor for the derived completion
+	// budget.
+	llmCorrectionMinCompletionTokens = 256
+	// correctionChunkSeparator joins corrected chunks back into one document.
+	correctionChunkSeparator = "\n"
 )
 
 // LLMCorrectionConfig is the configuration for the LLM correction node.
@@ -71,20 +94,31 @@ func (h *LLMCorrectionHandler) Validate(config json.RawMessage) error {
 	return nil
 }
 
+// correctionChunkDebug mirrors the JSON shape consumed by the frontend
+// NodeDetailPanel (chunk_outputs) so chunked correction reuses the per-chunk
+// tabbed preview.
+type correctionChunkDebug struct {
+	Title      string `json:"title"`
+	Output     string `json:"output"`
+	Prompt     string `json:"prompt"`
+	InputRunes int    `json:"input_runes"`
+}
+
+// Execute runs the LLM correction node. Long input is split into chunks so the
+// model corrects every paragraph (avoiding omissions and quality loss from an
+// over-long context), and the per-request completion budget is derived from the
+// configured token limit minus the prompt length so callers no longer have to
+// subtract the prompt tokens by hand.
 func (h *LLMCorrectionHandler) Execute(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta) (string, json.RawMessage, error) {
 	if strings.TrimSpace(inputText) == "" {
 		return "", emptyLLMCorrectionDetail(false), nil
 	}
 
-	cfg, prompt, temperature, maxTokens, endpoint, err := h.prepareRequest(config, inputText)
+	cfg, endpoint, err := resolveLLMConfig(config)
 	if err != nil {
 		return inputText, nil, err
 	}
-	respBody, usedMaxTokens, err := h.executeWithContextRetry(ctx, endpoint, cfg, prompt, temperature, maxTokens)
-	if err != nil {
-		return inputText, nil, err
-	}
-	return parseLLMResponse(respBody, cfg.AllowMarkdown, usedMaxTokens)
+	return h.runCorrection(ctx, cfg, endpoint, inputText, false, nil)
 }
 
 func (h *LLMCorrectionHandler) ExecuteStream(ctx context.Context, config json.RawMessage, inputText string, _ *ExecutionMeta, emit StreamEmitter) (string, json.RawMessage, error) {
@@ -92,42 +126,341 @@ func (h *LLMCorrectionHandler) ExecuteStream(ctx context.Context, config json.Ra
 		return "", emptyLLMCorrectionDetail(true), nil
 	}
 
-	cfg, prompt, temperature, maxTokens, endpoint, err := h.prepareRequest(config, inputText)
+	cfg, endpoint, err := resolveLLMConfig(config)
 	if err != nil {
 		return inputText, nil, err
 	}
-	return h.executeWithContextRetryStream(ctx, endpoint, cfg, prompt, temperature, maxTokens, emit)
+	return h.runCorrection(ctx, cfg, endpoint, inputText, true, emit)
 }
 
-func (h *LLMCorrectionHandler) prepareRequest(config json.RawMessage, inputText string) (LLMCorrectionConfig, string, float64, int, string, error) {
-	var cfg LLMCorrectionConfig
-	if err := json.Unmarshal(config, &cfg); err != nil {
-		return LLMCorrectionConfig{}, "", 0, 0, "", err
+// ExecuteSingle performs a single correction request without input chunking,
+// sending the configured MaxTokens directly as the completion budget. Callers
+// that manage their own chunking and token budgets (e.g. the meeting summary
+// node) use this to avoid double chunking.
+func (h *LLMCorrectionHandler) ExecuteSingle(ctx context.Context, config json.RawMessage, inputText string) (string, json.RawMessage, error) {
+	if strings.TrimSpace(inputText) == "" {
+		return "", emptyLLMCorrectionDetail(false), nil
+	}
+	cfg, endpoint, err := resolveLLMConfig(config)
+	if err != nil {
+		return inputText, nil, err
+	}
+	prompt := buildCorrectionPrompt(cfg, inputText)
+	output, detail, _, err := h.completeOnce(ctx, cfg, endpoint, prompt, cfg.MaxTokens)
+	if err != nil {
+		return inputText, nil, err
+	}
+	return output, detail, nil
+}
+
+// ExecuteSingleStream is the streaming counterpart of ExecuteSingle.
+func (h *LLMCorrectionHandler) ExecuteSingleStream(ctx context.Context, config json.RawMessage, inputText string, emit StreamEmitter) (string, json.RawMessage, error) {
+	if strings.TrimSpace(inputText) == "" {
+		return "", emptyLLMCorrectionDetail(true), nil
+	}
+	cfg, endpoint, err := resolveLLMConfig(config)
+	if err != nil {
+		return inputText, nil, err
+	}
+	prompt := buildCorrectionPrompt(cfg, inputText)
+	return h.completeOnceStream(ctx, cfg, endpoint, prompt, cfg.MaxTokens, emit)
+}
+
+// runCorrection decides between a single request and chunked correction, then
+// runs each chunk with a prompt-aware completion budget. The streaming flag
+// selects the SSE path (used by ExecuteStream) regardless of whether emit is nil.
+func (h *LLMCorrectionHandler) runCorrection(ctx context.Context, cfg LLMCorrectionConfig, endpoint, inputText string, streaming bool, emit StreamEmitter) (string, json.RawMessage, error) {
+	budget := cfg.MaxTokens
+	templateTokens := estimatePromptTokens(buildCorrectionPrompt(cfg, ""))
+	chunkRunes := correctionChunkRunes(templateTokens, budget)
+	chunks := splitCorrectionChunks(inputText, chunkRunes)
+
+	if len(chunks) <= 1 {
+		text := strings.TrimSpace(inputText)
+		if len(chunks) == 1 {
+			text = chunks[0]
+		}
+		prompt := buildCorrectionPrompt(cfg, text)
+		completion := correctionCompletionTokens(estimatePromptTokens(prompt), budget)
+		if streaming {
+			return h.completeOnceStream(ctx, cfg, endpoint, prompt, completion, emit)
+		}
+		output, detail, _, err := h.completeOnce(ctx, cfg, endpoint, prompt, completion)
+		if err != nil {
+			return inputText, nil, err
+		}
+		return output, detail, nil
 	}
 
-	prompt := cfg.PromptTemplate
-	if prompt == "" {
-		prompt = defaultLLMPrompt
+	corrected := make([]string, 0, len(chunks))
+	chunkDebug := make([]correctionChunkDebug, 0, len(chunks))
+	totalPromptTokens, totalCompletionTokens := 0, 0
+	model := ""
+	completionCap := budget
+	for index, chunk := range chunks {
+		if emit != nil {
+			if err := emit(&NodeStreamEvent{
+				Type:    NodeStreamEventStatus,
+				Message: fmt.Sprintf("正在校对第 %d/%d 段...", index+1, len(chunks)),
+			}); err != nil {
+				return inputText, nil, err
+			}
+		}
+		prompt := buildCorrectionPrompt(cfg, chunk)
+		completion := correctionCompletionTokens(estimatePromptTokens(prompt), budget)
+		if completion > completionCap {
+			completion = completionCap
+		}
+
+		var (
+			out    string
+			detail json.RawMessage
+			used   int
+			err    error
+		)
+		if streaming {
+			prefix := joinCorrectedChunks(corrected)
+			if prefix != "" {
+				prefix += correctionChunkSeparator
+			}
+			out, detail, err = h.completeOnceStream(ctx, cfg, endpoint, prompt, completion, emitWithPrefix(emit, prefix))
+		} else {
+			out, detail, used, err = h.completeOnce(ctx, cfg, endpoint, prompt, completion)
+			if used > 0 && used < completionCap {
+				completionCap = used
+			}
+		}
+		if err != nil {
+			return inputText, nil, fmt.Errorf("第 %d/%d 段校对失败: %w", index+1, len(chunks), err)
+		}
+
+		out = strings.TrimSpace(out)
+		corrected = append(corrected, out)
+		promptTokens, completionTokens, chunkModel := extractTokenUsage(detail)
+		totalPromptTokens += promptTokens
+		totalCompletionTokens += completionTokens
+		if chunkModel != "" {
+			model = chunkModel
+		}
+		chunkDebug = append(chunkDebug, correctionChunkDebug{
+			Title:      fmt.Sprintf("第 %d 段", index+1),
+			Output:     out,
+			Prompt:     prompt,
+			InputRunes: utf8.RuneCountInString(chunk),
+		})
 	}
-	prompt = renderTextPrompt(prompt, inputText, "原文")
+
+	finalText := joinCorrectedChunks(corrected)
+	detail, _ := json.Marshal(map[string]interface{}{
+		"model":             model,
+		"prompt_tokens":     totalPromptTokens,
+		"completion_tokens": totalCompletionTokens,
+		"max_tokens":        budget,
+		"allow_markdown":    cfg.AllowMarkdown,
+		"chunked":           true,
+		"chunk_count":       len(chunks),
+		"chunk_outputs":     chunkDebug,
+	})
+	return finalText, detail, nil
+}
+
+// completeOnce performs a single completion request (with the existing reactive
+// context retry) and returns the parsed output plus the max_tokens actually used.
+func (h *LLMCorrectionHandler) completeOnce(ctx context.Context, cfg LLMCorrectionConfig, endpoint, prompt string, completionMaxTokens int) (string, json.RawMessage, int, error) {
+	respBody, used, err := h.executeWithContextRetry(ctx, endpoint, cfg, prompt, cfg.Temperature, completionMaxTokens)
+	if err != nil {
+		return "", nil, used, err
+	}
+	output, detail, parseErr := parseLLMResponse(respBody, cfg.AllowMarkdown, used)
+	return output, detail, used, parseErr
+}
+
+func (h *LLMCorrectionHandler) completeOnceStream(ctx context.Context, cfg LLMCorrectionConfig, endpoint, prompt string, completionMaxTokens int, emit StreamEmitter) (string, json.RawMessage, error) {
+	return h.executeWithContextRetryStream(ctx, endpoint, cfg, prompt, cfg.Temperature, completionMaxTokens, emit)
+}
+
+// resolveLLMConfig parses the node config and applies defaults for the prompt
+// template, temperature and token budget, and normalizes the endpoint.
+func resolveLLMConfig(config json.RawMessage) (LLMCorrectionConfig, string, error) {
+	var cfg LLMCorrectionConfig
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return LLMCorrectionConfig{}, "", err
+	}
+	if strings.TrimSpace(cfg.PromptTemplate) == "" {
+		cfg.PromptTemplate = defaultLLMPrompt
+	}
+	if cfg.Temperature <= 0 {
+		cfg.Temperature = 0.3
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = llmCorrectionDefaultMaxTokens
+	}
+	endpoint, err := normalizeOpenAIChatEndpoint(cfg.Endpoint)
+	if err != nil {
+		return LLMCorrectionConfig{}, "", err
+	}
+	return cfg, endpoint, nil
+}
+
+// buildCorrectionPrompt renders the prompt template with the given text and
+// enforces plain-text output when Markdown is not allowed.
+func buildCorrectionPrompt(cfg LLMCorrectionConfig, text string) string {
+	prompt := renderTextPrompt(cfg.PromptTemplate, text, "原文")
 	if !cfg.AllowMarkdown {
 		prompt = enforcePlainTextOutput(prompt)
 	}
+	return prompt
+}
 
-	temperature := cfg.Temperature
-	if temperature <= 0 {
-		temperature = 0.3
+// correctionChunkRunes returns the maximum input runes per chunk, reserving room
+// for the prompt template, an equally sized corrected output, and a safety
+// margin (template + 2*chunk + margin <= budget), capped for correction quality.
+func correctionChunkRunes(templateTokens, budget int) int {
+	available := budget - templateTokens - llmCorrectionTokenSafetyMargin
+	chunkRunes := available / 2
+	if chunkRunes > llmCorrectionChunkMaxRunes {
+		chunkRunes = llmCorrectionChunkMaxRunes
 	}
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
+	if chunkRunes < llmCorrectionChunkMinRunes {
+		chunkRunes = llmCorrectionChunkMinRunes
+	}
+	return chunkRunes
+}
+
+// correctionCompletionTokens derives the completion budget from the total token
+// limit minus the rendered prompt tokens, so the prompt is always accounted for.
+func correctionCompletionTokens(promptTokens, budget int) int {
+	completion := budget - promptTokens - llmCorrectionTokenSafetyMargin
+	if completion < llmCorrectionMinCompletionTokens {
+		completion = llmCorrectionMinCompletionTokens
+	}
+	return completion
+}
+
+// splitCorrectionChunks splits text into chunks of at most maxRunes runes on
+// sentence/paragraph boundaries so corrections never cut a sentence in half.
+func splitCorrectionChunks(text string, maxRunes int) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if maxRunes <= 0 || utf8.RuneCountInString(trimmed) <= maxRunes {
+		return []string{trimmed}
 	}
 
-	endpoint, err := normalizeOpenAIChatEndpoint(cfg.Endpoint)
-	if err != nil {
-		return LLMCorrectionConfig{}, "", 0, 0, "", err
+	chunks := make([]string, 0)
+	var builder strings.Builder
+	builderRunes := 0
+	flush := func() {
+		if builder.Len() == 0 {
+			return
+		}
+		segment := strings.TrimSpace(builder.String())
+		if segment != "" {
+			chunks = append(chunks, segment)
+		}
+		builder.Reset()
+		builderRunes = 0
 	}
-	return cfg, prompt, temperature, maxTokens, endpoint, nil
+
+	for _, sentence := range splitCorrectionSentences(trimmed) {
+		sentenceRunes := utf8.RuneCountInString(sentence)
+		if sentenceRunes > maxRunes {
+			flush()
+			runes := []rune(sentence)
+			for start := 0; start < len(runes); start += maxRunes {
+				end := start + maxRunes
+				if end > len(runes) {
+					end = len(runes)
+				}
+				segment := strings.TrimSpace(string(runes[start:end]))
+				if segment != "" {
+					chunks = append(chunks, segment)
+				}
+			}
+			continue
+		}
+		if builderRunes > 0 && builderRunes+sentenceRunes > maxRunes {
+			flush()
+		}
+		builder.WriteString(sentence)
+		builderRunes += sentenceRunes
+	}
+	flush()
+
+	if len(chunks) == 0 {
+		return []string{trimmed}
+	}
+	return chunks
+}
+
+// splitCorrectionSentences splits text into sentence-ish segments, keeping the
+// trailing delimiter attached so concatenation reconstructs the original text.
+func splitCorrectionSentences(text string) []string {
+	sentences := make([]string, 0)
+	var builder strings.Builder
+	for _, r := range text {
+		builder.WriteRune(r)
+		if isCorrectionSentenceBoundary(r) {
+			sentences = append(sentences, builder.String())
+			builder.Reset()
+		}
+	}
+	if builder.Len() > 0 {
+		sentences = append(sentences, builder.String())
+	}
+	return sentences
+}
+
+func isCorrectionSentenceBoundary(r rune) bool {
+	switch r {
+	case '。', '！', '？', '；', '\n', '!', '?', ';':
+		return true
+	default:
+		return false
+	}
+}
+
+func joinCorrectedChunks(chunks []string) string {
+	parts := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		trimmed := strings.TrimSpace(chunk)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return strings.Join(parts, correctionChunkSeparator)
+}
+
+// emitWithPrefix wraps an emitter so streamed delta previews include the text of
+// already-corrected chunks.
+func emitWithPrefix(emit StreamEmitter, prefix string) StreamEmitter {
+	if emit == nil || prefix == "" {
+		return emit
+	}
+	return func(event *NodeStreamEvent) error {
+		if event != nil && event.Type == NodeStreamEventDelta {
+			clone := *event
+			clone.OutputText = prefix + event.OutputText
+			return emit(&clone)
+		}
+		return emit(event)
+	}
+}
+
+func extractTokenUsage(detail json.RawMessage) (int, int, string) {
+	if len(detail) == 0 {
+		return 0, 0, ""
+	}
+	var parsed struct {
+		PromptTokens     int    `json:"prompt_tokens"`
+		CompletionTokens int    `json:"completion_tokens"`
+		Model            string `json:"model"`
+	}
+	if err := json.Unmarshal(detail, &parsed); err != nil {
+		return 0, 0, ""
+	}
+	return parsed.PromptTokens, parsed.CompletionTokens, parsed.Model
 }
 
 func renderTextPrompt(template string, inputText string, fallbackLabel string) string {

@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	appaudio "github.com/lgt/asr/internal/application/audio"
 	appmeeting "github.com/lgt/asr/internal/application/meeting"
+	appmeetingupload "github.com/lgt/asr/internal/application/meetingupload"
 	appwf "github.com/lgt/asr/internal/application/workflow"
 	wfdomain "github.com/lgt/asr/internal/domain/workflow"
 	"github.com/lgt/asr/internal/interfaces/middleware"
@@ -25,22 +26,36 @@ type MeetingHandler struct {
 	service        *appmeeting.Service
 	audioService   *appaudio.Service
 	workflowSvc    *appwf.Service
+	uploadService  *appmeetingupload.Service
 	uploadDir      string
 	publicBaseURL  string
 	maxAudioSizeMB int64
-	chunkUpload    *meetingChunkUploader
+	maxChunkBytes  int64
 	feature        featureGate
 }
 
 // NewMeetingHandler creates a meeting handler.
-func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadDir, publicBaseURL string, maxAudioSizeMB, maxChunkSizeMB, maxSessionSizeMB int64, features pkgconfig.ProductFeatures) *MeetingHandler {
+func NewMeetingHandler(service *appmeeting.Service, workflowSvc *appwf.Service, uploadService *appmeetingupload.Service, uploadDir, publicBaseURL string, maxAudioSizeMB, maxChunkSizeMB int64, features pkgconfig.ProductFeatures) *MeetingHandler {
 	if strings.TrimSpace(uploadDir) == "" {
 		uploadDir = "uploads"
 	}
 	if maxAudioSizeMB <= 0 {
 		maxAudioSizeMB = defaultMaxAudioSizeMB
 	}
-	return &MeetingHandler{service: service, audioService: appaudio.NewService(nil, service), workflowSvc: workflowSvc, uploadDir: uploadDir, publicBaseURL: strings.TrimRight(publicBaseURL, "/"), maxAudioSizeMB: maxAudioSizeMB, chunkUpload: newMeetingChunkUploader(maxChunkSizeMB, maxSessionSizeMB), feature: newFeatureGate(features)}
+	if maxChunkSizeMB <= 0 {
+		maxChunkSizeMB = 8
+	}
+	return &MeetingHandler{
+		service:        service,
+		audioService:   appaudio.NewService(nil, service),
+		workflowSvc:    workflowSvc,
+		uploadService:  uploadService,
+		uploadDir:      uploadDir,
+		publicBaseURL:  strings.TrimRight(publicBaseURL, "/"),
+		maxAudioSizeMB: maxAudioSizeMB,
+		maxChunkBytes:  maxChunkSizeMB * 1024 * 1024,
+		feature:        newFeatureGate(features),
+	}
 }
 
 // Register registers meeting routes.

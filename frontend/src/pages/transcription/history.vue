@@ -1366,11 +1366,22 @@ onBeforeUnmount(() => {
               <div v-if="execution.error_message" class="mt-3 rounded-2 bg-red-50 px-3 py-2 text-xs text-red-600">
                 {{ execution.error_message }}
               </div>
-              <div class="mt-3 grid gap-3">
-                <div v-for="node in execution.node_results || []" :key="node.id" class="rounded-2 border border-gray-200 bg-[#fbfdff] p-3">
+              <NTabs
+                v-if="(execution.node_results || []).length > 0"
+                type="card"
+                size="small"
+                class="mt-3"
+                pane-class="!pt-3"
+              >
+                <NTabPane
+                  v-for="node in execution.node_results || []"
+                  :key="node.id"
+                  :name="node.id"
+                  :tab="`${node.position}. ${node.label || node.node_type}`"
+                >
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="text-sm font-600 text-ink">
-                      {{ node.position }}. {{ node.label || node.node_type }}
+                      {{ node.label || node.node_type }}
                     </div>
                     <div class="text-xs text-slate">
                       {{ formatExecutionStatus(node.status) }} · {{ node.duration_ms || 0 }} ms
@@ -1382,7 +1393,10 @@ onBeforeUnmount(() => {
                   <div class="mt-3">
                     <NodeDetailPanel :detail="node.detail" empty-label="当前节点没有 detail 信息。" />
                   </div>
-                </div>
+                </NTabPane>
+              </NTabs>
+              <div v-else class="mt-3 rounded-2 bg-white/80 p-3 text-xs text-slate">
+                当前执行没有节点记录。
               </div>
             </div>
           </div>

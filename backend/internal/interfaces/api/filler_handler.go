@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	appfiller "github.com/lgt/asr/internal/application/filler"
@@ -164,13 +165,43 @@ func (h *FillerHandler) DeleteEntry(c *gin.Context) {
 func (h *FillerHandler) writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, appfiller.ErrFillerDictNotFound), errors.Is(err, appfiller.ErrFillerEntryNotFound):
-		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, err.Error())
+		response.Error(c, http.StatusNotFound, errcode.CodeNotFound, fillerClientMessage(err))
 	case errors.Is(err, appfiller.ErrFillerBaseDictProtected),
 		errors.Is(err, appfiller.ErrFillerBaseDictConflict),
 		errors.Is(err, appfiller.ErrFillerEntryDuplicate),
 		errors.Is(err, appfiller.ErrFillerDictInUse):
-		response.Error(c, http.StatusConflict, errcode.CodeBadRequest, err.Error())
+		response.Error(c, http.StatusConflict, errcode.CodeBadRequest, fillerClientMessage(err))
+	case errors.Is(err, appfiller.ErrFillerDictNameInvalid):
+		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, fillerClientMessage(err))
 	default:
 		response.Error(c, http.StatusBadRequest, errcode.CodeBadRequest, err.Error())
 	}
+}
+
+// fillerClientMessage returns a user-facing Chinese message for filler errors,
+// stripping the internal English sentinel prefix (e.g. "filler dict in use: ")
+// so the client never sees mixed Chinese/English text.
+func fillerClientMessage(err error) string {
+	switch {
+	case errors.Is(err, appfiller.ErrFillerDictNotFound):
+		return "未找到指定的语气词库"
+	case errors.Is(err, appfiller.ErrFillerEntryNotFound):
+		return "未找到指定的语气词条目"
+	default:
+		if detail := fillerErrorDetail(err); detail != "" {
+			return detail
+		}
+		return "操作未成功，请稍后重试"
+	}
+}
+
+// fillerErrorDetail extracts the Chinese detail appended after the sentinel
+// prefix ("<sentinel>: <detail>"), if present.
+func fillerErrorDetail(err error) string {
+	msg := err.Error()
+	idx := strings.Index(msg, ": ")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(msg[idx+2:])
 }

@@ -312,7 +312,13 @@ async function handleDeleteDict(row: FillerDictItem) {
     await loadDicts()
   }
   catch (error) {
-    message.error(extractErrorMessage(error, '语气词库删除失败'))
+    const status = (error as { response?: { status?: number } })?.response?.status
+    const text = extractErrorMessage(error, '语气词库删除失败')
+    // 409 表示词库仍被工作流引用，属于可预期的占用提示，用警告而非错误展示
+    if (status === 409)
+      message.warning(text)
+    else
+      message.error(text)
   }
   finally {
     deletingDictId.value = null

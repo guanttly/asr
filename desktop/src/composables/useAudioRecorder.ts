@@ -157,7 +157,7 @@ export function useAudioRecorder() {
     deviceLostDuringRecording = true
     isPaused.value = true
     setMicrophoneDetected(false)
-    releaseAudioPipeline(false)
+    releaseAudioPipeline(true)
     onDeviceLostCallback?.()
     void debugLog('audio.error', `microphone lost during recording: ${reason}`)
     recoveryController?.kick()
@@ -222,7 +222,7 @@ export function useAudioRecorder() {
   }
 
   async function openAudioPipeline() {
-    releaseAudioPipeline(false)
+    releaseAudioPipeline(true)
     mediaStream.value = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
 
     setMicrophoneDetected(true)

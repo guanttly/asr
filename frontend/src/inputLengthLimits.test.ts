@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { extname, join, relative, resolve } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
@@ -11,13 +11,14 @@ const LIMIT_TYPES = {
   search: '搜索关键字',
   username: '用户名',
   password: '密码',
-  name: '显示名、设备别名、会议标题、工作流名、应用名、词库名、模型名',
+  shortIdentifier: 'OpenAPI 应用名、语音指令分组键、自定义意图值',
+  name: '显示名、设备别名、会议标题、工作流名、词库名、模型名',
   speakerName: '说话人姓名',
   url: 'URL、服务地址、回调地址前缀',
   apiKey: 'API Key',
   note: '简短说明、备注',
   term: '词条、敏感词、语气词、替换文本',
-  variantOrRegex: '误写变体、正则表达式、正则替换',
+  variantOrRegex: '误写变体、规则预览原文、正则表达式、正则替换',
   multiline: '自定义词列表、控制指令候选话术、附加提示、Meta JSON、回调白名单',
   promptOrJson: 'Prompt 模板、节点 JSON 配置、工作流测试文本',
   meetingMarkdown: '桌面会议纪要 Markdown',
@@ -35,6 +36,68 @@ interface SourceControl {
 
 function readWorkspaceFile(relativePath: string) {
   return readFileSync(join(repoRoot, relativePath), 'utf8')
+}
+
+function resolveWorkspaceModule(fromRelativePath: string, specifier: string) {
+  let basePath: string | undefined
+  if (specifier.startsWith('@/')) {
+    const appRoot = fromRelativePath.startsWith('desktop/src/') ? 'desktop/src' : 'frontend/src'
+    basePath = join(appRoot, specifier.slice(2))
+  }
+  else if (specifier.startsWith('.')) {
+    basePath = join(dirname(fromRelativePath), specifier)
+  }
+
+  if (!basePath)
+    return undefined
+
+  const candidates = [basePath, `${basePath}.ts`, `${basePath}.vue`, join(basePath, 'index.ts')]
+  return candidates.find(candidate => existsSync(join(repoRoot, candidate)))
+}
+
+function parseNumericConstants(source: string, exportedOnly = false) {
+  const constants = new Map<string, number>()
+  const prefix = exportedOnly ? 'export\\s+' : '(?:export\\s+)?'
+  const constPattern = new RegExp(`\\b${prefix}const\\s+([A-Za-z_$][\\w$]*)(?:\\s*:[^=]+)?\\s*=\\s*(\\d+)\\b`, 'g')
+
+  for (const match of source.matchAll(constPattern))
+    constants.set(match[1], Number(match[2]))
+
+  return constants
+}
+
+function parseImportedNumericConstants(relativePath: string, content: string) {
+  const constants = new Map<string, number>()
+  const importPattern = /\bimport\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/g
+
+  for (const importMatch of content.matchAll(importPattern)) {
+    const modulePath = resolveWorkspaceModule(relativePath, importMatch[2])
+    if (!modulePath)
+      continue
+
+    const moduleConstants = parseNumericConstants(readWorkspaceFile(modulePath), true)
+    for (const rawSpecifier of importMatch[1].split(',')) {
+      const specifier = rawSpecifier.trim().replace(/^type\s+/, '')
+      const aliasMatch = specifier.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/)
+      if (!aliasMatch)
+        continue
+
+      const exportedName = aliasMatch[1]
+      const localName = aliasMatch[2] ?? exportedName
+      const value = moduleConstants.get(exportedName)
+      if (value !== undefined)
+        constants.set(localName, value)
+    }
+  }
+
+  return constants
+}
+
+function collectNumericConstants(relativePath: string, content: string) {
+  return new Map([
+    ...parseImportedNumericConstants(relativePath, content),
+    ...parseNumericConstants(content),
+  ])
 }
 
 function listVueFiles(relativeDirectory: string): string[] {
@@ -70,13 +133,18 @@ function parseDocumentedLimits() {
   return limits
 }
 
-function extractMaxlength(source: string) {
+function extractMaxlength(source: string, numericConstants: Map<string, number>) {
   if (!source.includes('maxlength'))
     return undefined
 
   const limitMatch = source.match(/\b:?maxlength\s*=\s*["'](\d+)["']/)
-  if (!limitMatch)
-    throw new Error(`Unsupported maxlength expression: ${source}`)
+  if (!limitMatch) {
+    const bindingMatch = source.match(/(?::|v-bind:)maxlength\s*=\s*["']([A-Za-z_$][\w$]*)["']/)
+    const bindingValue = bindingMatch ? numericConstants.get(bindingMatch[1]) : undefined
+    if (bindingValue === undefined)
+      throw new Error(`Unsupported maxlength expression: ${source}`)
+    return bindingValue
+  }
 
   return Number(limitMatch[1])
 }
@@ -103,6 +171,7 @@ function isScopedTextControl(control: SourceControl) {
 
 function extractControls(relativePath: string) {
   const content = readWorkspaceFile(relativePath)
+  const numericConstants = collectNumericConstants(relativePath, content)
   const controls: SourceControl[] = []
   const tagNames = ['NInput', 'input', 'textarea'] as const
 
@@ -116,7 +185,7 @@ function extractControls(relativePath: string) {
         tagName,
         line,
         source,
-        maxlength: extractMaxlength(source),
+        maxlength: extractMaxlength(source, numericConstants),
       })
     }
   }
@@ -137,6 +206,9 @@ function classifyControl(control: SourceControl): LimitType | undefined {
   if (/speakerName|说话人姓名/.test(text))
     return LIMIT_TYPES.speakerName
 
+  if (/pages\/system\/openapi\.vue[\s\S]*form\.name|dictForm\.groupKey|entryForm\.intent/.test(text))
+    return LIMIT_TYPES.shortIdentifier
+
   if (/username/.test(text))
     return LIMIT_TYPES.username
 
@@ -155,7 +227,7 @@ function classifyControl(control: SourceControl): LimitType | undefined {
   if (/endpoint|audioUrl|serverUrl|callback.*地址|DEFAULT_SERVER_URL|https?:\/\//.test(text))
     return LIMIT_TYPES.url
 
-  if (/wrongVariants|ruleForm\.pattern|ruleForm\.replacement|rule\.pattern|rule\.replacement|正则表达式/.test(text))
+  if (/wrongVariants|ruleForm\.pattern|ruleForm\.replacement|ruleForm\.previewSource|rule\.pattern|rule\.replacement|正则表达式/.test(text))
     return LIMIT_TYPES.variantOrRegex
 
   if (/draftContent/.test(text))
@@ -167,7 +239,7 @@ function classifyControl(control: SourceControl): LimitType | undefined {
   if (/correctTerm|entryForm\.word|sensitiveWord|selectedConfig\.replacement|替换文本|敏感词|语气词/.test(text))
     return LIMIT_TYPES.term
 
-  if (/display_name|deviceAlias|draftTitle|department|domain|scene|model|label|form\.name|dictForm\.name|workflow\.name|saveAsForm\.name|newDictName|newDictTag/.test(text))
+  if (/display_name|deviceAlias|draftTitle|department|domain|scene|selectedConfig\.model|\bmodel\b|模型|label|form\.name|dictForm\.name|workflow\.name|saveAsForm\.name|newDictName|newDictTag/.test(text))
     return LIMIT_TYPES.name
 
   return undefined

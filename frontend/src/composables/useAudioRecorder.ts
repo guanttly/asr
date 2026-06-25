@@ -152,7 +152,7 @@ export function useAudioRecorder() {
     }
     deviceLost.value = true
     microphoneDetected.value = false
-    releaseAudioPipeline(false)
+    releaseAudioPipeline(true)
     onDeviceLostCallback?.()
     recoveryController?.kick()
   }
@@ -213,7 +213,7 @@ export function useAudioRecorder() {
   }
 
   async function openAudioPipeline() {
-    releaseAudioPipeline(false)
+    releaseAudioPipeline(true)
 
     if (!window.isSecureContext)
       throw new Error('当前页面不是安全上下文，浏览器通常只允许在 HTTPS 或 localhost 下使用麦克风')

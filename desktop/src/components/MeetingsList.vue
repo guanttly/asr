@@ -5,6 +5,7 @@ import MeetingDetail from './MeetingDetail.vue'
 
 import { useConfirm } from '@/composables/useConfirm'
 import { deleteMeeting, listMeetings, type MeetingItem } from '@/utils/meetings'
+import { readActiveMeeting, requestActiveMeetingDiscard } from '@/utils/meetingControl'
 import { debugLog } from '@/utils/debug'
 
 const PAGE_SIZE = 10
@@ -129,6 +130,13 @@ async function loadMeetings(opts?: { silent?: boolean }) {
 }
 
 async function handleDelete(item: MeetingItem) {
+  // 若被删除的正是本机「正在录制」的会议（边录边传中），先提醒并停止录音，再删除并清理临时文件。
+  const active = readActiveMeeting()
+  if (active && active.meetingId === item.id) {
+    await handleDeleteActiveMeeting(item)
+    return
+  }
+
   const ok = await confirm({
     title: '删除会议',
     message: `确定删除会议「${item.title || `#${item.id}`}」吗？已生成的纪要也会被一并删除。`,
@@ -145,6 +153,40 @@ async function handleDelete(item: MeetingItem) {
   }
   catch (error) {
     errorText.value = error instanceof Error ? error.message : '删除会议失败'
+  }
+}
+
+// 删除「正在录制中」的会议：提醒用户当前正在会议中，确认后先停止会议录音，再删除会议、清理临时文件。
+async function handleDeleteActiveMeeting(item: MeetingItem) {
+  const ok = await confirm({
+    title: '停止并删除会议',
+    message: `会议「${item.title || `#${item.id}`}」正在进行中。删除将先停止本场会议录音，再删除会议并清除临时文件，且无法恢复。确定停止并删除吗？`,
+    confirmText: '停止并删除',
+    tone: 'danger',
+  })
+  if (!ok)
+    return
+  try {
+    // 通知主窗口停止录音并丢弃上传：服务端据此删除已转正的会议并回收临时分片。
+    const stopped = await requestActiveMeetingDiscard(item.id)
+    if (stopped) {
+      // 主窗口已在停止时删除会议并清理临时文件；此处删除仅作幂等兜底，忽略「已不存在」类报错。
+      await deleteMeeting(item.id).catch(() => undefined)
+    }
+    else {
+      // 主窗口未确认（如悬浮窗已退出）：直接删除会议记录兜底，临时文件由服务端维护任务清理。
+      await deleteMeeting(item.id)
+    }
+    if (selectedId.value === item.id)
+      selectedId.value = null
+    await loadMeetings()
+  }
+  catch (error) {
+    errorText.value = error instanceof Error ? error.message : '停止并删除会议失败'
+    void debugLog('meetings.delete', 'failed to stop and delete active meeting', error instanceof Error ? {
+      message: error.message,
+      stack: error.stack,
+    } : error)
   }
 }
 

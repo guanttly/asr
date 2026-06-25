@@ -5,6 +5,7 @@ import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
 import { authedFetch, createTimeoutSignal, ensureMeetingWorkflowBinding, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
+import { publishActiveMeeting } from '@/utils/meetingControl'
 import { MeetingLiveUpload } from '@/utils/meetingUpload'
 import { createRealtimeTranscriptionTask, uploadRealtimeSessionTask } from '@/utils/transcription'
 
@@ -103,6 +104,11 @@ export function useTranscribe() {
   // 会议模式下的「边录边传」上传器。音频不再整段暂存在内存，而是随录音持续切片上传，
   // 崩溃/断网时已上传分片不丢失。非会议模式下保持为 null，走 sessionAudioChunks 旧路径。
   let meetingUpload: MeetingLiveUpload | null = null
+  // 当 settings 窗口请求「停止并删除正在录制的会议」时置位：停止时走「丢弃」而非「合并」，
+  // 即 abort 上传会话（服务端删除会议 + 清理临时分片），而不是 complete。
+  let meetingDiscardRequested = false
+  // requestMeetingDiscard 返回的 Promise 的兑现回调，在停止流程结算后调用。
+  let meetingDiscardResolve: (() => void) | null = null
 
   // 当前场景是否走会议「边录边传」链路。
   function meetingCapable(scene: SceneMode): boolean {
@@ -126,6 +132,12 @@ export function useTranscribe() {
             stack: error.stack,
           } : error)
         },
+        onMeetingPromoted: (meetingId, uploadId) => {
+          // 会议被服务端转正后，把「正在录制的会议」发布给其它窗口（settings 会议列表），
+          // 以便删除时识别这是进行中的会议并先停止录音。
+          publishActiveMeeting({ meetingId, uploadId })
+          void debugLog('transcribe.meeting-upload', 'promoted', { meetingId })
+        },
         debug: (event, detail) => {
           void debugLog('transcribe.meeting-upload', event, detail)
         },
@@ -139,6 +151,8 @@ export function useTranscribe() {
   async function finalizeMeetingUpload() {
     const uploader = meetingUpload
     meetingUpload = null
+    // 录音停止：清除「正在录制的会议」跨窗口标记。
+    publishActiveMeeting(null)
     if (!uploader)
       return
     try {
@@ -155,6 +169,43 @@ export function useTranscribe() {
     catch (error) {
       lastError.value = error instanceof Error ? error.message : '会议纪要任务创建失败'
       await debugLog('transcribe.session', 'meeting live upload finalize failed', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error)
+    }
+  }
+
+  // requestMeetingDiscard：settings 窗口请求停止并删除「正在录制的会议」时调用。置位丢弃标记，
+  // 返回一个在停止流程结算后兑现的 Promise，供调用方等待「已停止 + 已清理」。
+  function requestMeetingDiscard(): Promise<void> {
+    meetingDiscardRequested = true
+    return new Promise<void>((resolve) => {
+      meetingDiscardResolve = resolve
+    })
+  }
+
+  // settleMeetingDiscard：在停止流程结束时兑现等待中的丢弃 Promise（无等待者时为空操作）。
+  function settleMeetingDiscard() {
+    meetingDiscardRequested = false
+    const resolve = meetingDiscardResolve
+    meetingDiscardResolve = null
+    resolve?.()
+  }
+
+  // discardMeetingUpload：丢弃当前会议上传器。abort 上传会话——服务端据此删除已转正的会议
+  // 并回收临时分片，本地标记同时清除。与 finalize 的「合并入库」相对，用于用户主动删除。
+  async function discardMeetingUpload() {
+    const uploader = meetingUpload
+    meetingUpload = null
+    publishActiveMeeting(null)
+    if (!uploader)
+      return
+    try {
+      await uploader.cancel()
+      await debugLog('transcribe.session', 'meeting live upload discarded')
+    }
+    catch (error) {
+      await debugLog('transcribe.session', 'meeting live upload discard failed', error instanceof Error ? {
         message: error.message,
         stack: error.stack,
       } : error)
@@ -670,7 +721,12 @@ export function useTranscribe() {
       sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
       sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
       sessionAudioChunks.splice(0, sessionAudioChunks.length)
-      await finalizeMeetingUpload()
+      // 用户在 settings 里删除「正在录制的会议」：丢弃上传（删除会议 + 清理临时文件），
+      // 而不是合并入库。
+      if (meetingDiscardRequested)
+        await discardMeetingUpload()
+      else
+        await finalizeMeetingUpload()
       return
     }
     const audioChunks = sessionAudioChunks.splice(0, sessionAudioChunks.length)
@@ -850,19 +906,25 @@ export function useTranscribe() {
   }
 
   async function stopAndFlush() {
-    // 立刻阻断光标注入：用户一旦停止，正在识别中的内容也不再粘贴到光标。
-    pipelineAborted = true
-    // 先丢弃尚未开始识别的历史堆积队列，避免停止后继续处理积压内容。
-    clearPendingQueue()
-    // 再入队用户停止前的最后一段口述，确保末尾内容仍会被识别并落库（但不再注入）。
-    finalizeSegment('stop')
-    // 已在识别中的断句仍会写入历史以便落库，但不会再注入光标。
-    await drainPipeline()
-    await persistRealtimeSession()
-    // 等待语音控制切换时「旧场景」会话的后台落库全部完成，确保中间历史不丢。
-    if (pendingFlushes.length > 0)
-      await Promise.allSettled(pendingFlushes.splice(0, pendingFlushes.length))
-    status.value = 'idle'
+    try {
+      // 立刻阻断光标注入：用户一旦停止，正在识别中的内容也不再粘贴到光标。
+      pipelineAborted = true
+      // 先丢弃尚未开始识别的历史堆积队列，避免停止后继续处理积压内容。
+      clearPendingQueue()
+      // 再入队用户停止前的最后一段口述，确保末尾内容仍会被识别并落库（但不再注入）。
+      finalizeSegment('stop')
+      // 已在识别中的断句仍会写入历史以便落库，但不会再注入光标。
+      await drainPipeline()
+      await persistRealtimeSession()
+      // 等待语音控制切换时「旧场景」会话的后台落库全部完成，确保中间历史不丢。
+      if (pendingFlushes.length > 0)
+        await Promise.allSettled(pendingFlushes.splice(0, pendingFlushes.length))
+    }
+    finally {
+      status.value = 'idle'
+      // 无论成功失败，结算等待中的「停止并删除」请求，避免 settings 端一直等待。
+      settleMeetingDiscard()
+    }
   }
 
   function reset() {
@@ -873,6 +935,10 @@ export function useTranscribe() {
       meetingUpload.detach()
       meetingUpload = null
     }
+    // 清除「正在录制的会议」跨窗口标记与残留的丢弃请求（新会话从干净状态开始）。
+    publishActiveMeeting(null)
+    meetingDiscardRequested = false
+    meetingDiscardResolve = null
     resetActiveSegment()
     leadInChunks.splice(0, leadInChunks.length)
     sessionAudioChunks.splice(0, sessionAudioChunks.length)
@@ -907,6 +973,7 @@ export function useTranscribe() {
     handleChunk,
     stopAndFlush,
     reset,
+    requestMeetingDiscard,
     getThreshold,
   }
 }

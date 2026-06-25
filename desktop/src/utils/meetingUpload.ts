@@ -45,6 +45,9 @@ export interface MeetingLiveUploadOptions {
   resolveInitFields?: () => Promise<MeetingChunkUploadFields> | MeetingChunkUploadFields
   // 上传过程中的非致命错误回调（仅用于上报，不应抛出）。
   onError?: (error: unknown) => void
+  // 会议被服务端「转正」（promote，达到最小时长后分配 meetingId）时回调一次，
+  // 便于把「正在录制的会议」状态发布给其它窗口（如 settings 的会议列表）。
+  onMeetingPromoted?: (meetingId: number, uploadId: string) => void
   // 诊断日志回调。
   debug?: (event: string, detail?: unknown) => void
 }
@@ -140,6 +143,8 @@ export class MeetingLiveUpload {
   // broken 表示某个分片重试耗尽，链路已不可信；此后停止接收新音频，交由服务端恢复。
   private broken = false
   private title?: string
+  // 服务端「转正」后分配的 meetingId（首次出现时回调一次，之后不再重复通知）。
+  private promotedMeetingId: number | null = null
 
   constructor(options: MeetingLiveUploadOptions = {}) {
     this.options = options
@@ -216,7 +221,8 @@ export class MeetingLiveUpload {
     let attempt = 0
     for (;;) {
       try {
-        await appendMeetingLiveChunk(this.uploadId, index, data, checksum)
+        const result = await appendMeetingLiveChunk(this.uploadId, index, data, checksum)
+        this.notePromotion(result.meetingId)
         return
       }
       catch (error) {
@@ -233,6 +239,19 @@ export class MeetingLiveUpload {
           throw error
         await delay(backoffMs(attempt))
       }
+    }
+  }
+
+  // notePromotion 在服务端首次返回 meetingId（会议被转正）时回调一次。
+  private notePromotion(meetingId: number | null): void {
+    if (meetingId == null || this.promotedMeetingId != null || !this.uploadId)
+      return
+    this.promotedMeetingId = meetingId
+    try {
+      this.options.onMeetingPromoted?.(meetingId, this.uploadId)
+    }
+    catch {
+      // 通知失败不影响上传本身。
     }
   }
 

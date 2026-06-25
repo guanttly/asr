@@ -54,6 +54,7 @@ RUN sed -i \
     nginx \
     openssl \
     supervisor \
+ && rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

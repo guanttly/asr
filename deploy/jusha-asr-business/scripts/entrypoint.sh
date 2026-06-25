@@ -45,6 +45,10 @@ mkdir -p "${ASR_CONFIG_DIR}" "${ASR_MYSQL_DATA_DIR}" "${ASR_DOWNLOAD_DIR}" "${AS
 chown -R mysql:mysql "${ASR_MYSQL_DATA_DIR}" /run/mysqld
 chmod 1777 "${ASR_TMP_DIR}"
 
+# Ubuntu's packaged nginx default site can intercept Host/IP requests before
+# our generated ASR gateway server block, causing external /api/* 404s.
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default
+
 seed_config_file() {
   CONFIG_NAME="$1"
   if [ -f "${ASR_CONFIG_DIR}/${CONFIG_NAME}" ]; then

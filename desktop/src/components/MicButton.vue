@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { SCENE_MODES } from '@/constants/product'
 import { useAudioRecorder } from '@/composables/useAudioRecorder'
@@ -7,6 +7,7 @@ import { useTranscribe } from '@/composables/useTranscribe'
 import { useVoiceControl } from '@/composables/useVoiceControl'
 import { useAppStore } from '@/stores/app'
 import { debugLog } from '@/utils/debug'
+import { listenForMeetingDiscardRequest, publishActiveMeeting, readActiveMeeting } from '@/utils/meetingControl'
 
 const appStore = useAppStore()
 const appWindow = getCurrentWindow()
@@ -14,6 +15,7 @@ const recorder = useAudioRecorder()
 const transcribe = useTranscribe()
 const voiceControl = useVoiceControl()
 let hideWindowAfterStart = false
+let stopDiscardListener: null | (() => void) = null
 
 const isActive = computed(() => appStore.isRecording)
 const isCommandMode = computed(() => isActive.value && appStore.voiceCommandActive)
@@ -55,7 +57,35 @@ const levelPercent = computed(() => {
 
 onMounted(() => {
   void recorder.refreshDeviceAvailability()
+  // 本窗口刚加载时不可能在录音：清除上次崩溃/强退残留的「正在录制的会议」标记。
+  publishActiveMeeting(null)
+  // 监听 settings 窗口对「正在录制的会议」的停止请求（跨窗口经 localStorage + storage 事件）。
+  stopDiscardListener = listenForMeetingDiscardRequest(handleMeetingDiscardRequest)
 })
+
+onBeforeUnmount(() => {
+  stopDiscardListener?.()
+  stopDiscardListener = null
+})
+
+// 处理 settings 窗口「停止并删除正在录制的会议」请求。仅当本窗口确实正在录制该会议时才停止
+// 录音并丢弃上传（abort = 服务端删除会议 + 清理临时分片）；返回是否已处理，供 settings 端
+// 决定是直接复用结果还是回退到普通删除。
+async function handleMeetingDiscardRequest(meetingId: number): Promise<boolean> {
+  const active = readActiveMeeting()
+  if (!appStore.isRecording || !active || active.meetingId !== meetingId) {
+    // 非进行中的会议：清掉可能的过期标记，交回 false 让 settings 走普通删除。
+    publishActiveMeeting(null)
+    return false
+  }
+  void debugLog('recorder.meeting', 'stop-and-discard requested for active meeting', { meetingId })
+  // 先置位丢弃标记，再触发停止：停止流程会走「丢弃」分支而非「合并入库」。
+  const done = transcribe.requestMeetingDiscard()
+  appStore.isRecording = false
+  await done
+  void debugLog('recorder.meeting', 'active meeting stopped and discarded', { meetingId })
+  return true
+}
 
 async function toggle() {
   void debugLog('recorder.toggle', 'toggle record button clicked', { currentlyRecording: isActive.value, scene: appStore.sceneMode })

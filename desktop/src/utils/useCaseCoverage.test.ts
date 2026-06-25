@@ -76,12 +76,12 @@ describe('desktop use case coverage matrix', () => {
     expect(assessments.filter(item => item.kind === 'unclassified')).toEqual([])
   })
 
-  it('marks known high-risk mismatches for focused manual testing', () => {
+  it('tracks previously high-risk hot-plug and config-sync cases as resolved', () => {
     const byId = new Map(readUseCases().map(row => [row.用例编号, assessDesktopUseCase(row)]))
 
-    expect(byId.get('121310')).toMatchObject({ marker: 'ISSUE', area: '麦克风热插拔' })
-    expect(byId.get('121311')).toMatchObject({ marker: 'ISSUE', area: '麦克风热插拔' })
-    expect(byId.get('121326')).toMatchObject({ marker: 'ISSUE', area: '配置同步失败' })
-    expect(byId.get('121327')).toMatchObject({ marker: 'ISSUE', area: '配置同步失败' })
+    expect(byId.get('121310')).toMatchObject({ marker: 'OK', area: '麦克风热插拔' })
+    expect(byId.get('121311')).toMatchObject({ marker: 'OK', area: '麦克风热插拔' })
+    expect(byId.get('121326')).toMatchObject({ marker: 'OK', area: '配置同步失败' })
+    expect(byId.get('121327')).toMatchObject({ marker: 'OK', area: '配置同步失败' })
   })
 })

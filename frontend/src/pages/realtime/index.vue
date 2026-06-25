@@ -175,7 +175,7 @@ const {
   missingMessage: workflowId => `应用配置中的实时工作流 #${workflowId} 当前不可用，请前往应用配置页重新选择。`,
   readyMessage: () => '录音结束后会自动套用应用配置页中绑定的实时工作流。',
 })
-const { start, stop, pause, resume, isRecording, isPaused } = useAudioRecorder()
+const { start, stop, pause, resume, isRecording, isPaused, deviceLost } = useAudioRecorder()
 const savingSession = ref(false)
 const stoppingSession = ref(false)
 const recordingStartedAt = ref<number | null>(null)
@@ -1039,6 +1039,15 @@ watch(realtimeConfigPanelExpanded, (value) => {
   saveRealtimeConfigPanelExpanded(value)
 })
 
+watch(deviceLost, (lost, previous) => {
+  if (!isRecording.value)
+    return
+  if (lost)
+    message.warning('麦克风已断开，正在尝试重新连接…')
+  else if (previous)
+    message.success('麦克风已重新连接，继续录音')
+})
+
 onBeforeUnmount(() => {
   if (isRecording.value) {
     stop()
@@ -1071,7 +1080,7 @@ onBeforeUnmount(() => {
               录音状态
             </div>
             <div class="mt-1.5 text-sm font-700 text-ink">
-              {{ isRecording ? (isPaused ? '暂停中' : '录音中') : '空闲' }}
+              {{ isRecording ? (deviceLost ? '麦克风已断开·重连中' : (isPaused ? '暂停中' : '录音中')) : '空闲' }}
             </div>
           </div>
           <div class="subtle-panel lg:col-span-2">

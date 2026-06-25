@@ -1,9 +1,20 @@
+import type { RecoveryController } from './hotplugRecovery'
 import { ref, shallowRef } from 'vue'
+import { createRecoveryController, decideHotplugAction } from './hotplugRecovery'
 
 const TARGET_SR = 16000
 const CHUNK_MS = 200
+const AUDIO_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  video: false,
+}
 
 type FloatBuffer = Float32Array<ArrayBufferLike>
+
+interface RecorderStartOptions {
+  onDeviceLost?: () => void
+  onDeviceRestored?: () => void
+}
 
 function mapRecorderError(error: unknown): Error {
   if (error instanceof Error) {
@@ -65,31 +76,144 @@ export function useAudioRecorder() {
   const audioCtx = shallowRef<AudioContext | null>(null)
   const isRecording = ref(false)
   const isPaused = ref(false)
+  // 因麦克风热插拔导致采集中断、正在等待自动重连（区别于用户主动暂停 isPaused）。
+  const deviceLost = ref(false)
+  // 系统是否仍检测到音频输入设备。
+  const microphoneDetected = ref(true)
 
   let processor: ScriptProcessorNode | null = null
   let source: MediaStreamAudioSourceNode | null = null
   let buffer: FloatBuffer = new Float32Array(0)
   let onChunkCallback: ((chunk: ArrayBuffer) => void) | null = null
+  let onDeviceLostCallback: (() => void) | null = null
+  let onDeviceRestoredCallback: (() => void) | null = null
+  let stoppedByUser = false
+  let restoringPipeline = false
+  let listeningForDeviceChanges = false
+  let recoveryController: RecoveryController | null = null
 
-  const cleanup = () => {
+  const hasAudioInputDevice = async () => {
+    if (!navigator.mediaDevices?.enumerateDevices)
+      return true
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      return devices.some(device => device.kind === 'audioinput')
+    }
+    catch {
+      return true
+    }
+  }
+
+  const releaseAudioPipeline = (stopTracks: boolean) => {
     processor?.disconnect()
     source?.disconnect()
     void audioCtx.value?.close()
-    mediaStream.value?.getTracks().forEach(t => t.stop())
-
+    mediaStream.value?.getTracks().forEach((track) => {
+      track.removeEventListener?.('ended', handleTrackEnded)
+      track.removeEventListener?.('mute', handleTrackMuted)
+      track.removeEventListener?.('unmute', handleTrackUnmuted)
+      if (stopTracks)
+        track.stop()
+    })
     processor = null
     source = null
     audioCtx.value = null
     mediaStream.value = null
-    onChunkCallback = null
-    buffer = new Float32Array(0)
-    isRecording.value = false
-    isPaused.value = false
   }
 
-  const start = async (onChunk?: (chunk: ArrayBuffer) => void) => {
-    onChunkCallback = onChunk ?? null
-    buffer = new Float32Array(0)
+  // 当前采集 track 是否健康：仍 live 且未被系统静音。拔掉默认设备时，部分浏览器
+  // 只会把 track 置为 muted 而不触发 ended，需据此识别采集已中断。
+  const isCurrentTrackHealthy = () => {
+    const tracks = mediaStream.value?.getAudioTracks?.() ?? []
+    return tracks.length > 0 && tracks.some(track => track.readyState === 'live' && !track.muted)
+  }
+
+  const addDeviceChangeListener = () => {
+    if (listeningForDeviceChanges || !navigator.mediaDevices?.addEventListener)
+      return
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange)
+    listeningForDeviceChanges = true
+  }
+
+  const removeDeviceChangeListener = () => {
+    if (!listeningForDeviceChanges || !navigator.mediaDevices?.removeEventListener)
+      return
+    navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+    listeningForDeviceChanges = false
+  }
+
+  // 进入「设备丢失」状态（幂等）：保留用户暂停态，释放采集管道并启动带退避的自动重连。
+  function markDeviceLost() {
+    if (stoppedByUser || !isRecording.value)
+      return
+    if (deviceLost.value) {
+      recoveryController?.kick()
+      return
+    }
+    deviceLost.value = true
+    microphoneDetected.value = false
+    releaseAudioPipeline(false)
+    onDeviceLostCallback?.()
+    recoveryController?.kick()
+  }
+
+  // 单次重连尝试：成功重建管道返回 true；无设备或失败返回 false 以触发退避重试。
+  const attemptRecovery = async (): Promise<boolean> => {
+    if (stoppedByUser || !isRecording.value)
+      return true
+    const detected = await hasAudioInputDevice()
+    if (!detected) {
+      microphoneDetected.value = false
+      return false
+    }
+    restoringPipeline = true
+    try {
+      await openAudioPipeline()
+      return true
+    }
+    catch {
+      return false
+    }
+    finally {
+      restoringPipeline = false
+    }
+  }
+
+  async function handleDeviceChange() {
+    const hasInputDevice = await hasAudioInputDevice()
+    if (!isRecording.value) {
+      microphoneDetected.value = hasInputDevice
+      return
+    }
+    const action = decideHotplugAction({
+      recording: isRecording.value,
+      stoppedByUser,
+      restoring: restoringPipeline,
+      alreadyLost: deviceLost.value,
+      hasInputDevice,
+      trackHealthy: isCurrentTrackHealthy(),
+    })
+    if (action === 'mark-lost')
+      markDeviceLost()
+    else if (action === 'attempt-recover')
+      recoveryController?.kick()
+  }
+
+  function handleTrackEnded() {
+    markDeviceLost()
+  }
+
+  function handleTrackMuted() {
+    markDeviceLost()
+  }
+
+  function handleTrackUnmuted() {
+    if (deviceLost.value)
+      recoveryController?.kick()
+  }
+
+  async function openAudioPipeline() {
+    releaseAudioPipeline(false)
 
     if (!window.isSecureContext)
       throw new Error('当前页面不是安全上下文，浏览器通常只允许在 HTTPS 或 localhost 下使用麦克风')
@@ -100,39 +224,88 @@ export function useAudioRecorder() {
     if (typeof AudioContext === 'undefined')
       throw new Error('当前浏览器不支持 Web Audio API')
 
-    try {
-      mediaStream.value = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: false,
-      })
+    mediaStream.value = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
+    microphoneDetected.value = true
 
-      audioCtx.value = new AudioContext()
-      source = audioCtx.value.createMediaStreamSource(mediaStream.value)
-      processor = audioCtx.value.createScriptProcessor(4096, 1, 1)
+    audioCtx.value = new AudioContext()
+    source = audioCtx.value.createMediaStreamSource(mediaStream.value)
+    processor = audioCtx.value.createScriptProcessor(4096, 1, 1)
 
-      const chunkSamples = Math.round(TARGET_SR * (CHUNK_MS / 1000))
+    mediaStream.value.getTracks().forEach((track) => {
+      track.addEventListener?.('ended', handleTrackEnded)
+      track.addEventListener?.('mute', handleTrackMuted)
+      track.addEventListener?.('unmute', handleTrackUnmuted)
+    })
 
-      processor.onaudioprocess = (e) => {
-        if (!isRecording.value || isPaused.value)
-          return
-        const input = e.inputBuffer.getChannelData(0)
-        const resampled = resampleLinear(new Float32Array(input), audioCtx.value!.sampleRate, TARGET_SR)
-        buffer = concatFloat32(buffer, resampled)
+    const chunkSamples = Math.round(TARGET_SR * (CHUNK_MS / 1000))
 
-        if (onChunkCallback) {
-          while (buffer.length >= chunkSamples) {
-            const chunk = buffer.slice(0, chunkSamples)
-            buffer = buffer.slice(chunkSamples)
-            onChunkCallback(float32ToInt16(chunk))
-          }
+    processor.onaudioprocess = (e) => {
+      if (!isRecording.value || isPaused.value || deviceLost.value)
+        return
+      const input = e.inputBuffer.getChannelData(0)
+      const resampled = resampleLinear(new Float32Array(input), audioCtx.value!.sampleRate, TARGET_SR)
+      buffer = concatFloat32(buffer, resampled)
+
+      if (onChunkCallback) {
+        while (buffer.length >= chunkSamples) {
+          const chunk = buffer.slice(0, chunkSamples)
+          buffer = buffer.slice(chunkSamples)
+          onChunkCallback(float32ToInt16(chunk))
         }
       }
+    }
 
-      source.connect(processor)
-      processor.connect(audioCtx.value.destination)
+    // 重连尝试期间用户可能已停止：避免遗留一个「野」采集管道。
+    if (stoppedByUser) {
+      releaseAudioPipeline(true)
+      const aborted = new Error('recorder stopped during recovery')
+      aborted.name = 'AbortError'
+      throw aborted
+    }
 
-      isRecording.value = true
-      isPaused.value = false
+    source.connect(processor)
+    processor.connect(audioCtx.value.destination)
+
+    isRecording.value = true
+    addDeviceChangeListener()
+  }
+
+  const cleanup = () => {
+    recoveryController?.cancel()
+    recoveryController = null
+    releaseAudioPipeline(true)
+    removeDeviceChangeListener()
+    onChunkCallback = null
+    onDeviceLostCallback = null
+    onDeviceRestoredCallback = null
+    buffer = new Float32Array(0)
+    isRecording.value = false
+    isPaused.value = false
+    deviceLost.value = false
+    restoringPipeline = false
+  }
+
+  const start = async (onChunk?: (chunk: ArrayBuffer) => void, options?: RecorderStartOptions) => {
+    stoppedByUser = false
+    onChunkCallback = onChunk ?? null
+    onDeviceLostCallback = options?.onDeviceLost ?? null
+    onDeviceRestoredCallback = options?.onDeviceRestored ?? null
+    buffer = new Float32Array(0)
+    deviceLost.value = false
+    restoringPipeline = false
+
+    recoveryController?.cancel()
+    recoveryController = createRecoveryController({
+      attempt: attemptRecovery,
+      isActive: () => isRecording.value && !stoppedByUser && deviceLost.value,
+      onRecovered: () => {
+        deviceLost.value = false
+        onDeviceRestoredCallback?.()
+      },
+    })
+
+    try {
+      await openAudioPipeline()
     }
     catch (error) {
       cleanup()
@@ -141,6 +314,7 @@ export function useAudioRecorder() {
   }
 
   const stop = () => {
+    stoppedByUser = true
     // Flush remaining buffer.
     if (buffer.length > 0 && onChunkCallback) {
       onChunkCallback(float32ToInt16(buffer.slice()))
@@ -158,5 +332,5 @@ export function useAudioRecorder() {
     isPaused.value = false
   }
 
-  return { isRecording, isPaused, start, stop, pause, resume }
+  return { isRecording, isPaused, deviceLost, microphoneDetected, start, stop, pause, resume }
 }

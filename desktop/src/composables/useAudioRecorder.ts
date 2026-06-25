@@ -1,6 +1,8 @@
+import type { RecoveryController } from './hotplugRecovery'
 import { ref, shallowRef } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { debugLog } from '@/utils/debug'
+import { createRecoveryController, decideHotplugAction } from './hotplugRecovery'
 
 const TARGET_SR = 16000
 const CHUNK_MS = 200
@@ -86,8 +88,9 @@ export function useAudioRecorder() {
   let onDeviceRestoredCallback: (() => void) | null = null
   let stoppedByUser = false
   let deviceLostDuringRecording = false
-  let restartingAfterDeviceChange = false
+  let restoringPipeline = false
   let listeningForDeviceChanges = false
+  let recoveryController: RecoveryController | null = null
 
   const setMicrophoneDetected = (detected: boolean) => {
     appStore.microphoneDetected = detected
@@ -111,6 +114,8 @@ export function useAudioRecorder() {
     void audioCtx.value?.close()
     mediaStream.value?.getTracks().forEach((track) => {
       track.removeEventListener?.('ended', handleTrackEnded)
+      track.removeEventListener?.('mute', handleTrackMuted)
+      track.removeEventListener?.('unmute', handleTrackUnmuted)
       if (stopTracks)
         track.stop()
     })
@@ -118,6 +123,13 @@ export function useAudioRecorder() {
     source = null
     audioCtx.value = null
     mediaStream.value = null
+  }
+
+  // 当前采集 track 是否健康：仍 live 且未被系统静音。拔掉默认设备时，部分平台
+  // 只会把 track 置为 muted 而不触发 ended，需据此识别采集已中断。
+  const isCurrentTrackHealthy = () => {
+    const tracks = mediaStream.value?.getAudioTracks?.() ?? []
+    return tracks.length > 0 && tracks.some(track => track.readyState === 'live' && !track.muted)
   }
 
   const addDeviceChangeListener = () => {
@@ -134,47 +146,79 @@ export function useAudioRecorder() {
     listeningForDeviceChanges = false
   }
 
-  async function handleDeviceChange() {
-    const detected = await hasAudioInputDevice()
-    setMicrophoneDetected(detected)
-    if (!detected) {
-      if (isRecording.value) {
-        deviceLostDuringRecording = true
-        isPaused.value = true
-        onDeviceLostCallback?.()
-      }
-      return
-    }
-
-    if (!deviceLostDuringRecording || !isRecording.value || restartingAfterDeviceChange || !onChunkCallback)
-      return
-
-    restartingAfterDeviceChange = true
-    try {
-      await openAudioPipeline()
-      deviceLostDuringRecording = false
-      onDeviceRestoredCallback?.()
-      await debugLog('audio', 'microphone stream restored after device change')
-    }
-    catch (error) {
-      setMicrophoneDetected(!isRecorderDeviceNotFound(error))
-      void debugLog('audio.error', 'failed to restore microphone stream', error instanceof Error ? { name: error.name, message: error.message } : error)
-    }
-    finally {
-      restartingAfterDeviceChange = false
-    }
-  }
-
-  function handleTrackEnded() {
+  // 进入「设备丢失」状态（幂等）：释放采集管道、提示用户，并启动带退避的自动重连。
+  function markDeviceLost(reason: string) {
     if (stoppedByUser || !isRecording.value)
       return
+    if (deviceLostDuringRecording) {
+      recoveryController?.kick()
+      return
+    }
     deviceLostDuringRecording = true
     isPaused.value = true
     setMicrophoneDetected(false)
     releaseAudioPipeline(false)
     onDeviceLostCallback?.()
-    void debugLog('audio.error', 'microphone track ended during recording')
-    void handleDeviceChange()
+    void debugLog('audio.error', `microphone lost during recording: ${reason}`)
+    recoveryController?.kick()
+  }
+
+  // 单次重连尝试：成功重建管道返回 true；无设备或失败返回 false 以触发退避重试。
+  const attemptRecovery = async (): Promise<boolean> => {
+    if (stoppedByUser || !isRecording.value)
+      return true
+    const detected = await hasAudioInputDevice()
+    if (!detected) {
+      setMicrophoneDetected(false)
+      return false
+    }
+    restoringPipeline = true
+    try {
+      await openAudioPipeline()
+      return true
+    }
+    catch (error) {
+      setMicrophoneDetected(!isRecorderDeviceNotFound(error))
+      void debugLog('audio.error', 'failed to restore microphone stream', error instanceof Error ? { name: error.name, message: error.message } : error)
+      return false
+    }
+    finally {
+      restoringPipeline = false
+    }
+  }
+
+  async function handleDeviceChange() {
+    const hasInputDevice = await hasAudioInputDevice()
+    if (!isRecording.value) {
+      // 空闲态：仅刷新「是否检测到麦克风」指示。
+      setMicrophoneDetected(hasInputDevice)
+      return
+    }
+    const action = decideHotplugAction({
+      recording: isRecording.value,
+      stoppedByUser,
+      restoring: restoringPipeline,
+      alreadyLost: deviceLostDuringRecording,
+      hasInputDevice,
+      trackHealthy: isCurrentTrackHealthy(),
+    })
+    if (action === 'mark-lost')
+      markDeviceLost('devicechange')
+    else if (action === 'attempt-recover')
+      recoveryController?.kick()
+  }
+
+  function handleTrackEnded() {
+    markDeviceLost('track-ended')
+  }
+
+  function handleTrackMuted() {
+    markDeviceLost('track-muted')
+  }
+
+  function handleTrackUnmuted() {
+    if (deviceLostDuringRecording)
+      recoveryController?.kick()
   }
 
   async function openAudioPipeline() {
@@ -190,7 +234,11 @@ export function useAudioRecorder() {
     source = audioCtx.value.createMediaStreamSource(mediaStream.value)
     processor = audioCtx.value.createScriptProcessor(4096, 1, 1)
 
-    mediaStream.value.getTracks().forEach(track => track.addEventListener?.('ended', handleTrackEnded))
+    mediaStream.value.getTracks().forEach((track) => {
+      track.addEventListener?.('ended', handleTrackEnded)
+      track.addEventListener?.('mute', handleTrackMuted)
+      track.addEventListener?.('unmute', handleTrackUnmuted)
+    })
 
     await debugLog('audio', 'microphone stream initialized', {
       trackCount: mediaStream.value.getTracks().length,
@@ -219,6 +267,14 @@ export function useAudioRecorder() {
       }
     }
 
+    // 重连尝试期间用户可能已停止：避免遗留一个「野」采集管道。
+    if (stoppedByUser) {
+      releaseAudioPipeline(true)
+      const aborted = new Error('recorder stopped during recovery')
+      aborted.name = 'AbortError'
+      throw aborted
+    }
+
     source.connect(processor)
     processor.connect(audioCtx.value.destination)
     isRecording.value = true
@@ -227,6 +283,8 @@ export function useAudioRecorder() {
   }
 
   const cleanup = () => {
+    recoveryController?.cancel()
+    recoveryController = null
     releaseAudioPipeline(true)
     removeDeviceChangeListener()
     onChunkCallback = null
@@ -236,7 +294,7 @@ export function useAudioRecorder() {
     isRecording.value = false
     isPaused.value = false
     deviceLostDuringRecording = false
-    restartingAfterDeviceChange = false
+    restoringPipeline = false
   }
 
   const start = async (onChunk?: (chunk: ArrayBuffer) => void, options?: RecorderStartOptions) => {
@@ -246,6 +304,18 @@ export function useAudioRecorder() {
     onDeviceRestoredCallback = options?.onDeviceRestored ?? null
     buffer = new Float32Array(0)
     deviceLostDuringRecording = false
+    restoringPipeline = false
+
+    recoveryController?.cancel()
+    recoveryController = createRecoveryController({
+      attempt: attemptRecovery,
+      isActive: () => isRecording.value && !stoppedByUser && deviceLostDuringRecording,
+      onRecovered: () => {
+        deviceLostDuringRecording = false
+        onDeviceRestoredCallback?.()
+        void debugLog('audio', 'microphone stream restored after device change')
+      },
+    })
 
     try {
       await debugLog('audio', 'requesting microphone stream')

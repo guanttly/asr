@@ -31,7 +31,7 @@ const filteredItems = computed(() => {
   return items.value.filter(item => (item.title || '').toLowerCase().includes(keyword))
 })
 
-const hasProcessing = computed(() => items.value.some(item => item.status === 'uploaded' || item.status === 'processing'))
+const hasProcessing = computed(() => items.value.some(item => item.status === 'uploaded' || item.status === 'processing' || item.status === 'uploading' || item.status === 'interrupted'))
 
 function statusLabel(status: string) {
   switch (status) {
@@ -41,6 +41,10 @@ function statusLabel(status: string) {
       return '生成中'
     case 'uploaded':
       return '排队中'
+    case 'uploading':
+      return '录音上传中'
+    case 'interrupted':
+      return '待续传'
     case 'failed':
       return '失败'
     default:
@@ -55,6 +59,10 @@ function statusTone(status: string) {
     case 'processing':
       return 'pending'
     case 'uploaded':
+      return 'pending'
+    case 'uploading':
+      return 'pending'
+    case 'interrupted':
       return 'pending'
     case 'failed':
       return 'danger'

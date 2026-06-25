@@ -5,7 +5,8 @@ import { useInjector } from './useInjector'
 import { useVoiceControl } from './useVoiceControl'
 import { authedFetch, createTimeoutSignal, ensureMeetingWorkflowBinding, ensureProductFeatures, ensureRealtimeWorkflowBinding, readResponseEnvelope } from '@/utils/auth'
 import { debugLog } from '@/utils/debug'
-import { createRealtimeTranscriptionTask, MEETING_DIRECT_UPLOAD_LIMIT, uploadMeetingFromAudio, uploadMeetingFromAudioChunked, uploadRealtimeSessionTask } from '@/utils/transcription'
+import { MeetingLiveUpload } from '@/utils/meetingUpload'
+import { createRealtimeTranscriptionTask, uploadRealtimeSessionTask } from '@/utils/transcription'
 
 const TARGET_SAMPLE_RATE = 16000
 const CHUNK_MS = 200
@@ -23,10 +24,8 @@ const SEGMENT_ASR_TIMEOUT_MS = 60 * 1000
 // 并行处理的断句上限。ASR 上游支持并发，提高此值可在语速较快时更快地
 // 消化堆积的断句；但提交（写历史 / 注入光标）仍严格按断句顺序进行。
 const MAX_PARALLEL_SEGMENTS = 3
-// 防止用户在会议/报告模式间误切换或者误录产生无意义任务：
-// 1) 录音时长低于 MIN_MEETING_DURATION_SECONDS 时直接丢弃；
-// 2) 没有任何识别文本时直接丢弃。
-const MIN_MEETING_DURATION_SECONDS = 5
+// 防止误录产生无意义的实时任务：没有任何识别文本或时长过短时直接丢弃。
+// 会议模式的时长/丢弃判断已下沉到边录边传的客户端与服务端（见 meetingUpload.ts）。
 const MIN_REALTIME_DURATION_SECONDS = 1
 // 语音控制切换场景后，切换前后短时间内录入的「残留」断句（命令尾音等）应被
 // 丢弃，避免命令文本在切换后写入历史。以断句的「录入时间」而非「提交时间」
@@ -101,6 +100,66 @@ export function useTranscribe() {
   const sessionAudioChunks: ArrayBuffer[] = []
   const sessionRecognizedTexts: string[] = []
   const sessionRealtimeSegments: RealtimeSessionSegment[] = []
+  // 会议模式下的「边录边传」上传器。音频不再整段暂存在内存，而是随录音持续切片上传，
+  // 崩溃/断网时已上传分片不丢失。非会议模式下保持为 null，走 sessionAudioChunks 旧路径。
+  let meetingUpload: MeetingLiveUpload | null = null
+
+  // 当前场景是否走会议「边录边传」链路。
+  function meetingCapable(scene: SceneMode): boolean {
+    return scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)
+  }
+
+  // 惰性创建并启动会议上传器（init 异步进行，期间到来的分片会先缓冲）。
+  function getOrStartMeetingUpload(): MeetingLiveUpload {
+    if (!meetingUpload) {
+      meetingUpload = new MeetingLiveUpload({
+        resolveInitFields: async () => {
+          const workflowId = await ensureMeetingWorkflowBinding().catch(() => appStore.meetingWorkflowId ?? null)
+          return {
+            title: `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+            workflow_id: workflowId ?? undefined,
+          }
+        },
+        onError: (error) => {
+          void debugLog('transcribe.meeting-upload', 'error', error instanceof Error ? {
+            message: error.message,
+            stack: error.stack,
+          } : error)
+        },
+        debug: (event, detail) => {
+          void debugLog('transcribe.meeting-upload', event, detail)
+        },
+      })
+      meetingUpload.start()
+    }
+    return meetingUpload
+  }
+
+  // 结算当前会议上传器：冲洗剩余分片并请求服务端合并；失败仅记录，交由服务端恢复。
+  async function finalizeMeetingUpload() {
+    const uploader = meetingUpload
+    meetingUpload = null
+    if (!uploader)
+      return
+    try {
+      const result = await uploader.finish()
+      await debugLog('transcribe.session', 'meeting live upload finalized', {
+        meetingId: result.meetingId,
+        status: result.status,
+        duration: result.duration,
+        discarded: result.discarded,
+      })
+      if (!result.discarded && result.meetingId == null && result.status === 'interrupted')
+        lastError.value = '会议录音网络较慢，已转入后台续传'
+    }
+    catch (error) {
+      lastError.value = error instanceof Error ? error.message : '会议纪要任务创建失败'
+      await debugLog('transcribe.session', 'meeting live upload finalize failed', error instanceof Error ? {
+        message: error.message,
+        stack: error.stack,
+      } : error)
+    }
+  }
 
   function computeRms(chunk: ArrayBuffer): number {
     const samples = new Int16Array(chunk)
@@ -606,6 +665,14 @@ export function useTranscribe() {
   // 后续录音相互影响。
   async function persistRealtimeSession() {
     const scene = appStore.sceneMode
+    // 会议模式：音频已在录音过程中持续上传，这里只需结算上传器（合并/丢弃）。
+    if (meetingCapable(scene)) {
+      sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
+      sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
+      sessionAudioChunks.splice(0, sessionAudioChunks.length)
+      await finalizeMeetingUpload()
+      return
+    }
     const audioChunks = sessionAudioChunks.splice(0, sessionAudioChunks.length)
     const recognizedTexts = sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
     const realtimeSegments = sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
@@ -615,6 +682,22 @@ export function useTranscribe() {
   // 语音控制在录音过程中切换场景时调用：把「切换前」累计的会话快照按旧场景
   // 后台落库，并清空会话缓冲让新场景从零开始累计。绝不丢弃中间历史。
   function flushSessionForScene(scene: SceneMode) {
+    // 会议模式：结算（detach 已被替换为正式 finish）当前上传器，让旧场景的会议落库，
+    // 随后新场景从全新的上传器/缓冲开始。
+    if (meetingCapable(scene)) {
+      sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
+      sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
+      sessionAudioChunks.splice(0, sessionAudioChunks.length)
+      if (meetingUpload) {
+        const flush = finalizeMeetingUpload()
+          .catch(error => debugLog('transcribe.session', 'meeting flush on scene switch failed', error instanceof Error ? {
+            message: error.message,
+            stack: error.stack,
+          } : error))
+        pendingFlushes.push(flush)
+      }
+      return
+    }
     const audioChunks = sessionAudioChunks.splice(0, sessionAudioChunks.length)
     const recognizedTexts = sessionRecognizedTexts.splice(0, sessionRecognizedTexts.length)
     const realtimeSegments = sessionRealtimeSegments.splice(0, sessionRealtimeSegments.length)
@@ -634,8 +717,8 @@ export function useTranscribe() {
     pendingFlushes.push(flush)
   }
 
-  // 把一段会话快照按指定场景落库：会议模式上传完整音频自动建会议；其余模式
-  // 逐条上传实时转写任务。
+  // 把一段会话快照按指定场景落库：逐条上传实时转写任务。
+  // （会议模式已改为「边录边传」，由 meetingUpload 上传器在录音过程中处理，不再走此函数。）
   async function persistSessionSnapshot(
     scene: SceneMode,
     audioChunks: ArrayBuffer[],
@@ -643,24 +726,7 @@ export function useTranscribe() {
     realtimeSegments: RealtimeSessionSegment[],
   ) {
     const transcript = recognizedTexts.join('\n').trim()
-    // 会议模式以「是否有音频」为准：服务端会基于完整音频重新转写，因此即使
-    // 本地实时预览文本为空（识别请求超时/失败）也应生成会议，避免长录音停止
-    // 后「没有会议生成」。仅在非会议模式下才以预览文本是否为空作为兜底判断。
-    const isMeeting = scene === SCENE_MODES.MEETING && appStore.hasCapability(PRODUCT_CAPABILITY_KEYS.MEETING)
     const duration = audioChunks.reduce((sum, chunk) => sum + chunk.byteLength, 0) / 2 / TARGET_SAMPLE_RATE
-
-    if (isMeeting) {
-      if (audioChunks.length === 0 || duration < MIN_MEETING_DURATION_SECONDS) {
-        await debugLog('transcribe.session', 'skip meeting persistence: duration too short', {
-          duration,
-          minimum: MIN_MEETING_DURATION_SECONDS,
-          hasAudio: audioChunks.length > 0,
-        })
-        return
-      }
-      await persistMeetingSession(audioChunks, transcript, duration)
-      return
-    }
 
     if (!transcript) {
       await debugLog('transcribe.session', 'skip persistence: empty transcript', {
@@ -731,64 +797,14 @@ export function useTranscribe() {
     }
   }
 
-  async function persistMeetingSession(audioChunks: ArrayBuffer[], transcript: string, duration: number) {
-    try {
-      if (audioChunks.length === 0) {
-        // No audio means we cannot create a meeting (会议链路依赖音频). Fall
-        // back to a realtime task so the user does not lose the transcript.
-        await debugLog('transcribe.session', 'meeting scene without audio, fallback to realtime task')
-        await createRealtimeTranscriptionTask({
-          result_text: transcript,
-          duration,
-          workflow_id: appStore.realtimeWorkflowId ?? undefined,
-        })
-        return
-      }
-      const wavFile = createWav(audioChunks, `meeting-session-${Date.now()}.wav`)
-      const meetingTitle = `桌面会议 ${new Date().toLocaleString('zh-CN', { hour12: false })}`
-      const meetingWorkflowId = await ensureMeetingWorkflowBinding()
-        .catch(() => appStore.meetingWorkflowId)
-
-      let result: Awaited<ReturnType<typeof uploadMeetingFromAudio>>
-      if (wavFile.size > MEETING_DIRECT_UPLOAD_LIMIT) {
-        // Long recordings exceed the single-request size limits of nginx and the
-        // backend, so upload them in sequential chunks.
-        await debugLog('transcribe.session', 'meeting recording large, using chunked upload', {
-          bytes: wavFile.size,
-          duration,
-        })
-        result = await uploadMeetingFromAudioChunked(wavFile, {
-          title: meetingTitle,
-          workflow_id: meetingWorkflowId ?? undefined,
-        })
-      }
-      else {
-        const formData = new FormData()
-        formData.append('file', wavFile)
-        formData.append('title', meetingTitle)
-        if (meetingWorkflowId != null)
-          formData.append('workflow_id', String(meetingWorkflowId))
-        result = await uploadMeetingFromAudio(formData)
-      }
-      await debugLog('transcribe.session', 'created meeting from desktop session', {
-        meetingId: result?.meeting?.id,
-        duration,
-        bytes: wavFile.size,
-        workflowId: meetingWorkflowId,
-      })
-    }
-    catch (error) {
-      lastError.value = error instanceof Error ? error.message : '会议纪要任务创建失败'
-      await debugLog('transcribe.session', 'failed to create meeting session', error instanceof Error ? {
-        message: error.message,
-        stack: error.stack,
-      } : error)
-    }
-  }
-
   function handleChunk(chunk: ArrayBuffer) {
     const copied = chunk.slice(0)
-    sessionAudioChunks.push(copied)
+    // 会议模式：把音频交给「边录边传」上传器，避免整段长录音暂存在内存里造成丢失/OOM。
+    // 其余模式仍按旧路径在内存累积，停止时整段上传。实时识别逻辑两种模式完全一致。
+    if (meetingCapable(appStore.sceneMode))
+      getOrStartMeetingUpload().pushPcm(copied)
+    else
+      sessionAudioChunks.push(copied)
     const rms = computeRms(copied)
     listeningLevel.value = rms
     const threshold = getThreshold()
@@ -851,6 +867,12 @@ export function useTranscribe() {
 
   function reset() {
     voiceControl.reset()
+    // 异常/被动重置：detach 而非 abort，保留服务端已落盘的分片与本地恢复标记，
+    // 避免丢失数据（正常停止时 stopAndFlush 已先行 finalize，这里通常为 null）。
+    if (meetingUpload) {
+      meetingUpload.detach()
+      meetingUpload = null
+    }
     resetActiveSegment()
     leadInChunks.splice(0, leadInChunks.length)
     sessionAudioChunks.splice(0, sessionAudioChunks.length)

@@ -157,23 +157,81 @@ export async function uploadMeetingFromAudio(payload: FormData) {
 }
 
 export interface MeetingChunkUploadFields {
-  filename: string
+  filename?: string
   title?: string
   workflow_id?: number | string
   language?: string
 }
 
-// MEETING_CHUNK_SIZE keeps every chunk request comfortably below the backend
-// and nginx single-request limits so arbitrarily long meetings can be uploaded.
-const MEETING_CHUNK_SIZE = 8 * 1024 * 1024
+export interface MeetingUploadInit {
+  uploadId: string
+  nextIndex: number
+  maxChunkSize: number
+}
 
-// MEETING_DIRECT_UPLOAD_LIMIT is the largest file we still upload in a single
-// multipart request; larger files switch to the chunked protocol.
-export const MEETING_DIRECT_UPLOAD_LIMIT = 150 * 1024 * 1024
+export interface MeetingUploadState {
+  uploadId: string
+  status: string
+  nextIndex: number
+  duration: number
+  totalBytes: number
+  meetingId: number | null
+}
 
-async function initMeetingChunkUpload(fields: MeetingChunkUploadFields): Promise<string> {
+export interface MeetingUploadAppendResult {
+  received: number
+  nextIndex: number
+  duration: number
+  status: string
+  meetingId: number | null
+  duplicate: boolean
+}
+
+export interface MeetingUploadCompleteResult {
+  meetingId: number | null
+  status: string
+  duration: number
+}
+
+// MeetingUploadError carries the HTTP status so callers can distinguish
+// idempotent duplicates (409) and transient failures (>=500) from fatal ones.
+export class MeetingUploadError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'MeetingUploadError'
+    this.status = status
+  }
+}
+
+interface RawMeetingUploadState {
+  upload_id?: string
+  status?: string
+  next_index?: number
+  duration?: number
+  total_bytes?: number
+  meeting_id?: number | null
+}
+
+function toMeetingUploadState(data?: RawMeetingUploadState | null): MeetingUploadState | null {
+  if (!data?.upload_id)
+    return null
+  return {
+    uploadId: data.upload_id,
+    status: data.status ?? '',
+    nextIndex: data.next_index ?? 0,
+    duration: data.duration ?? 0,
+    totalBytes: data.total_bytes ?? 0,
+    meetingId: data.meeting_id ?? null,
+  }
+}
+
+// initMeetingLiveUpload opens a resumable, crash-safe meeting upload session.
+// The server persists each chunk to disk immediately, so a client crash never
+// loses more than the last unsent buffer.
+export async function initMeetingLiveUpload(fields: MeetingChunkUploadFields): Promise<MeetingUploadInit> {
   const form = new FormData()
-  form.append('filename', fields.filename)
+  form.append('filename', fields.filename ?? `meeting-${Date.now()}.wav`)
   if (fields.title != null)
     form.append('title', fields.title)
   if (fields.workflow_id != null)
@@ -184,41 +242,85 @@ async function initMeetingChunkUpload(fields: MeetingChunkUploadFields): Promise
     method: 'POST',
     body: form,
   })
-  const envelope = await readResponseEnvelope<{ upload_id?: string }>(response)
+  const envelope = await readResponseEnvelope<{ upload_id?: string, next_index?: number, max_chunk_size?: number }>(response)
   if (!response.ok || !envelope.data?.upload_id)
-    throw new Error(envelope.message || '初始化会议上传失败')
-  return envelope.data.upload_id
+    throw new MeetingUploadError(envelope.message || '初始化会议上传失败', response.status)
+  return {
+    uploadId: envelope.data.upload_id,
+    nextIndex: envelope.data.next_index ?? 0,
+    maxChunkSize: envelope.data.max_chunk_size ?? 0,
+  }
 }
 
-async function appendMeetingChunk(uploadId: string, index: number, chunk: Blob): Promise<void> {
-  const response = await authedFetch(`/api/meetings/upload/chunk?upload_id=${encodeURIComponent(uploadId)}&index=${index}`, {
+// appendMeetingLiveChunk durably stores one raw little-endian PCM chunk. The
+// checksum lets the server reject corrupted retransmits and de-duplicate
+// idempotent retries, which is what makes resends safe.
+export async function appendMeetingLiveChunk(
+  uploadId: string,
+  index: number,
+  data: BlobPart,
+  checksum: string,
+): Promise<MeetingUploadAppendResult> {
+  const query = `upload_id=${encodeURIComponent(uploadId)}&index=${index}${checksum ? `&checksum=${checksum}` : ''}`
+  const response = await authedFetch(`/api/meetings/upload/chunk?${query}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
     },
-    body: chunk,
+    body: data,
   })
-  if (!response.ok) {
-    const envelope = await readResponseEnvelope(response)
-    throw new Error(envelope.message || '会议分片上传失败')
+  const envelope = await readResponseEnvelope<{
+    received?: number
+    next_index?: number
+    duration?: number
+    status?: string
+    meeting_id?: number | null
+    duplicate?: boolean
+  }>(response)
+  if (!response.ok)
+    throw new MeetingUploadError(envelope.message || '会议分片上传失败', response.status)
+  return {
+    received: envelope.data?.received ?? 0,
+    nextIndex: envelope.data?.next_index ?? index + 1,
+    duration: envelope.data?.duration ?? 0,
+    status: envelope.data?.status ?? 'recording',
+    meetingId: envelope.data?.meeting_id ?? null,
+    duplicate: Boolean(envelope.data?.duplicate),
   }
 }
 
-async function completeMeetingChunkUpload(uploadId: string) {
+// heartbeatMeetingUpload refreshes the session's last-seen timestamp so the
+// server-side maintenance loop does not treat an active recording as abandoned.
+export async function heartbeatMeetingUpload(uploadId: string): Promise<MeetingUploadState | null> {
+  const response = await authedFetch(`/api/meetings/upload/heartbeat?upload_id=${encodeURIComponent(uploadId)}`, {
+    method: 'POST',
+  })
+  const envelope = await readResponseEnvelope<RawMeetingUploadState>(response)
+  if (!response.ok)
+    throw new MeetingUploadError(envelope.message || '会议上传心跳失败', response.status)
+  return toMeetingUploadState(envelope.data)
+}
+
+// completeMeetingLiveUpload assembles the stored chunks into the final WAV and
+// hands the meeting into the normal transcription pipeline. The server discards
+// recordings shorter than the configured minimum.
+export async function completeMeetingLiveUpload(uploadId: string): Promise<MeetingUploadCompleteResult> {
   const response = await authedFetch(`/api/meetings/upload/complete?upload_id=${encodeURIComponent(uploadId)}`, {
     method: 'POST',
   })
-  const envelope = await readResponseEnvelope<{
-    meeting?: { id: number, title?: string, status?: string }
-    audio_url?: string
-    filename?: string
-  }>(response)
+  const envelope = await readResponseEnvelope<{ meeting_id?: number | null, status?: string, duration?: number }>(response)
   if (!response.ok)
-    throw new Error(envelope.message || '会议录音上传失败')
-  return envelope.data || null
+    throw new MeetingUploadError(envelope.message || '会议录音上传失败', response.status)
+  return {
+    meetingId: envelope.data?.meeting_id ?? null,
+    status: envelope.data?.status ?? 'completed',
+    duration: envelope.data?.duration ?? 0,
+  }
 }
 
-async function abortMeetingChunkUpload(uploadId: string): Promise<void> {
+// abortMeetingUpload explicitly discards a session and its chunks. Best-effort:
+// failures are ignored because the server-side cleanup loop is the safety net.
+export async function abortMeetingUpload(uploadId: string): Promise<void> {
   try {
     await authedFetch(`/api/meetings/upload/abort?upload_id=${encodeURIComponent(uploadId)}`, {
       method: 'POST',
@@ -229,30 +331,16 @@ async function abortMeetingChunkUpload(uploadId: string): Promise<void> {
   }
 }
 
-// uploadMeetingFromAudioChunked uploads a (potentially very large) meeting
-// recording by splitting it into sequential chunks. The backend reassembles the
-// chunks on disk and then creates the meeting.
-export async function uploadMeetingFromAudioChunked(
-  file: File,
-  fields: Omit<MeetingChunkUploadFields, 'filename'>,
-  onProgress?: (uploaded: number, total: number) => void,
-) {
-  const uploadId = await initMeetingChunkUpload({ ...fields, filename: file.name })
-  try {
-    const total = file.size
-    let offset = 0
-    let index = 0
-    while (offset < total) {
-      const end = Math.min(offset + MEETING_CHUNK_SIZE, total)
-      await appendMeetingChunk(uploadId, index, file.slice(offset, end))
-      offset = end
-      index += 1
-      onProgress?.(offset, total)
-    }
-    return await completeMeetingChunkUpload(uploadId)
-  }
-  catch (error) {
-    await abortMeetingChunkUpload(uploadId)
-    throw error
-  }
+// getMeetingUploadStatus returns the server-side session state, or null when the
+// session no longer exists (already finalized or cleaned up).
+export async function getMeetingUploadStatus(uploadId: string): Promise<MeetingUploadState | null> {
+  const response = await authedFetch(`/api/meetings/upload/${encodeURIComponent(uploadId)}`, {
+    method: 'GET',
+  })
+  if (response.status === 404)
+    return null
+  const envelope = await readResponseEnvelope<RawMeetingUploadState>(response)
+  if (!response.ok)
+    throw new MeetingUploadError(envelope.message || '查询会议上传状态失败', response.status)
+  return toMeetingUploadState(envelope.data)
 }

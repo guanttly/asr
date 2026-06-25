@@ -114,6 +114,10 @@ const statusLabel = computed(() => {
       return '生成中'
     case 'uploaded':
       return '排队中'
+    case 'uploading':
+      return '录音上传中'
+    case 'interrupted':
+      return '待续传'
     case 'failed':
       return '失败'
     default:
@@ -121,7 +125,7 @@ const statusLabel = computed(() => {
   }
 })
 
-const isProcessing = computed(() => detail.value?.status === 'uploaded' || detail.value?.status === 'processing')
+const isProcessing = computed(() => detail.value?.status === 'uploaded' || detail.value?.status === 'processing' || detail.value?.status === 'uploading' || detail.value?.status === 'interrupted')
 const showSummaryToolbar = computed(() => activeTab.value === 'summary' && Boolean(detail.value) && !isProcessing.value)
 const showSummaryFooter = computed(() => showSummaryToolbar.value && (summaryMode.value === 'edit' || summaryMode.value === 'export'))
 const exportPreviewBodyMarkdown = computed(() => {

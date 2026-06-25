@@ -8,6 +8,7 @@ import SettingsWindow from './components/SettingsWindow.vue'
 import { useAppStore } from './stores/app'
 import { ensureProductFeatures } from './utils/auth'
 import { appendRuntimeLog, debugLog } from './utils/debug'
+import { recoverPendingMeetingUploads } from './utils/meetingUpload'
 import { serializeHotkeyBindings } from './utils/hotkeys'
 
 const appStore = useAppStore()
@@ -43,6 +44,12 @@ onMounted(() => {
 
   if (isSettingsWindow)
     return
+
+  // 启动时补传上次会话遗留的、尚未确认完成的会议录音（崩溃/强退后恢复）。
+  // 仅主窗口执行；失败容忍，服务端维护任务是最终兼底。
+  void recoverPendingMeetingUploads((event, detail) => {
+    void debugLog('frontend.meeting-recover', event, detail)
+  }).catch(() => undefined)
 
   void desktopHotkeys.listenToHotkeyActions().catch((error) => {
     console.warn(error)

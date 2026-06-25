@@ -20,10 +20,26 @@ const debugMocks = vi.hoisted(() => ({
 
 const transcriptionMocks = vi.hoisted(() => ({
   createRealtimeTranscriptionTask: vi.fn(),
-  uploadMeetingFromAudio: vi.fn(),
-  uploadMeetingFromAudioChunked: vi.fn(),
   uploadRealtimeSessionTask: vi.fn(),
 }))
+
+const meetingUploadMocks = vi.hoisted(() => {
+  const instances: any[] = []
+  const MeetingLiveUpload = vi.fn((options: any) => {
+    const instance = {
+      options,
+      started: false,
+      start: vi.fn(() => { instance.started = true }),
+      pushPcm: vi.fn(),
+      finish: vi.fn(async () => ({ meetingId: 1, status: 'uploaded', duration: 10, discarded: false })),
+      detach: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+    }
+    instances.push(instance)
+    return instance
+  })
+  return { MeetingLiveUpload, recoverPendingMeetingUploads: vi.fn(), instances }
+})
 
 const injectorMocks = vi.hoisted(() => ({
   injectText: vi.fn(),
@@ -77,10 +93,12 @@ vi.mock('@/utils/debug', () => ({
 
 vi.mock('@/utils/transcription', () => ({
   createRealtimeTranscriptionTask: transcriptionMocks.createRealtimeTranscriptionTask,
-  uploadMeetingFromAudio: transcriptionMocks.uploadMeetingFromAudio,
-  uploadMeetingFromAudioChunked: transcriptionMocks.uploadMeetingFromAudioChunked,
   uploadRealtimeSessionTask: transcriptionMocks.uploadRealtimeSessionTask,
-  MEETING_DIRECT_UPLOAD_LIMIT: 150 * 1024 * 1024,
+}))
+
+vi.mock('@/utils/meetingUpload', () => ({
+  MeetingLiveUpload: meetingUploadMocks.MeetingLiveUpload,
+  recoverPendingMeetingUploads: meetingUploadMocks.recoverPendingMeetingUploads,
 }))
 
 vi.mock('./useInjector', () => ({
@@ -152,8 +170,11 @@ describe('useTranscribe realtime persistence', () => {
     debugMocks.debugLog.mockReset().mockResolvedValue(undefined)
 
     transcriptionMocks.createRealtimeTranscriptionTask.mockReset().mockResolvedValue({ id: 1 })
-    transcriptionMocks.uploadMeetingFromAudio.mockReset().mockResolvedValue({ meeting: { id: 1 } })
     transcriptionMocks.uploadRealtimeSessionTask.mockReset().mockResolvedValue({ task: { id: 1 } })
+
+    meetingUploadMocks.MeetingLiveUpload.mockClear()
+    meetingUploadMocks.recoverPendingMeetingUploads.mockClear()
+    meetingUploadMocks.instances.length = 0
 
     injectorMocks.injectText.mockReset().mockResolvedValue({ success: true })
 
@@ -206,7 +227,7 @@ describe('useTranscribe realtime persistence', () => {
     expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
   })
 
-  it('keeps meeting mode on whole-session upload', async () => {
+  it('routes meeting audio to the crash-safe live uploader instead of buffering in memory', async () => {
     authMocks.authedFetch.mockResolvedValue(envelope({ text: '会议内容' }))
     appStoreMocks.state.sceneMode = 'meeting'
     appStoreMocks.state.meetingCapability = true
@@ -217,7 +238,13 @@ describe('useTranscribe realtime persistence', () => {
       transcribe.handleChunk(createChunk(0))
     await transcribe.stopAndFlush()
 
-    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    // A single live uploader is created and started, fed every PCM chunk, then
+    // finalized on stop. Meetings never accumulate the whole recording in memory.
+    expect(meetingUploadMocks.MeetingLiveUpload).toHaveBeenCalledTimes(1)
+    const uploader = meetingUploadMocks.instances[0]
+    expect(uploader.started).toBe(true)
+    expect(uploader.pushPcm).toHaveBeenCalled()
+    expect(uploader.finish).toHaveBeenCalledTimes(1)
     expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
     expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
   })
@@ -238,8 +265,8 @@ describe('useTranscribe realtime persistence', () => {
 
     // No per-segment realtime ASR request is issued in meeting mode.
     expect(authMocks.authedFetch).not.toHaveBeenCalled()
-    // The whole-session audio is still uploaded for backend batch transcription.
-    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    // The audio is still durably uploaded via the live uploader for backend batch transcription.
+    expect(meetingUploadMocks.instances[0]?.finish).toHaveBeenCalledTimes(1)
   })
 
   it('does not inject or append realtime history while recording in meeting mode', async () => {
@@ -254,14 +281,14 @@ describe('useTranscribe realtime persistence', () => {
       transcribe.handleChunk(createChunk(0))
     await transcribe.stopAndFlush()
 
-    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    expect(meetingUploadMocks.instances[0]?.finish).toHaveBeenCalledTimes(1)
     expect(injectorMocks.injectText).not.toHaveBeenCalled()
     expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
     expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()
     expect(transcriptionMocks.createRealtimeTranscriptionTask).not.toHaveBeenCalled()
   })
 
-  it('sends the configured meeting workflow id when uploading desktop meeting recordings', async () => {
+  it('resolves the configured meeting workflow id for the live upload session', async () => {
     authMocks.authedFetch.mockResolvedValue(envelope({ text: '会议内容' }))
     authMocks.ensureMeetingWorkflowBinding.mockResolvedValue(33)
     appStoreMocks.state.sceneMode = 'meeting'
@@ -273,9 +300,12 @@ describe('useTranscribe realtime persistence', () => {
       transcribe.handleChunk(createChunk(0))
     await transcribe.stopAndFlush()
 
+    const uploader = meetingUploadMocks.instances[0]
+    expect(uploader).toBeDefined()
+    const fields = await uploader.options.resolveInitFields()
     expect(authMocks.ensureMeetingWorkflowBinding).toHaveBeenCalled()
-    const [formData] = transcriptionMocks.uploadMeetingFromAudio.mock.calls[0]
-    expect(formData.get('workflow_id')).toBe('33')
+    expect(fields.workflow_id).toBe(33)
+    expect(typeof fields.title).toBe('string')
   })
 
   it('preserves segment order even when a later segment is recognized first', async () => {
@@ -385,9 +415,9 @@ describe('useTranscribe realtime persistence', () => {
       transcribe.handleChunk(createChunk(0))
     await transcribe.stopAndFlush()
 
-    // The pre-switch buffers are flushed under the OLD (meeting) scene so the
-    // intermediate history is not lost.
-    expect(transcriptionMocks.uploadMeetingFromAudio).toHaveBeenCalledTimes(1)
+    // The pre-switch meeting audio is finalized under the OLD (meeting) scene via
+    // the live uploader so the intermediate recording is not lost.
+    expect(meetingUploadMocks.instances[0]?.finish).toHaveBeenCalledTimes(1)
     // The switch command words never leak into report history.
     expect(appStoreMocks.state.appendHistory).not.toHaveBeenCalled()
     expect(transcriptionMocks.uploadRealtimeSessionTask).not.toHaveBeenCalled()

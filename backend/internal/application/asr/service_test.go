@@ -38,6 +38,15 @@ type streamingBatchEngineServiceStub struct {
 	finishSession  string
 }
 
+type batchOnlyEngineServiceStub struct {
+	submitResult *BatchSubmitResult
+	submitErr    error
+	queryResult  *BatchTaskStatus
+	queryErr     error
+	lastReq      BatchSubmitRequest
+	queryCalls   int
+}
+
 func TestNormalizeLanguageMapsProductCodes(t *testing.T) {
 	tests := map[string]string{
 		"":        DefaultLanguage,
@@ -104,6 +113,22 @@ func (s *streamingBatchEngineServiceStub) FinishStreamSession(_ context.Context,
 		return nil, s.finishErr
 	}
 	return s.finishResult, nil
+}
+
+func (s *batchOnlyEngineServiceStub) SubmitBatch(_ context.Context, req BatchSubmitRequest) (*BatchSubmitResult, error) {
+	s.lastReq = req
+	if s.submitErr != nil {
+		return nil, s.submitErr
+	}
+	return s.submitResult, nil
+}
+
+func (s *batchOnlyEngineServiceStub) QueryBatchTask(_ context.Context, _ string) (*BatchTaskStatus, error) {
+	s.queryCalls++
+	if s.queryErr != nil {
+		return nil, s.queryErr
+	}
+	return s.queryResult, nil
 }
 
 func (r *taskRepoServiceStub) Create(_ context.Context, task *domain.TranscriptionTask) error {
@@ -480,6 +505,54 @@ func TestStartStreamSessionUsesStreamingEngine(t *testing.T) {
 	}
 	if result.SessionID == "upstream-stream-1" {
 		t.Fatalf("expected managed session id different from upstream id, got %+v", result)
+	}
+}
+
+func TestStreamSessionUsesBatchFallbackWhenStreamingEngineUnavailable(t *testing.T) {
+	engine := &batchOnlyEngineServiceStub{
+		submitResult: &BatchSubmitResult{Status: "completed", ResultText: "批量短句", Duration: 1.2},
+	}
+	service := NewService(nil, engine, nil, 5, nil)
+
+	started, err := service.StartStreamSession(context.Background())
+	if err != nil {
+		t.Fatalf("StartStreamSession returned error: %v", err)
+	}
+	if started == nil || started.SessionID == "" {
+		t.Fatalf("expected managed session id, got %+v", started)
+	}
+
+	payload := bytes.Repeat([]byte{1, 2}, 16000)
+	chunk, err := service.PushStreamChunk(context.Background(), &PushStreamChunkRequest{SessionID: started.SessionID, PCMData: payload})
+	if err != nil {
+		t.Fatalf("PushStreamChunk returned error: %v", err)
+	}
+	if chunk.Text != "批量短句" || chunk.TextDelta != "批量短句" {
+		t.Fatalf("unexpected chunk result: %+v", chunk)
+	}
+	if engine.lastReq.LocalFilePath == "" {
+		t.Fatalf("expected batch fallback to submit a local wav file")
+	}
+
+	commit, err := service.CommitStreamSegment(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("CommitStreamSegment returned error: %v", err)
+	}
+	if commit.Text != "批量短句" || commit.TextDelta != "批量短句" {
+		t.Fatalf("unexpected commit result: %+v", commit)
+	}
+
+	finish, err := service.FinishStreamSession(context.Background(), started.SessionID)
+	if err != nil {
+		t.Fatalf("FinishStreamSession returned error: %v", err)
+	}
+	if finish.Text != "批量短句" || !finish.IsFinal {
+		t.Fatalf("unexpected finish result: %+v", finish)
+	}
+	if value, ok := service.streamSessions.Load(started.SessionID); ok {
+		if session, ok := value.(*managedStreamSession); ok && session.audioFilePath != "" {
+			_ = os.Remove(session.audioFilePath)
+		}
 	}
 }
 

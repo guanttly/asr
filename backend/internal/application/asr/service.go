@@ -354,28 +354,32 @@ func (s *Service) streamingAvailable() bool {
 	return s.streamingEngine != nil && s.streamingEngine.StreamingAvailable()
 }
 
-// StartStreamSession creates a backend-managed upstream streaming session.
+// StartStreamSession creates a backend-managed streaming facade session.
 func (s *Service) StartStreamSession(ctx context.Context) (*StreamSessionResponse, error) {
-	if !s.streamingAvailable() {
+	if !s.streamingAvailable() && s.batchSubmitter == nil {
 		return nil, ErrStreamEngineUnavailable
 	}
 
 	now := time.Now()
 	s.cleanupExpiredStreamSessions(now)
-	sessionID, err := s.streamingEngine.StartStreamSession(ctx)
-	if err != nil {
-		return nil, err
+	upstreamSessionID := ""
+	if s.streamingAvailable() {
+		sessionID, err := s.streamingEngine.StartStreamSession(ctx)
+		if err != nil {
+			return nil, err
+		}
+		upstreamSessionID = sessionID
 	}
 
 	managedSessionID := s.newStreamSessionID()
-	s.streamSessions.Store(managedSessionID, s.newManagedStreamSession(sessionID, now))
+	s.streamSessions.Store(managedSessionID, s.newManagedStreamSession(upstreamSessionID, now))
 
 	return &StreamSessionResponse{SessionID: managedSessionID}, nil
 }
 
-// PushStreamChunk forwards one PCM chunk into the active upstream session.
+// PushStreamChunk accepts one PCM chunk into the active session.
 func (s *Service) PushStreamChunk(ctx context.Context, req *PushStreamChunkRequest) (*StreamChunkResponse, error) {
-	if !s.streamingAvailable() {
+	if !s.streamingAvailable() && s.batchSubmitter == nil {
 		return nil, ErrStreamEngineUnavailable
 	}
 	if req == nil || strings.TrimSpace(req.SessionID) == "" {
@@ -393,23 +397,42 @@ func (s *Service) PushStreamChunk(ctx context.Context, req *PushStreamChunkReque
 	}
 
 	session.mu.Lock()
+	if session.finalized {
+		session.mu.Unlock()
+		return nil, ErrStreamSessionClosed
+	}
+
+	session.pcmData = append(session.pcmData, req.PCMData...)
+	session.durationSeconds = pcmBytesToDurationSeconds(session.pcmData)
+	upstreamSessionID := strings.TrimSpace(session.upstreamSessionID)
+	language := session.language
+	useStreaming := s.streamingAvailable() && upstreamSessionID != ""
+	if !useStreaming {
+		session.expiresAt = now.Add(s.streamSessionTTL)
+	}
+	session.mu.Unlock()
+
+	var result *StreamChunkResponse
+	if useStreaming {
+		result, err = s.streamingEngine.PushStreamChunk(ctx, upstreamSessionID, req.PCMData)
+	} else {
+		result, err = s.transcribeStreamPCMChunk(ctx, sessionID, req.PCMData, language)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.finalized {
 		return nil, ErrStreamSessionClosed
 	}
-
-	result, err := s.streamingEngine.PushStreamChunk(ctx, session.upstreamSessionID, req.PCMData)
-	if err != nil {
-		return nil, err
-	}
-	session.pcmData = append(session.pcmData, req.PCMData...)
-	session.durationSeconds = pcmBytesToDurationSeconds(session.pcmData)
 	return s.applyStreamChunkResult(sessionID, session, result, now, false), nil
 }
 
 // CommitStreamSegment commits the current cumulative streaming transcript since the last sentence boundary.
 func (s *Service) CommitStreamSegment(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
-	if !s.streamingAvailable() {
+	if !s.streamingAvailable() && s.batchSubmitter == nil {
 		return nil, ErrStreamEngineUnavailable
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
@@ -430,7 +453,7 @@ func (s *Service) CommitStreamSegment(ctx context.Context, sessionID string) (*S
 
 // FinishStreamSession finalizes an active upstream streaming session.
 func (s *Service) FinishStreamSession(ctx context.Context, sessionID string) (*StreamChunkResponse, error) {
-	if !s.streamingAvailable() {
+	if !s.streamingAvailable() && s.batchSubmitter == nil {
 		return nil, ErrStreamEngineUnavailable
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
@@ -450,11 +473,14 @@ func (s *Service) FinishStreamSession(ctx context.Context, sessionID string) (*S
 		return s.applyStreamCommitResult(trimmedSessionID, session, now, true), nil
 	}
 
-	result, err := s.streamingEngine.FinishStreamSession(ctx, session.upstreamSessionID)
-	if err != nil {
-		return nil, err
+	upstreamSessionID := strings.TrimSpace(session.upstreamSessionID)
+	if s.streamingAvailable() && upstreamSessionID != "" {
+		result, err := s.streamingEngine.FinishStreamSession(ctx, upstreamSessionID)
+		if err != nil {
+			return nil, err
+		}
+		_ = s.applyStreamChunkResult(trimmedSessionID, session, result, now, true)
 	}
-	_ = s.applyStreamChunkResult(trimmedSessionID, session, result, now, true)
 	session.finalized = true
 	if _, _, err := s.materializeManagedStreamAudio(trimmedSessionID, session); err != nil && !errors.Is(err, ErrStreamSessionEmptyAudio) {
 		return nil, err

@@ -164,6 +164,34 @@ func (s *Service) materializeManagedStreamAudio(sessionID string, session *manag
 	return outputPath, session.durationSeconds, nil
 }
 
+func (s *Service) transcribeStreamPCMChunk(ctx context.Context, sessionID string, pcmData []byte, language string) (*StreamChunkResponse, error) {
+	if len(pcmData) == 0 {
+		return &StreamChunkResponse{SessionID: sessionID, Language: language}, nil
+	}
+	if s.batchSubmitter == nil {
+		return nil, fmt.Errorf("asr batch engine is not configured")
+	}
+
+	outputPath := filepath.Join(os.TempDir(), fmt.Sprintf("asr-stream-chunk-%s-%d.wav", sessionID, time.Now().UnixNano()))
+	if err := audiofile.WritePCM16MonoWAV(outputPath, pcmData, streamSessionSampleRate); err != nil {
+		return nil, err
+	}
+	defer os.Remove(outputPath)
+
+	result, err := s.TranscribeSnippet(ctx, &TranscribeSnippetRequest{
+		LocalFilePath: outputPath,
+		Language:      language,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &StreamChunkResponse{
+		SessionID: sessionID,
+		Language:  language,
+		Text:      result.Text,
+	}, nil
+}
+
 func (s *Service) consumeManagedStreamAudio(sessionID string) (string, float64, error) {
 	now := time.Now()
 	session, err := s.loadManagedStreamSession(sessionID, now)

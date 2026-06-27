@@ -73,8 +73,8 @@
 #   make release-jusha-models VERSION=0.9.3 OUTPUT_DIR=/data/ganttly/releases/fama/0.9.3 JUSHA_ASR_PART_SIZE=524288000
 #
 # 192.168.40.221 /data/ganttly/fama 标准流程：
-#   make release-fama-business VERSION=0.10.3 JUSHA_ASR_PART_SIZE=2g
-#   make install-fama-business VERSION=0.10.3
+#   make release-fama-business JUSHA_ASR_PART_SIZE=2g VERSION=1.0.0 
+#   make install-fama-business VERSION=1.0.0
 
 
 JUSHA_MODE_VALUE = $(or $(JUSHA_MODE),all)

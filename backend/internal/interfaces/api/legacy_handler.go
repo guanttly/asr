@@ -26,6 +26,7 @@ type legacyEnvelope struct {
 	Data           any    `json:"data,omitempty"`
 	PartialSuccess bool   `json:"partial_success,omitempty"`
 	ErrorDetails   string `json:"error_details,omitempty"`
+	Timestamp      string `json:"timestamp,omitempty"`
 }
 
 func legacySuccess(c *gin.Context, data any) {
@@ -38,6 +39,14 @@ func legacyMessage(c *gin.Context, message string, data any) {
 
 func legacyError(c *gin.Context, status int, message string) {
 	c.JSON(status, legacyEnvelope{Success: false, Message: message})
+}
+
+func legacyTimestamp() string {
+	return time.Now().Format(time.RFC3339Nano)
+}
+
+func legacySummarySuccess(c *gin.Context, data any) {
+	c.JSON(http.StatusOK, legacyEnvelope{Success: true, Data: data, Timestamp: legacyTimestamp()})
 }
 
 type LegacyASRHandler struct {
@@ -72,6 +81,7 @@ type legacySummaryOptions struct {
 	Filename         string
 	FileSize         int64
 	TemplateName     string
+	Language         string
 	EnableCorrection bool
 	EnableSpeaker    bool
 	StartedAt        time.Time
@@ -265,6 +275,7 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 		Filename:         audioFile.OriginalFilename,
 		FileSize:         audioFile.Size,
 		TemplateName:     templateName,
+		Language:         language,
 		EnableCorrection: enableCorrection,
 		EnableSpeaker:    enableSpeaker,
 		StartedAt:        startedAt,
@@ -283,7 +294,7 @@ func (h *LegacyASRHandler) AudioToSummary(c *gin.Context) {
 		legacyError(c, http.StatusGatewayTimeout, err.Error())
 		return
 	}
-	legacySuccess(c, h.buildLegacySummaryPayload(c.Request.Context(), options, result))
+	legacySummarySuccess(c, h.buildLegacySummaryPayload(c.Request.Context(), options, result))
 }
 
 func (h *LegacyASRHandler) GetTask(c *gin.Context) {
@@ -328,22 +339,36 @@ func (h *LegacyASRHandler) waitLegacyTask(ctx context.Context, taskID uint64, ti
 }
 
 func (h *LegacyASRHandler) buildLegacySummaryPayload(ctx context.Context, options legacySummaryOptions, result *appasr.TaskResponse) gin.H {
-	content := result.ResultText
+	recognizedText := result.ResultText
+	content := recognizedText
 	modelVersion := "summary"
-	if h.nlpService != nil && strings.TrimSpace(result.ResultText) != "" {
-		summary, err := h.nlpService.Summarize(ctx, &appnlp.SummarizeRequest{Text: result.ResultText})
+	if h.nlpService != nil && strings.TrimSpace(recognizedText) != "" {
+		summary, err := h.nlpService.Summarize(ctx, &appnlp.SummarizeRequest{Text: recognizedText})
 		if err == nil {
 			content = summary.Content
 			modelVersion = summary.ModelVersion
 		}
 	}
+	speakerAnnotatedText := ""
+	if options.EnableSpeaker {
+		speakerAnnotatedText = recognizedText
+	}
 	return gin.H{
 		"asr_result": gin.H{
-			"text":     result.ResultText,
-			"duration": result.Duration,
+			"text":       recognizedText,
+			"language":   legacySummaryLanguage(options, result),
+			"duration":   result.Duration,
+			"confidence": 0.0,
 		},
 		"llm_processing": gin.H{
+			"asr_processing": gin.H{
+				"original_text":          recognizedText,
+				"corrected_text":         recognizedText,
+				"speaker_annotated_text": speakerAnnotatedText,
+			},
 			"summary": gin.H{
+				"summary":       content,
+				"template_used": options.TemplateName,
 				"content":       content,
 				"model_version": modelVersion,
 			},
@@ -361,6 +386,21 @@ func (h *LegacyASRHandler) buildLegacySummaryPayload(ctx context.Context, option
 	}
 }
 
+func legacySummaryLanguage(options legacySummaryOptions, result *appasr.TaskResponse) string {
+	if result != nil {
+		if language := strings.TrimSpace(result.Language); language != "" {
+			return language
+		}
+	}
+	if language, err := appasr.NormalizeLanguage(options.Language); err == nil && strings.TrimSpace(language) != "" {
+		return language
+	}
+	if language := strings.TrimSpace(options.Language); language != "" {
+		return language
+	}
+	return appasr.DefaultLanguage
+}
+
 func legacyElapsedSeconds(startedAt time.Time) float64 {
 	if startedAt.IsZero() {
 		return 0
@@ -373,11 +413,11 @@ func (h *LegacyASRHandler) dispatchSummaryCallback(taskID uint64, callbackURL st
 	defer cancel()
 	result, err := h.waitLegacyTask(ctx, taskID, 10*time.Minute)
 	if err != nil {
-		h.postSummaryCallback(callbackURL, legacyEnvelope{Success: false, Message: fmt.Sprintf("处理失败: %s", err.Error())})
+		h.postSummaryCallback(callbackURL, legacyEnvelope{Success: false, Message: fmt.Sprintf("处理失败: %s", err.Error()), Timestamp: legacyTimestamp()})
 		return
 	}
 	payload := h.buildLegacySummaryPayload(context.Background(), options, result)
-	h.postSummaryCallback(callbackURL, legacyEnvelope{Success: true, Data: payload})
+	h.postSummaryCallback(callbackURL, legacyEnvelope{Success: true, Data: payload, Timestamp: legacyTimestamp()})
 }
 
 func (h *LegacyASRHandler) postSummaryCallback(callbackURL string, envelope legacyEnvelope) {

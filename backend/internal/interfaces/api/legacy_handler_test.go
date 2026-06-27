@@ -110,6 +110,65 @@ func TestLegacyRecognizeVADReturnsOldSegmentsShape(t *testing.T) {
 	}
 }
 
+func TestLegacyAudioToSummarySyncIncludesOldAndExtendedSummaryFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	batchEngine := &batchEngineHandlerStub{submitResult: &appasr.BatchSubmitResult{Status: "completed", ResultText: "会议内容", Duration: 3}}
+	repo := &taskRepoHandlerStub{}
+	handler := NewLegacyASRHandler(appasr.NewService(repo, batchEngine, nil, 5, nil), nil, t.TempDir(), "http://uploads.example.test", 100)
+	router := gin.New()
+	handler.Register(router.Group("/api"))
+
+	body, contentType := newLegacyMultipartBody(t, "audio_file", "meeting.wav", map[string]string{
+		"template_name":     "technical_review",
+		"enable_correction": "true",
+		"enable_speaker":    "true",
+		"language":          "zh-CN",
+	})
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/audio/to_summary", body)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["success"] != true || response["timestamp"] == "" {
+		t.Fatalf("expected legacy success with timestamp, got %+v", response)
+	}
+	data := response["data"].(map[string]any)
+	asrResult := data["asr_result"].(map[string]any)
+	if asrResult["text"] != "会议内容" || asrResult["language"] != "zh" {
+		t.Fatalf("expected old ASR result fields, got %+v", asrResult)
+	}
+	if _, ok := asrResult["confidence"].(float64); !ok {
+		t.Fatalf("expected numeric ASR confidence compatibility field, got %+v", asrResult)
+	}
+
+	llmProcessing := data["llm_processing"].(map[string]any)
+	asrProcessing := llmProcessing["asr_processing"].(map[string]any)
+	if asrProcessing["original_text"] != "会议内容" || asrProcessing["corrected_text"] != "会议内容" || asrProcessing["speaker_annotated_text"] != "会议内容" {
+		t.Fatalf("expected old ASR processing fields, got %+v", asrProcessing)
+	}
+	summary := llmProcessing["summary"].(map[string]any)
+	if summary["summary"] != "会议内容" || summary["template_used"] != "technical_review" {
+		t.Fatalf("expected old summary fields, got %+v", summary)
+	}
+	if summary["content"] != "会议内容" || summary["model_version"] != "summary" {
+		t.Fatalf("expected current extension summary fields to remain, got %+v", summary)
+	}
+
+	processingInfo := data["processing_info"].(map[string]any)
+	if processingInfo["template_used"] != "technical_review" || processingInfo["correction_enabled"] != true || processingInfo["speaker_identification_enabled"] != true {
+		t.Fatalf("expected old processing_info fields, got %+v", processingInfo)
+	}
+}
+
 func TestLegacyAudioToSummaryCallbackUsesOldContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -161,13 +220,28 @@ func TestLegacyAudioToSummaryCallbackUsesOldContract(t *testing.T) {
 		if err := json.Unmarshal(body, &callback); err != nil {
 			t.Fatalf("decode callback body: %v", err)
 		}
-		if callback["success"] != true {
-			t.Fatalf("expected callback success=true, got %+v", callback)
+		if callback["success"] != true || callback["timestamp"] == "" {
+			t.Fatalf("expected callback success=true with timestamp, got %+v", callback)
 		}
 		data := callback["data"].(map[string]any)
 		asrResult := data["asr_result"].(map[string]any)
-		if asrResult["text"] != "会议内容" {
-			t.Fatalf("expected callback ASR text, got %+v", data)
+		if asrResult["text"] != "会议内容" || asrResult["language"] != "en" {
+			t.Fatalf("expected callback old ASR result fields, got %+v", asrResult)
+		}
+		if _, ok := asrResult["confidence"].(float64); !ok {
+			t.Fatalf("expected callback numeric ASR confidence compatibility field, got %+v", asrResult)
+		}
+		llmProcessing := data["llm_processing"].(map[string]any)
+		asrProcessing := llmProcessing["asr_processing"].(map[string]any)
+		if asrProcessing["original_text"] != "会议内容" || asrProcessing["corrected_text"] != "会议内容" || asrProcessing["speaker_annotated_text"] != "会议内容" {
+			t.Fatalf("expected callback old ASR processing fields, got %+v", asrProcessing)
+		}
+		summary := llmProcessing["summary"].(map[string]any)
+		if summary["summary"] != "会议内容" || summary["template_used"] != "default" {
+			t.Fatalf("expected callback old summary fields, got %+v", summary)
+		}
+		if summary["content"] != "会议内容" || summary["model_version"] != "summary" {
+			t.Fatalf("expected callback current extension summary fields to remain, got %+v", summary)
 		}
 		processingInfo := data["processing_info"].(map[string]any)
 		if processingInfo["template_used"] != "default" || processingInfo["correction_enabled"] != true || processingInfo["speaker_identification_enabled"] != true {
